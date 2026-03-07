@@ -69,25 +69,26 @@ if ! $do_nocache; then
 fi
 
 echo ""
-echo "Cleaning up containers and images..."
-# Stop and remove containers
-docker compose down --remove-orphans &>/dev/null || true
+echo "Cleaning up app container (MongoDB left running to avoid RS re-election)..."
+# Only stop/remove the app container — MongoDB stays up
+docker stop anamnesis-app &>/dev/null || true
+docker rm anamnesis-app &>/dev/null || true
 
-echo -e "${GREEN:-}Containers stopped and removed${NC:-}"
+echo -e "${GREEN:-}App container stopped and removed${NC:-}"
 echo ""
 
-# Remove old images
-docker rmi anamnesis-app &>/dev/null || true
+# Remove old app image only
+docker rmi 0_anamnesis-anamnesis-app &>/dev/null || true
 echo -e "${GREEN:-}Cleanup complete${NC:-}"
 echo ""
 
-# Build Docker image
+# Build app image only
 if $do_nocache; then
 	echo "Building Docker image (--no-cache, full rebuild)..."
-	docker compose build --no-cache
+	docker compose build --no-cache anamnesis-app
 else
 	echo "Building Docker image (cached)..."
-	docker compose build
+	docker compose build anamnesis-app
 fi
 
 if [ $? -eq 0 ]; then

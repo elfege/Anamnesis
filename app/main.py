@@ -10,6 +10,7 @@ from database import connect_to_mongo, close_mongo, ensure_vector_index
 from routes.episodes import router as episodes_router
 from routes.dashboard import router as dashboard_router
 from routes.crawler import router as crawler_router
+from routes.chat import router as chat_router
 from crawler import start_crawler, stop_crawler
 
 # ─── Logging ─────────────────────────────────────────────────────
@@ -73,6 +74,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(episodes_router)
 app.include_router(dashboard_router)
 app.include_router(crawler_router)
+app.include_router(chat_router)
 
 
 @app.get("/health")

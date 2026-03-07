@@ -191,4 +191,322 @@ $(function () {
         if (!str) return "";
         return $("<div>").text(str).html();
     }
+
+    // ─── Chat Tab ────────────────────────────────────────────────
+
+    var CHAT_SESSION_KEY = "anamnesis_chat_session";
+    var CLAUDE_TIMEOUT_MS = 30 * 60 * 1000;  // 30 minutes
+
+    var chat_state = {
+        session_id: localStorage.getItem(CHAT_SESSION_KEY) || null,
+        backend: "ollama",
+        model: null,
+        claude_enabled: false,
+        claude_enabled_at: null,
+        claude_timer_interval: null,
+        balance_poll_interval: null,
+        streaming: false,
+    };
+
+    // Load Ollama models when Chat tab opens
+    $(".tab[data-tab='chat']").on("click", function () {
+        load_ollama_models();
+        if (!chat_state.session_id) {
+            new_chat_session();
+        }
+    });
+
+    function new_chat_session() {
+        chat_state.session_id = "s-" + Math.random().toString(36).slice(2, 12);
+        localStorage.setItem(CHAT_SESSION_KEY, chat_state.session_id);
+    }
+
+    // ── Ollama model selector ─────────────────────────────────────
+    function load_ollama_models() {
+        $.getJSON("/api/chat/models", function (data) {
+            var $sel = $("#chat-model-select");
+            $sel.empty();
+            if (data.models && data.models.length) {
+                data.models.forEach(function (m) {
+                    var opt = $("<option>").val(m).text(m);
+                    if (m === data.default) opt.prop("selected", true);
+                    $sel.append(opt);
+                });
+                chat_state.model = $sel.val();
+                $sel.show();
+            } else {
+                $sel.hide();
+                var err = data.error || "No models found";
+                $sel.append($("<option>").val("").text(err));
+            }
+        }).fail(function () {
+            $("#chat-model-select").hide();
+        });
+    }
+
+    $("#chat-model-select").on("change", function () {
+        chat_state.model = $(this).val();
+    });
+
+    // ── Claude toggle ─────────────────────────────────────────────
+    $("#btn-claude-toggle").on("click", function () {
+        if (chat_state.claude_enabled) {
+            disable_claude();
+        } else {
+            enable_claude();
+        }
+    });
+
+    function enable_claude() {
+        chat_state.claude_enabled = true;
+        chat_state.backend = "claude";
+        chat_state.claude_enabled_at = Date.now();
+
+        $("#btn-claude-toggle").text("Claude ON — Click to disable").removeClass("btn-claude-off").addClass("btn-claude-on");
+        $("#chat-backend-badge").text("Claude API").removeClass("ollama-badge").addClass("claude-badge");
+        $("#chat-model-select").hide();
+        $("#chat-balance-group").show();
+        $("#claude-timer-badge").show();
+
+        fetch_balance();
+        // Poll balance every 60s while Claude is active
+        chat_state.balance_poll_interval = setInterval(fetch_balance, 60000);
+
+        // Countdown timer display
+        update_claude_timer();
+        chat_state.claude_timer_interval = setInterval(function () {
+            var elapsed = Date.now() - chat_state.claude_enabled_at;
+            var remaining = CLAUDE_TIMEOUT_MS - elapsed;
+            if (remaining <= 0) {
+                auto_disable_claude();
+            } else {
+                update_claude_timer();
+                // Warn at 5 minutes remaining
+                if (remaining <= 5 * 60 * 1000 && remaining > (5 * 60 * 1000 - 10000)) {
+                    show_chat_system("Claude API will auto-disable in 5 minutes.");
+                }
+            }
+        }, 10000);
+    }
+
+    function disable_claude() {
+        chat_state.claude_enabled = false;
+        chat_state.backend = "ollama";
+
+        clearInterval(chat_state.claude_timer_interval);
+        clearInterval(chat_state.balance_poll_interval);
+        chat_state.claude_timer_interval = null;
+        chat_state.balance_poll_interval = null;
+
+        $("#btn-claude-toggle").text("Use Claude API").removeClass("btn-claude-on").addClass("btn-claude-off");
+        $("#chat-backend-badge").text("Ollama").removeClass("claude-badge").addClass("ollama-badge");
+        $("#chat-model-select").show();
+        $("#chat-balance-group").hide();
+        $("#claude-timer-badge").hide();
+        load_ollama_models();
+    }
+
+    function auto_disable_claude() {
+        disable_claude();
+        var confirmed = confirm(
+            "Claude API has been automatically disabled after 30 minutes.\n\n" +
+            "Click OK to re-enable, or Cancel to stay on Ollama."
+        );
+        if (confirmed) {
+            enable_claude();
+        } else {
+            show_chat_system("Switched back to Ollama.");
+        }
+    }
+
+    function update_claude_timer() {
+        var elapsed = Date.now() - chat_state.claude_enabled_at;
+        var remaining_s = Math.max(0, Math.floor((CLAUDE_TIMEOUT_MS - elapsed) / 1000));
+        var m = Math.floor(remaining_s / 60);
+        var s = remaining_s % 60;
+        $("#claude-timer-badge").text("Auto-off in " + m + "m " + (s < 10 ? "0" : "") + s + "s");
+    }
+
+    // ── Balance ───────────────────────────────────────────────────
+    function fetch_balance() {
+        $.getJSON("/api/chat/balance", function (data) {
+            if (data.available && data.data) {
+                var d = data.data;
+                // Try common field names Anthropic might return
+                var amount = d.credits_remaining ?? d.balance ?? d.available_credits ?? null;
+                if (amount !== null) {
+                    $("#chat-balance-value").text("$" + parseFloat(amount).toFixed(2));
+                } else {
+                    // Show raw JSON abbreviated
+                    $("#chat-balance-value").text(JSON.stringify(d).slice(0, 40));
+                }
+            } else {
+                var reason = data.reason || "unavailable";
+                if (data.console_url) {
+                    $("#chat-balance-value").html(
+                        '<a href="' + data.console_url + '" target="_blank" style="color:var(--accent)">Check console</a>'
+                    );
+                } else {
+                    $("#chat-balance-value").text(reason);
+                }
+            }
+        }).fail(function () {
+            $("#chat-balance-value").text("error");
+        });
+    }
+
+    $("#btn-refresh-balance").on("click", fetch_balance);
+
+    // ── Message rendering ─────────────────────────────────────────
+    function append_message(role, content, streaming_id) {
+        var cls = role === "user" ? "chat-msg-user" : "chat-msg-assistant";
+        var label = role === "user" ? "You" : (chat_state.backend === "claude" ? "Claude" : "Ollama");
+        var id_attr = streaming_id ? ' id="' + streaming_id + '"' : "";
+        var html =
+            '<div class="chat-msg ' + cls + '"' + id_attr + ">" +
+                '<span class="chat-msg-label">' + escape_html(label) + "</span>" +
+                '<div class="chat-msg-content">' + escape_html(content) + "</div>" +
+            "</div>";
+        $("#chat-messages").append(html);
+        scroll_chat();
+    }
+
+    function show_chat_system(text) {
+        var html = '<div class="chat-msg chat-msg-system"><em>' + escape_html(text) + "</em></div>";
+        $("#chat-messages").append(html);
+        scroll_chat();
+    }
+
+    function scroll_chat() {
+        var $m = $("#chat-messages");
+        $m.scrollTop($m[0].scrollHeight);
+    }
+
+    // ── Send ──────────────────────────────────────────────────────
+    $("#btn-chat-send").on("click", do_send);
+
+    $("#chat-input").on("keydown", function (e) {
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            do_send();
+        }
+    });
+
+    function do_send() {
+        if (chat_state.streaming) return;
+
+        var msg = $("#chat-input").val().trim();
+        if (!msg) return;
+
+        if (!chat_state.session_id) new_chat_session();
+
+        $("#chat-input").val("").prop("disabled", true);
+        $("#btn-chat-send").prop("disabled", true);
+        chat_state.streaming = true;
+
+        append_message("user", msg);
+
+        // Placeholder for streaming assistant response
+        var stream_id = "stream-" + Date.now();
+        var label = chat_state.backend === "claude" ? "Claude" : "Ollama";
+        var html =
+            '<div class="chat-msg chat-msg-assistant" id="' + stream_id + '">' +
+                '<span class="chat-msg-label">' + label + '</span>' +
+                '<div class="chat-msg-content chat-streaming">&#9646;</div>' +
+            "</div>";
+        $("#chat-messages").append(html);
+        scroll_chat();
+
+        var payload = JSON.stringify({
+            message: msg,
+            backend: chat_state.backend,
+            model: chat_state.model || undefined,
+            session_id: chat_state.session_id,
+            top_k: 3,
+        });
+
+        // Use fetch + ReadableStream for SSE
+        fetch("/api/chat/stream", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: payload,
+        }).then(function (resp) {
+            if (!resp.ok) {
+                throw new Error("HTTP " + resp.status);
+            }
+            var reader = resp.body.getReader();
+            var decoder = new TextDecoder();
+            var buffer = "";
+            var accumulated = "";
+
+            function read_chunk() {
+                reader.read().then(function (result) {
+                    if (result.done) {
+                        finish_streaming();
+                        return;
+                    }
+                    buffer += decoder.decode(result.value, {stream: true});
+                    var lines = buffer.split("\n");
+                    buffer = lines.pop();  // keep incomplete line
+
+                    lines.forEach(function (line) {
+                        if (!line.startsWith("data:")) return;
+                        var raw = line.slice(5).trim();
+                        if (!raw) return;
+                        try {
+                            var event = JSON.parse(raw);
+                            if (event.token) {
+                                accumulated += event.token;
+                                $("#" + stream_id + " .chat-msg-content")
+                                    .text(accumulated + "▌");
+                                scroll_chat();
+                            } else if (event.error) {
+                                $("#" + stream_id + " .chat-msg-content")
+                                    .html('<span style="color:var(--danger)">' + escape_html(event.error) + "</span>");
+                                finish_streaming();
+                                return;
+                            } else if (event.done) {
+                                $("#" + stream_id + " .chat-msg-content").text(accumulated);
+                                finish_streaming();
+                                return;
+                            }
+                        } catch (e) { /* ignore parse errors */ }
+                    });
+
+                    read_chunk();
+                }).catch(function (err) {
+                    $("#" + stream_id + " .chat-msg-content")
+                        .html('<span style="color:var(--danger)">Stream error: ' + escape_html(err.message) + "</span>");
+                    finish_streaming();
+                });
+            }
+
+            read_chunk();
+
+        }).catch(function (err) {
+            $("#" + stream_id + " .chat-msg-content")
+                .html('<span style="color:var(--danger)">Error: ' + escape_html(err.message) + "</span>");
+            finish_streaming();
+        });
+    }
+
+    function finish_streaming() {
+        chat_state.streaming = false;
+        $("#chat-input").prop("disabled", false).focus();
+        $("#btn-chat-send").prop("disabled", false);
+    }
+
+    // ── Clear conversation ────────────────────────────────────────
+    $("#btn-clear-chat").on("click", function () {
+        if (!confirm("Clear this conversation?")) return;
+        if (chat_state.session_id) {
+            $.ajax({
+                url: "/api/chat/session/" + chat_state.session_id,
+                method: "DELETE",
+            });
+        }
+        $("#chat-messages").empty();
+        new_chat_session();
+        show_chat_system("Conversation cleared. New session started.");
+    });
 });

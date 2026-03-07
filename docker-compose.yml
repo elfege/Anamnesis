@@ -2,6 +2,7 @@ services:
   anamnesis-mongo:
     image: mongodb/mongodb-atlas-local:8.0
     container_name: anamnesis-mongo
+    hostname: anamnesis-mongo
     restart: unless-stopped
     ports:
       - "5438:27017"
@@ -11,11 +12,11 @@ services:
     networks:
       - anamnesis-net
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1}).ok"]
-      interval: 15s
+      test: ["CMD", "mongosh", "--quiet", "--eval", "try { var s = db.adminCommand({replSetGetStatus:1}); if(s.myState !== 1) quit(1); } catch(e) { quit(1); }"]
+      interval: 10s
       timeout: 10s
-      retries: 12
-      start_period: 120s
+      retries: 30
+      start_period: 30s
 
   anamnesis-app:
     build: .
@@ -23,23 +24,29 @@ services:
     restart: unless-stopped
     ports:
       - "3010:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       MONGO_URI: "mongodb://anamnesis-mongo:27017"
       MONGO_DB: "${MONGO_DB:-anamnesis}"
       EMBEDDING_MODEL: "${EMBEDDING_MODEL:-all-MiniLM-L6-v2}"
       EMBEDDING_DIMENSIONS: "384"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      OLLAMA_URL: "${OLLAMA_URL:-http://host.docker.internal:11434}"
+      OLLAMA_DEFAULT_MODEL: "${OLLAMA_DEFAULT_MODEL:-llama3.2}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      CLAUDE_MODEL: "${CLAUDE_MODEL:-claude-sonnet-4-6}"
     volumes:
       - ./app:/app
       - model_cache:/root/.cache/torch/sentence_transformers
-      # Crawler source mounts (read-only)
-      - /home/elfege/0_GENESIS_PROJECT/genesis.md:/sources/genesis.md:ro
-      - /home/elfege/README_handoff.md:/sources/README_handoff.md:ro
-      - /home/elfege/README_project_history_officewsl.md:/sources/README_project_history_officewsl.md:ro
-      - /home/elfege/README_project_history_server.md:/sources/README_project_history_server.md:ro
-      # intercom.md lives on server (192.168.10.15), not local — skip for now
-      # TODO: set up a sync mechanism or SSH-based fetch in crawler
-      # - /home/elfege/0_CLAUDE_IC/intercom.md:/sources/intercom.md:ro
+      # ── Machine roots (read-only) ─────────────────────────────
+      # dellserver: local $HOME (direct mount)
+      - /home/elfege:/sources/dellserver:ro
+      # server, officewsl, hvtmc: staged via sync_sources.sh (hourly cron)
+      - /home/elfege/0_ANAMNESIS_SOURCES/server:/sources/server:ro
+      - /home/elfege/0_ANAMNESIS_SOURCES/officewsl:/sources/officewsl:ro
+      - /home/elfege/0_ANAMNESIS_SOURCES/hvtmc:/sources/hvtmc:ro
+      # ── Other source directories ──────────────────────────────
       - /home/elfege/0_TEACHINGS:/sources/teachings:ro
       - /mnt/sdb/onedrive_documents:/sources/documents:ro
     depends_on:

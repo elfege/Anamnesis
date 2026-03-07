@@ -23,6 +23,7 @@
         <button class="tab" data-tab="episodes">Episodes</button>
         <button class="tab" data-tab="search">Search</button>
         <button class="tab" data-tab="crawler">Crawler</button>
+        <button class="tab" data-tab="chat">Chat</button>
     </nav>
 
     <!-- ─── Overview Tab ─────────────────────────────────────── -->
@@ -147,15 +148,43 @@
         <table>
             <thead><tr><th>Source</th><th>Path (in container)</th><th>Description</th></tr></thead>
             <tbody>
-                <tr><td>genesis</td><td>/sources/genesis.md</td><td>Philosophical persistence insights</td></tr>
-                <tr><td>handoff</td><td>/sources/README_handoff.md</td><td>Session handoff buffer</td></tr>
-                <tr><td>project_history_officewsl</td><td>/sources/README_project_history_officewsl.md</td><td>Long-term project history (officewsl)</td></tr>
-                <tr><td>project_history_server</td><td>/sources/README_project_history_server.md</td><td>Long-term project history (server)</td></tr>
-                <tr><td>intercom</td><td>/sources/intercom.md</td><td>Cross-instance intercom messages</td></tr>
-                <tr><td>teachings</td><td>/sources/teachings/</td><td>Teaching session files (directory)</td></tr>
-                <tr><td>documents</td><td>/sources/documents/</td><td>OneDrive .docx files (114 files, auto-categorized)</td></tr>
+                {% for s in sources %}
+                <tr><td>{{ s.name }}</td><td>{{ s.path }}</td><td>{{ s.description }}</td></tr>
+                {% endfor %}
             </tbody>
         </table>
+    </section>
+
+    <!-- ─── Chat Tab ─────────────────────────────────────────── -->
+    <section id="tab-chat" class="tab-content">
+
+        <!-- Backend selector -->
+        <div class="chat-toolbar">
+            <div class="chat-backend-group">
+                <span class="chat-backend-label">Backend:</span>
+                <span class="chat-backend-badge ollama-badge" id="chat-backend-badge">Ollama</span>
+                <select id="chat-model-select" title="Ollama model"></select>
+                <button id="btn-claude-toggle" class="btn-claude-off" title="Enable Claude API (billed)">
+                    Use Claude API
+                </button>
+                <span id="claude-timer-badge" class="claude-timer-badge" style="display:none;"></span>
+            </div>
+            <div class="chat-balance-group" id="chat-balance-group" style="display:none;">
+                <span id="chat-balance-value" class="chat-balance-value">--</span>
+                <button id="btn-refresh-balance" class="btn-small" title="Refresh balance">&#8635;</button>
+            </div>
+            <button id="btn-clear-chat" class="btn-small btn-danger-outline" title="Clear conversation">Clear</button>
+        </div>
+
+        <!-- Message window -->
+        <div id="chat-messages" class="chat-messages"></div>
+
+        <!-- Input -->
+        <div class="chat-input-row">
+            <textarea id="chat-input" rows="2" placeholder="Type a message... (Shift+Enter for new line, Enter to send)"></textarea>
+            <button id="btn-chat-send">Send</button>
+        </div>
+
     </section>
 
     <script src="/static/js/dashboard.js"></script>

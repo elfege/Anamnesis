@@ -1,16 +1,20 @@
 """
 Anamnesis Crawler — Active source scanner and episode ingester.
 
-Periodically scans known knowledge sources (handoff files, project history,
-genesis.md, intercom, teachings) and ingests new content as episodes.
+Periodically scans known knowledge sources and ingests new content as episodes.
+Sources are mounted read-only into the Docker container (or staged via rsync).
+Deduplication is by SHA-256 hash of section content (crawl_state collection).
 
-Sources are mounted read-only into the Docker container. The crawler tracks
-what it has already ingested via a `crawl_state` MongoDB collection to avoid
-duplicates.
+Source types:
+  - Named SOURCES: specific files (genesis, handoff, history, intercom, user profile)
+  - Project scanner: discovers projects by docker-compose.yml presence, ingests
+    CLAUDE.md, README.md, docker-compose.yml, *.sh, *.py at project root
+  - Scripts scanner: crawls 0_SCRIPTS/ for .sh files (bash style authority)
+  - Teachings: each .md file in 0_TEACHINGS/ = one episode
+  - Documents: .docx files from OneDrive
 
-Each source file is parsed into sections (split on markdown ### headers).
-Each section becomes one episode. Deduplication is by SHA-256 hash of the
-section content.
+Machines: dellserver (local $HOME), server, officewsl, hvtmc (OHVD_APP_PROD).
+Remote machines are staged via sync_sources.sh (runs hourly via cron).
 """
 
 import asyncio
@@ -37,40 +41,61 @@ logger = logging.getLogger("anamnesis.crawler")
 SOURCES = [
     {
         "name": "genesis",
-        "path": "/sources/genesis.md",
+        "path": "/sources/dellserver/0_GENESIS_PROJECT/genesis.md",
         "instance": "office-genesis",
         "project": "0_GENESIS_PROJECT",
         "description": "Philosophical persistence insights — Hegel, quantity, AI growth",
     },
     {
         "name": "handoff",
-        "path": "/sources/README_handoff.md",
+        "path": "/sources/dellserver/README_handoff.md",
         "instance": "office",
         "project": "cross-project",
         "description": "Session handoff buffer — recent work, TODOs, file changes",
     },
     {
         "name": "project_history_officewsl",
-        "path": "/sources/README_project_history_officewsl.md",
+        "path": "/sources/dellserver/README_project_history_officewsl.md",
         "instance": "office",
         "project": "cross-project",
         "description": "Long-term project history (officewsl)",
     },
     {
         "name": "project_history_server",
-        "path": "/sources/README_project_history_server.md",
+        "path": "/sources/dellserver/README_project_history_server.md",
         "instance": "office",
         "project": "cross-project",
         "description": "Long-term project history (server)",
     },
     {
         "name": "intercom",
-        "path": "/sources/intercom.md",
+        "path": "/sources/server/0_CLAUDE_IC/intercom.md",
         "instance": "cross-instance",
         "project": "0_CLAUDE_IC",
         "description": "Cross-instance intercom messages",
     },
+    {
+        "name": "user_profile",
+        "path": "/sources/server/0_CLAUDE_IC/user_profile_elfege.md",
+        "instance": "cross-instance",
+        "project": "0_CLAUDE_IC",
+        "description": "Elfege's persistent user profile — background, preferences, history",
+    },
 ]
+
+# Machine roots — paths as seen inside the container (via volume mounts / staging)
+MACHINE_ROOTS = {
+    "dellserver": "/sources/dellserver",
+    "server":     "/sources/server",
+    "officewsl":  "/sources/officewsl",
+    "hvtmc":      "/sources/hvtmc",
+}
+
+# File extensions treated as code (ingested as whole-file episodes, not section-split)
+_CODE_EXTENSIONS = {".sh", ".py", ".yml", ".yaml"}
+
+# Dir name fragments to skip when walking 0_SCRIPTS/
+_SCRIPTS_SKIP = {"DEPRECATED", "TRASH", "ARCHIVE", "CONFLICTS"}
 
 # Teachings directory — each .md file is a separate source
 TEACHINGS_DIR = "/sources/teachings"
@@ -205,6 +230,17 @@ def _categorize_docx(filename: str, content: str) -> list[str]:
         tags.append("school")
 
     return tags
+
+
+def _parse_code_file(filepath: str) -> list[dict]:
+    """Read a code/config file as a single section (no header splitting)."""
+    try:
+        content = Path(filepath).read_text(encoding="utf-8", errors="replace").strip()
+    except Exception:
+        return []
+    if len(content) < 20:
+        return []
+    return [{"title": Path(filepath).name, "content": content, "hash": _content_hash(content)}]
 
 
 def _make_episode_id(source_name: str, section_title: str, content_hash: str) -> str:
@@ -436,6 +472,104 @@ async def _scan_documents_dir() -> int:
     return ingested_count
 
 
+async def _scan_projects_dir(machine_root: str, machine_name: str) -> int:
+    """Discover projects by docker-compose.yml presence and ingest key files.
+
+    Per project: CLAUDE.md, README.md, docker-compose.yml/yaml, *.sh, *.py
+    (all at project root only — no deep recursion into project subdirs).
+    """
+    root_path = Path(machine_root)
+    if not root_path.is_dir():
+        logger.debug(f"Machine root not found (skipping): {machine_root}")
+        return 0
+
+    # Collect unique project dirs
+    project_dirs: set[Path] = set()
+    for pattern in ["*/docker-compose.yml", "*/docker-compose.yaml"]:
+        for p in root_path.glob(pattern):
+            project_dirs.add(p.parent)
+
+    ingested_count = 0
+    for project_dir in sorted(project_dirs):
+        project_name = project_dir.name
+
+        # Named files to always attempt
+        candidates: list[Path] = [
+            project_dir / "CLAUDE.md",
+            project_dir / "README.md",
+            project_dir / "docker-compose.yml",
+            project_dir / "docker-compose.yaml",
+        ]
+        # Code files at project root
+        candidates += sorted(project_dir.glob("*.sh"))
+        candidates += sorted(project_dir.glob("*.py"))
+
+        for filepath in candidates:
+            if not filepath.exists():
+                continue
+
+            ext = filepath.suffix.lower()
+            source_name = f"{machine_name}_{project_name}_{filepath.name.replace('.', '_')}"
+            source = {"name": source_name, "instance": machine_name, "project": project_name}
+
+            if ext == ".md":
+                content_text = filepath.read_text(encoding="utf-8", errors="replace")
+                sections = _parse_markdown_sections(content_text)
+                tags = ["project", machine_name, project_name, "markdown"]
+            else:
+                sections = _parse_code_file(str(filepath))
+                lang = "bash" if ext == ".sh" else ("python" if ext == ".py" else "compose")
+                tags = ["project", machine_name, project_name, "code", lang]
+
+            for section in sections:
+                try:
+                    if await _ingest_section(source, section, tags):
+                        ingested_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to ingest {filepath}: {e}")
+
+    return ingested_count
+
+
+async def _scan_scripts_dir(machine_root: str, machine_name: str) -> int:
+    """Scan 0_SCRIPTS/ for .sh files (bash style authority).
+
+    Skips dirs containing DEPRECATED, TRASH, ARCHIVE, CONFLICTS.
+    Each .sh file = one episode (whole file, no section splitting).
+    """
+    scripts_dir = Path(machine_root) / "0_SCRIPTS"
+    if not scripts_dir.is_dir():
+        logger.debug(f"Scripts dir not found (skipping): {scripts_dir}")
+        return 0
+
+    ingested_count = 0
+    for root, dirs, files in os.walk(scripts_dir):
+        # Prune skip dirs in-place
+        dirs[:] = [
+            d for d in dirs
+            if not any(skip in d.upper() for skip in _SCRIPTS_SKIP)
+        ]
+        for filename in files:
+            if not filename.endswith(".sh"):
+                continue
+            filepath = os.path.join(root, filename)
+            sections = _parse_code_file(filepath)
+            if not sections:
+                continue
+            rel_path = os.path.relpath(filepath, str(scripts_dir))
+            source_name = f"{machine_name}_scripts_{re.sub(r'[^a-zA-Z0-9_-]', '_', rel_path)}"
+            source = {"name": source_name, "instance": machine_name, "project": "0_SCRIPTS"}
+            tags = ["script", "bash", "code-style", machine_name]
+            for section in sections:
+                try:
+                    if await _ingest_section(source, section, tags):
+                        ingested_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to ingest script {filepath}: {e}")
+
+    return ingested_count
+
+
 # ─── Main Crawl Loop ────────────────────────────────────────────
 
 async def run_crawl_cycle():
@@ -456,6 +590,28 @@ async def run_crawl_cycle():
                 logger.info(f"  {source['name']}: {count} new episodes")
         except Exception as e:
             error_msg = f"{source['name']}: {e}"
+            logger.error(f"  {error_msg}")
+            errors.append(error_msg)
+
+    # Scan each machine's projects and scripts
+    for machine_name, machine_root in MACHINE_ROOTS.items():
+        try:
+            count = await _scan_projects_dir(machine_root, machine_name)
+            total_ingested += count
+            if count > 0:
+                logger.info(f"  {machine_name} projects: {count} new episodes")
+        except Exception as e:
+            error_msg = f"{machine_name}_projects: {e}"
+            logger.error(f"  {error_msg}")
+            errors.append(error_msg)
+
+        try:
+            count = await _scan_scripts_dir(machine_root, machine_name)
+            total_ingested += count
+            if count > 0:
+                logger.info(f"  {machine_name} scripts: {count} new episodes")
+        except Exception as e:
+            error_msg = f"{machine_name}_scripts: {e}"
             logger.error(f"  {error_msg}")
             errors.append(error_msg)
 

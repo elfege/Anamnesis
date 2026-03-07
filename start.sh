@@ -32,12 +32,58 @@ echo -e "${GREEN:-\033[0;32m}[$(date '+%H:%M:%S')] Internet/AWS connectivity con
 echo "[$(date '+%H:%M:%S')] Internet/AWS connectivity confirmed" >> "$_LOG_FILE"
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Ollama check ─────────────────────────────────────────────────
+if ! command -v ollama &>/dev/null; then
+    echo -e "${CYAN:-}Ollama not found — running install script...${NC:-}"
+    bash "$SCRIPT_DIR/install_ollama.sh"
+elif ! systemctl is-active --quiet ollama 2>/dev/null; then
+    echo -e "${CYAN:-}Ollama installed but not running — starting service...${NC:-}"
+    sudo systemctl start ollama
+    sleep 2
+fi
+echo -e "${GREEN:-}Ollama ready: http://localhost:11434${NC:-}"
+# ─────────────────────────────────────────────────────────────────
+
+# ── Pull ANTHROPIC_API_KEY from AWS ──────────────────────────────
+echo -e "${CYAN:-}Pulling ELFEGE-secrets from AWS...${NC:-}"
+pull_aws_secrets ELFEGE-secrets 1
+export ANTHROPIC_API_KEY
+# ─────────────────────────────────────────────────────────────────
+
+# ── MongoDB health guard ──────────────────────────────────────────
+# If anamnesis-mongo exists but is unhealthy, recreate it so the RS re-initializes
+_MONGO_HEALTH=$(docker inspect --format='{{.State.Health.Status}}' anamnesis-mongo 2>/dev/null || echo "missing")
+if [[ "$_MONGO_HEALTH" == "unhealthy" ]]; then
+    echo -e "${FLASH_ACCENT_YELLOW:-\033[5;33m}MongoDB unhealthy — recreating container...${NC:-\033[0m}"
+    docker stop anamnesis-mongo &>/dev/null || true
+    docker rm anamnesis-mongo &>/dev/null || true
+elif [[ "$_MONGO_HEALTH" == "missing" ]]; then
+    echo -e "${CYAN:-}MongoDB container not found — will create fresh.${NC:-}"
+fi
+# ─────────────────────────────────────────────────────────────────
+
 echo -e "${CYAN:-}Starting Anamnesis...${NC:-}"
 docker compose up -d
 
-# Wait for health (embedding model load can take 10-30s)
-echo -n "Waiting for Anamnesis to be ready"
-for i in $(seq 1 90); do
+# ── Wait for MongoDB to be healthy first (RS init can take 2-3 min fresh) ──
+echo -n "Waiting for MongoDB RS to be ready"
+for i in $(seq 1 60); do
+    _status=$(docker inspect --format='{{.State.Health.Status}}' anamnesis-mongo 2>/dev/null || echo "missing")
+    if [[ "$_status" == "healthy" ]]; then
+        echo " healthy."
+        break
+    elif [[ "$_status" == "unhealthy" ]]; then
+        echo ""
+        echo -e "${RED:-}MongoDB is unhealthy. Check: docker logs anamnesis-mongo${NC:-}"
+        exit 1
+    fi
+    sleep 5
+    printf "."
+done
+
+# ── Wait for app health (embedding model load can take 10-30s) ─────────────
+echo -n "Waiting for Anamnesis app to be ready"
+for i in $(seq 1 120); do
 	if curl -sf "http://localhost:3010/health" >/dev/null 2>&1; then
 		echo ""
 		HOST_IP=$(hostname -I | awk '{print $1}')
@@ -50,11 +96,11 @@ for i in $(seq 1 90); do
 		echo -e "${GREEN:-}==========================================${NC:-}"
 		exit 0
 	fi
-	sleep 1
+	sleep 2
 	printf "."
 done
 
 echo ""
-echo -e "${RED:-}Health check timed out after 90s.${NC:-}"
-echo "Check logs: docker compose logs -f"
+echo -e "${RED:-}App health check timed out after 240s.${NC:-}"
+echo "Check logs: docker logs anamnesis-app"
 exit 1
