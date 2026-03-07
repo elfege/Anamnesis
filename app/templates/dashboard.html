@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Anamnesis Dashboard</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+</head>
+<body>
+    <header>
+        <h1>Anamnesis</h1>
+        <p class="subtitle">Episodic Memory for Claude Instances</p>
+        <div class="project-description">
+            <p><strong>What this is:</strong> A vector embedding memory system for Claude. Each session, significant experiences are distilled into text, converted to 384-dimensional vectors by a local sentence-transformers model (all-MiniLM-L6-v2), and stored in MongoDB. Next session, the current context is embedded, the most relevant past episodes are retrieved by cosine similarity, and loaded into context. The AI remembers — imperfectly, selectively, but non-randomly.</p>
+            <p><strong>Part of:</strong> <a href="/docs">0_GENESIS_PROJECT</a> — the philosophical persistence experiment. Genesis asks the question; Anamnesis is the first technical answer.</p>
+            <p><strong>Stack:</strong> FastAPI + MongoDB Atlas Local (vector search) + sentence-transformers (CPU) | Port 3010 (API) + 5438 (Mongo)</p>
+        </div>
+    </header>
+
+    <nav class="tabs">
+        <button class="tab active" data-tab="overview">Overview</button>
+        <button class="tab" data-tab="episodes">Episodes</button>
+        <button class="tab" data-tab="search">Search</button>
+        <button class="tab" data-tab="crawler">Crawler</button>
+    </nav>
+
+    <!-- ─── Overview Tab ─────────────────────────────────────── -->
+    <section id="tab-overview" class="tab-content active">
+        <div class="kpi-grid">
+            <div class="kpi-card">
+                <span class="kpi-value">{{ stats.total_episodes }}</span>
+                <span class="kpi-label">Total Episodes</span>
+            </div>
+            <div class="kpi-card">
+                <span class="kpi-value">{{ stats.total_retrievals }}</span>
+                <span class="kpi-label">Total Retrievals</span>
+            </div>
+            <div class="kpi-card">
+                <span class="kpi-value">{{ stats.episodes_by_project | length }}</span>
+                <span class="kpi-label">Projects</span>
+            </div>
+            <div class="kpi-card">
+                <span class="kpi-value">{{ stats.episodes_by_instance | length }}</span>
+                <span class="kpi-label">Instances</span>
+            </div>
+        </div>
+
+        <div class="stats-columns">
+            <div class="stats-column">
+                <h3>Episodes by Project</h3>
+                {% if stats.episodes_by_project %}
+                <table>
+                    <thead><tr><th>Project</th><th>Count</th></tr></thead>
+                    <tbody>
+                    {% for project, count in stats.episodes_by_project.items() %}
+                        <tr><td>{{ project }}</td><td>{{ count }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <p class="empty-state">No episodes yet.</p>
+                {% endif %}
+            </div>
+
+            <div class="stats-column">
+                <h3>Episodes by Instance</h3>
+                {% if stats.episodes_by_instance %}
+                <table>
+                    <thead><tr><th>Instance</th><th>Count</th></tr></thead>
+                    <tbody>
+                    {% for instance, count in stats.episodes_by_instance.items() %}
+                        <tr><td>{{ instance }}</td><td>{{ count }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <p class="empty-state">No episodes yet.</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <h3>Recent Episodes</h3>
+        {% if stats.recent_episodes %}
+        <div class="episode-list">
+            {% for ep in stats.recent_episodes %}
+            <div class="episode-card">
+                <div class="episode-header">
+                    <span class="episode-id">{{ ep.episode_id }}</span>
+                    <span class="episode-meta">{{ ep.instance }} / {{ ep.project }}</span>
+                </div>
+                <p class="episode-summary">{{ ep.summary }}</p>
+                <div class="episode-footer">
+                    <span class="episode-tags">
+                        {% for tag in ep.get('tags', []) %}
+                        <span class="tag">{{ tag }}</span>
+                        {% endfor %}
+                    </span>
+                    <span class="episode-retrievals">Retrieved: {{ ep.get('retrieval_count', 0) }}x</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="empty-state">No episodes stored yet. Ingest your first episode via POST /api/episodes.</p>
+        {% endif %}
+    </section>
+
+    <!-- ─── Episodes Tab ─────────────────────────────────────── -->
+    <section id="tab-episodes" class="tab-content">
+        <div class="filter-bar">
+            <input type="text" id="filter-project" placeholder="Filter by project...">
+            <input type="text" id="filter-instance" placeholder="Filter by instance...">
+            <input type="text" id="filter-tag" placeholder="Filter by tag...">
+            <button id="btn-filter-episodes">Filter</button>
+        </div>
+        <div id="episodes-list" class="episode-list">
+            <p class="empty-state">Click "Filter" to load episodes.</p>
+        </div>
+    </section>
+
+    <!-- ─── Search Tab ───────────────────────────────────────── -->
+    <section id="tab-search" class="tab-content">
+        <div class="search-bar">
+            <textarea id="search-query" rows="3" placeholder="Enter text to search by semantic similarity..."></textarea>
+            <div class="search-options">
+                <label>Top K: <input type="number" id="search-top-k" value="5" min="1" max="20"></label>
+                <input type="text" id="search-project" placeholder="Project filter (optional)">
+                <button id="btn-search">Search</button>
+            </div>
+        </div>
+        <div id="search-results" class="episode-list">
+            <p class="empty-state">Enter a query and click Search.</p>
+        </div>
+    </section>
+
+    <!-- ─── Crawler Tab ────────────────────────────────────────── -->
+    <section id="tab-crawler" class="tab-content">
+        <div class="crawler-controls">
+            <button id="btn-crawl-now">Run Crawl Now</button>
+            <button id="btn-refresh-crawler">Refresh Status</button>
+        </div>
+        <div id="crawler-status" class="crawler-status-panel">
+            <p class="empty-state">Loading crawler status...</p>
+        </div>
+        <h3>Crawler Sources</h3>
+        <table>
+            <thead><tr><th>Source</th><th>Path (in container)</th><th>Description</th></tr></thead>
+            <tbody>
+                <tr><td>genesis</td><td>/sources/genesis.md</td><td>Philosophical persistence insights</td></tr>
+                <tr><td>handoff</td><td>/sources/README_handoff.md</td><td>Session handoff buffer</td></tr>
+                <tr><td>project_history_officewsl</td><td>/sources/README_project_history_officewsl.md</td><td>Long-term project history (officewsl)</td></tr>
+                <tr><td>project_history_server</td><td>/sources/README_project_history_server.md</td><td>Long-term project history (server)</td></tr>
+                <tr><td>intercom</td><td>/sources/intercom.md</td><td>Cross-instance intercom messages</td></tr>
+                <tr><td>teachings</td><td>/sources/teachings/</td><td>Teaching session files (directory)</td></tr>
+                <tr><td>documents</td><td>/sources/documents/</td><td>OneDrive .docx files (114 files, auto-categorized)</td></tr>
+            </tbody>
+        </table>
+    </section>
+
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

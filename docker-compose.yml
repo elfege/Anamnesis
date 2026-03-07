@@ -1,0 +1,58 @@
+services:
+  anamnesis-mongo:
+    image: mongodb/mongodb-atlas-local:8.0
+    container_name: anamnesis-mongo
+    restart: unless-stopped
+    ports:
+      - "5438:27017"
+    volumes:
+      - mongo_data:/data/db
+      - mongo_configdb:/data/configdb
+    networks:
+      - anamnesis-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1}).ok"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 120s
+
+  anamnesis-app:
+    build: .
+    container_name: anamnesis-app
+    restart: unless-stopped
+    ports:
+      - "3010:8000"
+    environment:
+      MONGO_URI: "mongodb://anamnesis-mongo:27017"
+      MONGO_DB: "${MONGO_DB:-anamnesis}"
+      EMBEDDING_MODEL: "${EMBEDDING_MODEL:-all-MiniLM-L6-v2}"
+      EMBEDDING_DIMENSIONS: "384"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    volumes:
+      - ./app:/app
+      - model_cache:/root/.cache/torch/sentence_transformers
+      # Crawler source mounts (read-only)
+      - /home/elfege/0_GENESIS_PROJECT/genesis.md:/sources/genesis.md:ro
+      - /home/elfege/README_handoff.md:/sources/README_handoff.md:ro
+      - /home/elfege/README_project_history_officewsl.md:/sources/README_project_history_officewsl.md:ro
+      - /home/elfege/README_project_history_server.md:/sources/README_project_history_server.md:ro
+      # intercom.md lives on server (192.168.10.15), not local — skip for now
+      # TODO: set up a sync mechanism or SSH-based fetch in crawler
+      # - /home/elfege/0_CLAUDE_IC/intercom.md:/sources/intercom.md:ro
+      - /home/elfege/0_TEACHINGS:/sources/teachings:ro
+      - /mnt/sdb/onedrive_documents:/sources/documents:ro
+    depends_on:
+      anamnesis-mongo:
+        condition: service_healthy
+    networks:
+      - anamnesis-net
+
+volumes:
+  mongo_data:
+  mongo_configdb:
+  model_cache:
+
+networks:
+  anamnesis-net:
+    driver: bridge
