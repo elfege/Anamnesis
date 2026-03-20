@@ -9,12 +9,14 @@
 </head>
 <body>
     <header>
+        <img src="/static/img/logo.svg" style="width:54px;height:34px;margin-bottom:6px;" alt="">
         <h1>Anamnesis</h1>
         <p class="subtitle">Episodic Memory for Claude Instances</p>
+        <p id="status-banner" class="status-banner">—</p>
         <div class="project-description">
-            <p><strong>What this is:</strong> A vector embedding memory system for Claude. Each session, significant experiences are distilled into text, converted to 384-dimensional vectors by a local sentence-transformers model (all-MiniLM-L6-v2), and stored in MongoDB. Next session, the current context is embedded, the most relevant past episodes are retrieved by cosine similarity, and loaded into context. The AI remembers — imperfectly, selectively, but non-randomly.</p>
+            <p><strong>What this is:</strong> A vector embedding memory system for Claude. Each session, significant experiences are distilled into text, converted to 1024-dimensional vectors by a local sentence-transformers model (bge-large-en-v1.5), and stored in MongoDB. Next session, the current context is embedded, the most relevant past episodes are retrieved by cosine similarity, and loaded into context. The AI remembers — imperfectly, selectively, but non-randomly.</p>
             <p><strong>Part of:</strong> <a href="/docs">0_GENESIS_PROJECT</a> — the philosophical persistence experiment. Genesis asks the question; Anamnesis is the first technical answer.</p>
-            <p><strong>Stack:</strong> FastAPI + MongoDB Atlas Local (vector search) + sentence-transformers (CPU) | Port 3010 (API) + 5438 (Mongo)</p>
+            <p><strong>Stack:</strong> FastAPI + MongoDB Atlas Local (vector search) + sentence-transformers bge-large-en-v1.5 (1024 dims, CPU/GPU) | Port 3010 (API) + 5438 (Mongo)</p>
         </div>
     </header>
 
@@ -23,7 +25,10 @@
         <button class="tab" data-tab="episodes">Episodes</button>
         <button class="tab" data-tab="search">Search</button>
         <button class="tab" data-tab="crawler">Crawler</button>
+        <button class="tab" data-tab="jsonl">JSONL Ingester</button>
         <button class="tab" data-tab="chat">Chat</button>
+        <button class="tab" data-tab="embedding">Embedding</button>
+        <button class="tab" data-tab="architecture">Architecture</button>
     </nav>
 
     <!-- ─── Overview Tab ─────────────────────────────────────── -->
@@ -144,6 +149,30 @@
         <div id="crawler-status" class="crawler-status-panel">
             <p class="empty-state">Loading crawler status...</p>
         </div>
+
+        <h3>Schedule</h3>
+        <div class="settings-panel">
+            <div class="project-description" style="margin-bottom:12px">
+                <p><strong>What the Crawler does:</strong> Scans known files (CLAUDE.md, handoffs, project code, scripts, teachings) across all machines, hashes their content, and ingests new/changed sections as episodes. Uses local embeddings only — always free.</p>
+            </div>
+            <div class="settings-row">
+                <label for="crawler-schedule-select">Schedule:</label>
+                <select id="crawler-schedule-select">
+                    <option value="disabled">Disabled (manual only)</option>
+                    <option value="every_30m">Every 30 minutes</option>
+                    <option value="every_1h">Every hour</option>
+                    <option value="every_2h">Every 2 hours</option>
+                    <option value="every_6h">Every 6 hours</option>
+                    <option value="nightly">Nightly (5 AM)</option>
+                </select>
+                <span class="settings-hint">Always free (local embeddings only).</span>
+            </div>
+            <div class="settings-row">
+                <button id="btn-save-crawler-schedule" class="btn-primary">Save Schedule</button>
+                <span id="crawler-schedule-status" class="settings-status"></span>
+            </div>
+        </div>
+
         <h3>Crawler Sources</h3>
         <table>
             <thead><tr><th>Source</th><th>Path (in container)</th><th>Description</th></tr></thead>
@@ -155,17 +184,92 @@
         </table>
     </section>
 
+    <!-- ─── JSONL Ingester Tab ────────────────────────────────── -->
+    <section id="tab-jsonl" class="tab-content">
+        <div class="crawler-controls">
+            <button id="btn-jsonl-ingest">Run JSONL Ingestion</button>
+            <button id="btn-refresh-jsonl">Refresh Status</button>
+        </div>
+        <div id="jsonl-status" class="crawler-status-panel">
+            <p class="empty-state">Loading JSONL ingester status...</p>
+        </div>
+
+        <!-- Settings Panel -->
+        <h3>Settings</h3>
+        <div class="settings-panel">
+            <div class="settings-row">
+                <label for="jsonl-backend-select">Summarization Backend:</label>
+                <select id="jsonl-backend-select">
+                    <option value="ollama">Ollama (free, local)</option>
+                    <option value="claude">Claude API (billed)</option>
+                </select>
+            </div>
+            <div class="settings-row" id="jsonl-ollama-model-row">
+                <label for="jsonl-ollama-model">Ollama Model:</label>
+                <select id="jsonl-ollama-model"></select>
+                <span class="settings-hint" id="jsonl-model-hint"></span>
+            </div>
+            <div class="settings-row">
+                <label for="jsonl-max-exchanges">Max Exchanges per Run:</label>
+                <input type="number" id="jsonl-max-exchanges" min="0" value="0" style="width:80px">
+                <span class="settings-hint">0 = unlimited</span>
+            </div>
+            <div class="settings-row">
+                <label for="jsonl-cpu-pct">CPU Core Limit:</label>
+                <input type="range" id="jsonl-cpu-pct" min="10" max="100" step="5" value="70" style="width:180px">
+                <span id="jsonl-cpu-pct-label">70%</span>
+                <span class="settings-hint" id="jsonl-cpu-cores-hint"></span>
+            </div>
+            <div class="settings-row">
+                <label for="jsonl-schedule-select">Schedule:</label>
+                <select id="jsonl-schedule-select">
+                    <option value="disabled">Disabled (manual only)</option>
+                    <option value="every_30m">Every 30 minutes</option>
+                    <option value="every_1h">Every hour</option>
+                    <option value="every_2h">Every 2 hours</option>
+                    <option value="every_6h">Every 6 hours</option>
+                    <option value="nightly">Nightly (5 AM)</option>
+                </select>
+                <span class="settings-hint" id="jsonl-schedule-hint">Free backends only. Auto-disabled for paid models.</span>
+            </div>
+            <div class="settings-row">
+                <button id="btn-save-jsonl-settings" class="btn-primary">Save Settings</button>
+                <span id="jsonl-settings-status" class="settings-status"></span>
+            </div>
+        </div>
+
+        <h3>How It Works</h3>
+        <div class="project-description">
+            <p><strong>Source:</strong> Claude Code JSONL conversation logs from <code>~/.claude/projects/*/</code> directories across all machines.</p>
+            <p><strong>Filtering:</strong> Exchanges are scored for value — error/fix cycles, user corrections, architectural decisions, and discoveries score highest. Routine file reads and searches are skipped.</p>
+            <p><strong>Summarization:</strong> High-value exchanges are summarized by the configured backend (default: Ollama, free). Claude API available for one-time higher-quality runs.</p>
+            <p><strong>Deduplication:</strong> SHA-256 content hashing prevents re-ingestion of already-processed exchanges.</p>
+        </div>
+        <h3>Source Roots</h3>
+        <table>
+            <thead><tr><th>Machine</th><th>Path (in container)</th></tr></thead>
+            <tbody>
+                <tr><td>dellserver</td><td>/sources/dellserver/.claude/projects</td></tr>
+                <tr><td>server</td><td>/sources/server/.claude/projects</td></tr>
+                <tr><td>officewsl</td><td>/sources/officewsl/.claude/projects</td></tr>
+            </tbody>
+        </table>
+    </section>
+
     <!-- ─── Chat Tab ─────────────────────────────────────────── -->
     <section id="tab-chat" class="tab-content">
 
-        <!-- Backend selector -->
+        <!-- Toolbar -->
         <div class="chat-toolbar">
             <div class="chat-backend-group">
                 <span class="chat-backend-label">Backend:</span>
                 <span class="chat-backend-badge ollama-badge" id="chat-backend-badge">Ollama</span>
                 <select id="chat-model-select" title="Ollama model"></select>
-                <button id="btn-claude-toggle" class="btn-claude-off" title="Enable Claude API (billed)">
-                    Use Claude API
+                <button id="btn-claude-cli-toggle" class="btn-claude-off" title="Use Claude CLI (subscription, $0 per message)">
+                    Claude CLI ($0)
+                </button>
+                <button id="btn-claude-toggle" class="btn-claude-off" title="Enable Claude API (billed per token)">
+                    Claude API
                 </button>
                 <span id="claude-timer-badge" class="claude-timer-badge" style="display:none;"></span>
             </div>
@@ -174,19 +278,268 @@
                 <button id="btn-refresh-balance" class="btn-small" title="Refresh balance">&#8635;</button>
             </div>
             <button id="btn-clear-chat" class="btn-small btn-danger-outline" title="Clear conversation">Clear</button>
+            <button id="btn-toggle-right-panel" class="btn-small" title="Toggle terminal / file panel">&#9654; Panel</button>
+            <button id="btn-expand-chat" class="btn-small" title="Expand to fullscreen">⤢</button>
         </div>
 
-        <!-- Message window -->
-        <div id="chat-messages" class="chat-messages"></div>
+        <!-- Body: sessions panel + chat + right panel -->
+        <div class="chat-body">
 
-        <!-- Input -->
-        <div class="chat-input-row">
-            <textarea id="chat-input" rows="2" placeholder="Type a message... (Shift+Enter for new line, Enter to send)"></textarea>
-            <button id="btn-chat-send">Send</button>
+            <!-- Sessions sidebar -->
+            <div id="chat-sessions-panel" class="chat-sessions-panel">
+                <div class="sessions-header">
+                    <span class="sessions-title">Chats</span>
+                    <button id="btn-new-chat" class="btn-new-chat" title="New chat">＋</button>
+                </div>
+                <div id="sessions-list" class="sessions-list">
+                    <p class="empty-state" style="font-size:0.8em;padding:8px;">Loading…</p>
+                </div>
+            </div>
+
+            <!-- Left: chat column -->
+            <div class="chat-main">
+                <div id="chat-messages" class="chat-messages"></div>
+                <div id="chat-attached-files" class="chat-attached-files" style="display:none;"></div>
+                <div class="chat-input-row">
+                    <textarea id="chat-input" rows="2" placeholder="Type a message... (Shift+Enter for new line, Enter to send)"></textarea>
+                    <button id="btn-chat-send">Send</button>
+                </div>
+            </div>
+
+            <!-- Right: collapsible panel -->
+            <div id="chat-right-panel" class="chat-right-panel collapsed">
+                <div class="panel-tabs">
+                    <button class="panel-tab active" data-panel="terminal">Terminal</button>
+                    <button class="panel-tab" data-panel="files">Files</button>
+                </div>
+
+                <!-- Terminal -->
+                <div id="panel-terminal" class="panel-section active">
+                    <div id="terminal-output" class="terminal-output"></div>
+                    <div class="terminal-input-row">
+                        <select id="terminal-host-select" class="terminal-host-select">
+                            <option value="local">local</option>
+                            <option value="dellserver">dellserver</option>
+                            <option value="server">server</option>
+                            <option value="officewsl">officewsl</option>
+                            <option value="hvtmc">hvtmc</option>
+                        </select>
+                        <input id="terminal-cmd-input" class="terminal-cmd-input" type="text" placeholder="$ command…" spellcheck="false">
+                        <button id="btn-terminal-run" class="btn-small">&#9654;</button>
+                    </div>
+                </div>
+
+                <!-- Files -->
+                <div id="panel-files" class="panel-section">
+                    <div id="file-source-tabs" class="file-source-tabs"></div>
+                    <div id="file-breadcrumb" class="file-breadcrumb"></div>
+                    <div id="file-listing" class="file-listing"></div>
+                </div>
+            </div>
+
+        </div><!-- .chat-body -->
+
+    </section>
+
+    <!-- ─── Embedding Tab ────────────────────────────────────── -->
+    <section id="tab-embedding" class="tab-content">
+
+        <h3>Active Model</h3>
+        <div class="settings-panel" id="embedding-active-info">
+            <div class="settings-row">
+                <label>Model:</label>
+                <span id="embed-active-model">—</span>
+            </div>
+            <div class="settings-row">
+                <label>Dimensions:</label>
+                <span id="embed-active-dims">—</span>
+            </div>
+            <div class="settings-row">
+                <label>Pool workers:</label>
+                <span id="embed-active-workers">—</span>
+            </div>
+        </div>
+
+        <h3>Change Model</h3>
+        <div class="settings-panel">
+            <div class="settings-row">
+                <label for="embed-model-select">Embedding Model:</label>
+                <select id="embed-model-select"></select>
+                <span class="settings-hint" id="embed-model-hint"></span>
+            </div>
+            <div class="settings-row">
+                <button id="btn-embed-apply-model" class="btn-primary">Apply Model</button>
+                <span class="settings-hint">Hot-reloads model. Run Re-embed after switching.</span>
+            </div>
+        </div>
+
+        <h3>CPU Core Affinity (strict)</h3>
+        <div class="settings-panel">
+            <div class="settings-row">
+                <label>Cores:</label>
+                <div id="embed-core-checkboxes" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+            </div>
+            <div class="settings-row">
+                <label>Quick select:</label>
+                <button class="btn-secondary" id="btn-cores-all">All</button>
+                <button class="btn-secondary" id="btn-cores-half">50%</button>
+                <button class="btn-secondary" id="btn-cores-quarter">25%</button>
+            </div>
+            <div class="settings-row">
+                <button id="btn-embed-apply-cores" class="btn-primary">Apply Affinity</button>
+                <span class="settings-hint">Workers are pinned to selected cores via sched_setaffinity.</span>
+            </div>
+        </div>
+
+        <h3>Re-embed All Episodes</h3>
+        <div class="settings-panel">
+            <div class="settings-row">
+                <button id="btn-reembed" class="btn-danger">Re-embed All</button>
+                <button id="btn-reembed-pause" class="btn-secondary" style="display:none;">Pause</button>
+                <button id="btn-reembed-resume" class="btn-primary" style="display:none;">Resume</button>
+                <span class="settings-hint">Checkpointed every 25 episodes. Pausing saves position; resumes automatically on restart.</span>
+            </div>
+            <div id="reembed-status" class="crawler-status-panel" style="display:none;margin-top:8px;"></div>
         </div>
 
     </section>
 
+    <!-- ─── Architecture Tab ─────────────────────────────────── -->
+    <section id="tab-architecture" class="tab-content">
+
+        <h3 class="arch-diagram-toggle" id="arch-diagram-toggle">
+            System Diagram <span class="arch-toggle-arrow">▶</span>
+        </h3>
+        <div class="arch-diagram" id="arch-diagram-wrap">
+            <pre class="mermaid">
+flowchart TD
+    subgraph SRC [Sources]
+        S1[CLAUDE.md]
+        S2[Handoff docs]
+        S3[JSONL logs]
+        S4[Teaching files]
+    end
+
+    subgraph ING [Ingestion]
+        CR[Crawler]
+        JI[JSONL Ingester]
+        SC[Scorer]
+    end
+
+    subgraph SUM [Summarization]
+        OL[Ollama]
+        CA[Claude API]
+    end
+
+    ST[bge-large-en-v1.5]
+
+    subgraph MDB [MongoDB]
+        EP[(episodes)]
+        CS[(crawl_state)]
+    end
+
+    subgraph RET [Retrieval]
+        VS[vectorSearch]
+        FP[FastAPI 3010]
+    end
+
+    subgraph CON [Consumers]
+        CH[Chat]
+        CL[Claude Code]
+        DH[Dashboard]
+    end
+
+    S1 --> CR
+    S2 --> CR
+    S4 --> CR
+    S3 --> JI
+    JI --> SC
+    SC --> OL
+    SC --> CA
+    OL --> ST
+    CA --> ST
+    CR --> ST
+    ST --> EP
+    SC --> CS
+    EP --> VS
+    VS --> FP
+    FP --> CH
+    FP --> CL
+    FP --> DH
+
+    classDef local fill:#1c2128,stroke:#58a6ff,color:#e6edf3
+    classDef llm fill:#1c2128,stroke:#d29922,color:#e6edf3
+    classDef store fill:#1c2128,stroke:#3fb950,color:#e6edf3
+    classDef source fill:#1c2128,stroke:#30363d,color:#8b949e
+
+    class ST,VS,FP local
+    class OL,CA llm
+    class EP,CS store
+    class S1,S2,S3,S4 source
+            </pre>
+        </div>
+
+        <h3>Components</h3>
+        <table class="arch-table">
+            <thead><tr><th>Component</th><th>Tech</th><th>Purpose</th><th>LLM?</th><th>Port</th></tr></thead>
+            <tbody>
+                <tr><td>FastAPI app</td><td>Python 3.12 + uvicorn</td><td>REST API + dashboard</td><td>No</td><td>3010</td></tr>
+                <tr><td>MongoDB Atlas Local</td><td>MongoDB 8.0 + $vectorSearch</td><td>Episode storage + cosine similarity search</td><td>No</td><td>5438</td></tr>
+                <tr><td>Embedding model</td><td>sentence-transformers (local)</td><td>Text → 1024-dim vectors. Runs entirely on CPU/GPU — no network call</td><td>No</td><td>—</td></tr>
+                <tr><td>Crawler</td><td>Python async</td><td>Scans CLAUDE.md, handoffs, project code every 30 min and ingests changed content</td><td>No</td><td>—</td></tr>
+                <tr><td>JSONL Ingester</td><td>Python async</td><td>Parses conversation logs, scores exchanges, summarizes high-value ones</td><td><span class="arch-badge ollama">Ollama</span> or <span class="arch-badge claude">Claude API</span></td><td>—</td></tr>
+                <tr><td>Chat</td><td>FastAPI + streaming</td><td>Anamnesis-identity chat. Searches own memory on every turn</td><td><span class="arch-badge ollama">Ollama</span> or <span class="arch-badge claude">Claude API</span></td><td>—</td></tr>
+                <tr><td>Status banner</td><td>Ollama</td><td>Generates the live one-liner in the header</td><td><span class="arch-badge ollama">Ollama</span></td><td>—</td></tr>
+            </tbody>
+        </table>
+
+        <h3>LLM Usage Map</h3>
+        <table class="arch-table">
+            <thead><tr><th>Feature</th><th>Uses LLM?</th><th>Which</th><th>What for</th></tr></thead>
+            <tbody>
+                <tr><td>Embedding (search + ingest)</td><td>No</td><td>Local sentence-transformers</td><td>Text → vector. Fully offline.</td></tr>
+                <tr><td>Crawler ingestion</td><td>No</td><td>—</td><td>Raw text chunks, no summarization</td></tr>
+                <tr><td>JSONL ingestion</td><td>Yes (optional)</td><td>Ollama (default) / Claude API</td><td>Summarizes conversation exchanges into episode text before embedding</td></tr>
+                <tr><td>Chat</td><td>Yes</td><td>Ollama (default) / Claude API</td><td>Generates responses. Memory retrieval is local (vector search).</td></tr>
+                <tr><td>Status banner</td><td>Yes</td><td>Ollama</td><td>Generates the header status line. Falls back to plain text if unavailable.</td></tr>
+                <tr><td>Vector search</td><td>No</td><td>MongoDB $vectorSearch</td><td>Cosine similarity in 1024-dim space. No LLM involved.</td></tr>
+            </tbody>
+        </table>
+
+        <h3>Data Sources</h3>
+        <table class="arch-table">
+            <thead><tr><th>Machine</th><th>Mount</th><th>What gets ingested</th></tr></thead>
+            <tbody>
+                <tr><td>dellserver</td><td>/sources/dellserver</td><td>CLAUDE.md files, handoffs, project code, scripts</td></tr>
+                <tr><td>server</td><td>/sources/server</td><td>Same — synced hourly via sync_sources.sh</td></tr>
+                <tr><td>officewsl</td><td>/sources/officewsl</td><td>Same — synced hourly</td></tr>
+                <tr><td>dellserver</td><td>/sources/teachings</td><td>~/0_TEACHINGS/** — teaching session files</td></tr>
+                <tr><td>dellserver</td><td>/sources/documents</td><td>/mnt/sdb/onedrive_documents — .docx files</td></tr>
+                <tr><td>all</td><td>via JSONL ingester</td><td>~/.claude/projects/**/*.jsonl — conversation logs</td></tr>
+            </tbody>
+        </table>
+
+    </section>
+
+    <!-- ─── Chat fullscreen modal ─────────────────────────────── -->
+    <div id="chat-modal" class="chat-modal" style="display:none;">
+        <div class="chat-modal-inner">
+            <button id="btn-collapse-chat" class="btn-collapse-chat" title="Close fullscreen">✕</button>
+            <div id="chat-modal-body"></div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+    <script>
+        mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+        var _mermaid_rendered = false;
+        function maybeRenderMermaid() {
+            if (!_mermaid_rendered) {
+                _mermaid_rendered = true;
+                mermaid.run({ querySelector: '.mermaid' });
+            }
+        }
+    </script>
     <script src="/static/js/dashboard.js"></script>
 </body>
 </html>

@@ -7,3 +7,4 @@ python-multipart==0.0.18
 python-dotenv==1.0.1
 python-docx==1.1.2
 httpx==0.28.1
+paramiko==3.5.0

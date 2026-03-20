@@ -9,44 +9,84 @@ SCRIPT_DIR="${SCRIPT_R_PATH%${SCRIPT_NAME}}"
 
 cd "$SCRIPT_DIR" &>/dev/null || true
 
-. ~/.env.colors 2>/dev/null || true
-. ~/logger.sh --no-exec &>/dev/null || true
-. ~/.bash_utils --no-exec &>/dev/null || true
+cleanup() {
+	local exit_code=$?
+
+	stop_spinner
+	trap - SIGINT SIGTERM EXIT ERR
+	if [[ $exit_code -ne 0 ]]; then
+		echo -e "${RED:-}Startup interrupted. Cleaning up...${NC:-}"
+		docker compose down &>/dev/null &
+		disown
+	fi
+	exit $exit_code
+}
+trap cleanup SIGINT SIGTERM EXIT ERR
+
+type source_env &>/dev/null || {
+	. ~/.bash_utils --no-exec &>/dev/null
+}
+source_env >/dev/null 2>&1 || {
+	echo -e "${RED:-}Failed to load environment variables from .env${NC:-}"
+	exit 1
+}
+
+display_block "ANAMNESIS - The AI Memory Palace For LLMs"
+
+start_spinner "" "${CYAN:-}Initializing...${NC:-}"
+sleep 1
+
+start_spinner "" "${CYAN:-}Stopping any existing Anamnesis containers...${NC:-}"
+docker compose down &>/dev/null || {
+	echo -e "${RED:-}Failed to stop existing containers. Check: docker compose down${NC:-}"
+	exit 1
+}
+sleep 1
 
 # ── Wait for internet / AWS connectivity (post-power-loss guard) ─────────────
 _AWS_WAIT_URL="https://sts.amazonaws.com"
 _LOG_FILE="${LOG_FILE:-$HOME/0_LOGS/log.log}"
 mkdir -p "$(dirname "$_LOG_FILE")"
 if ! curl -sf --max-time 5 "$_AWS_WAIT_URL" -o /dev/null 2>&1; then
-    _msg="[$(date '+%H:%M:%S')] Waiting for internet/AWS (${_AWS_WAIT_URL}) — logging every 5s to: $_LOG_FILE"
-    echo -e "${FLASH_ACCENT_YELLOW:-\033[5;33m}${_msg}${NC:-\033[0m}"
-    echo "$_msg" >> "$_LOG_FILE"
-    until curl -sf --max-time 5 "$_AWS_WAIT_URL" -o /dev/null 2>&1; do
-        _msg="[$(date '+%H:%M:%S')] Still waiting for internet/AWS — retrying in 5s"
-        echo -e "${FLASH_ACCENT_YELLOW:-\033[5;33m}${_msg}${NC:-\033[0m}"
-        echo "$_msg" >> "$_LOG_FILE"
-        sleep 5
-    done
+	_msg="[$(date '+%H:%M:%S')] Waiting for internet/AWS (${_AWS_WAIT_URL}) — logging every 5s to: $_LOG_FILE"
+	start_spinner "" "${FLASH_CYAN:-\033[5;33m}${_msg}${NC:-\033[0m}"
+	start_spinner "" "$_msg"
+	until curl -sf --max-time 5 "$_AWS_WAIT_URL" -o /dev/null 2>&1; do
+		_msg="[$(date '+%H:%M:%S')] Still waiting for internet/AWS — retrying in 5s"
+		start_spinner "" "${FLASH_CYAN:-\033[5;33m}${_msg}${NC:-\033[0m}"
+		start_spinner "" "$_msg"
+		sleep 5
+	done
 fi
-echo -e "${GREEN:-\033[0;32m}[$(date '+%H:%M:%S')] Internet/AWS connectivity confirmed — proceeding${NC:-\033[0m}"
-echo "[$(date '+%H:%M:%S')] Internet/AWS connectivity confirmed" >> "$_LOG_FILE"
+start_spinner "" "${CYAN:-\033[0;32m}[$(date '+%H:%M:%S')] Internet/AWS connectivity confirmed — proceeding${NC:-\033[0m}"
+start_spinner "" "[$(date '+%H:%M:%S')] Internet/AWS connectivity confirmed"
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Ollama check ─────────────────────────────────────────────────
 if ! command -v ollama &>/dev/null; then
-    echo -e "${CYAN:-}Ollama not found — running install script...${NC:-}"
-    bash "$SCRIPT_DIR/install_ollama.sh"
+	start_spinner "" "${CYAN:-}Ollama not found — running install script...${NC:-}"
+	bash "$SCRIPT_DIR/install_ollama.sh" &>/dev/null || {
+		echo -e "${RED:-}Failed to install Ollama. Check install_ollama.sh${NC:-}"
+		exit 1
+	}
 elif ! systemctl is-active --quiet ollama 2>/dev/null; then
-    echo -e "${CYAN:-}Ollama installed but not running — starting service...${NC:-}"
-    sudo systemctl start ollama
-    sleep 2
+	start_spinner "" "${CYAN:-}Ollama installed but not running — starting service...${NC:-}"
+	sudo systemctl start ollama &>/dev/null || {
+		echo -e "${RED:-}Failed to start Ollama service. Check: sudo systemctl status ollama${NC:-}"
+		exit 1
+	}
+	sleep 2
 fi
-echo -e "${GREEN:-}Ollama ready: http://localhost:11434${NC:-}"
+start_spinner "" "${CYAN:-}Ollama ready: http://localhost:11434${NC:-}"
 # ─────────────────────────────────────────────────────────────────
 
 # ── Pull ANTHROPIC_API_KEY from AWS ──────────────────────────────
-echo -e "${CYAN:-}Pulling ELFEGE-secrets from AWS...${NC:-}"
-pull_aws_secrets ELFEGE-secrets 1
+start_spinner "" "${CYAN:-}Pulling secrets from aws${NC:-}"
+pull_aws_secrets ELFEGE-secrets 1 &>/dev/null || {
+	echo -e "${RED:-}Failed to pull secrets from AWS. Ensure AWS CLI is configured and you have access to ELFEGE-secrets.${NC:-}"
+	exit 1
+}
+start_spinner "" "${YELLOW:-}Exporting ANTHROPIC_API_KEY{NC:-}"
 export ANTHROPIC_API_KEY
 # ─────────────────────────────────────────────────────────────────
 
@@ -54,46 +94,59 @@ export ANTHROPIC_API_KEY
 # If anamnesis-mongo exists but is unhealthy, recreate it so the RS re-initializes
 _MONGO_HEALTH=$(docker inspect --format='{{.State.Health.Status}}' anamnesis-mongo 2>/dev/null || echo "missing")
 if [[ "$_MONGO_HEALTH" == "unhealthy" ]]; then
-    echo -e "${FLASH_ACCENT_YELLOW:-\033[5;33m}MongoDB unhealthy — recreating container...${NC:-\033[0m}"
-    docker stop anamnesis-mongo &>/dev/null || true
-    docker rm anamnesis-mongo &>/dev/null || true
+	start_spinner "" "${FLASH_CYAN:-\033[5;33m}MongoDB unhealthy — recreating container...${NC:-\033[0m}"
+	docker stop anamnesis-mongo &>/dev/null || true
+	docker rm anamnesis-mongo &>/dev/null || true
 elif [[ "$_MONGO_HEALTH" == "missing" ]]; then
-    echo -e "${CYAN:-}MongoDB container not found — will create fresh.${NC:-}"
+	start_spinner "" "${CYAN:-}MongoDB container not found — will create fresh.${NC:-}"
 fi
 # ─────────────────────────────────────────────────────────────────
 
-echo -e "${CYAN:-}Starting Anamnesis...${NC:-}"
-docker compose up -d
+start_spinner "" "${CYAN:-}Composing services...${NC:-}"
+docker compose up -d &>/dev/null || {
+	echo -e "${RED:-}Failed to start Anamnesis containers. Check: docker compose up -d${NC:-}"
+	exit 1
+}
+stop_spinner
 
 # ── Wait for MongoDB to be healthy first (RS init can take 2-3 min fresh) ──
-echo -n "Waiting for MongoDB RS to be ready"
+
+/bin/clear
+echo -e "$CYAN" "Waiting for MongoDB RS to be ready. Please be patient, this can take 2-3 minutes on first run..." "$NC"
 for i in $(seq 1 60); do
-    _status=$(docker inspect --format='{{.State.Health.Status}}' anamnesis-mongo 2>/dev/null || echo "missing")
-    if [[ "$_status" == "healthy" ]]; then
-        echo " healthy."
-        break
-    elif [[ "$_status" == "unhealthy" ]]; then
-        echo ""
-        echo -e "${RED:-}MongoDB is unhealthy. Check: docker logs anamnesis-mongo${NC:-}"
-        exit 1
-    fi
-    sleep 5
-    printf "."
+	_status=$(docker inspect --format='{{.State.Health.Status}}' anamnesis-mongo 2>/dev/null || echo "missing")
+	if [[ "$_status" == "healthy" ]]; then
+		echo -e "${CYAN}MongoDB is ready.${NC:-}"
+		break
+	elif [[ "$_status" == "unhealthy" ]]; then
+		echo ""
+		echo -e "${RED:-}MongoDB is unhealthy. Check: docker logs anamnesis-mongo${NC:-}"
+		exit 1
+	fi
+	sleep 1
+
+	printf "."
 done
 
 # ── Wait for app health (embedding model load can take 10-30s) ─────────────
-echo -n "Waiting for Anamnesis app to be ready"
+/bin/clear
+display_block "ANAMNESIS - The AI Memory Palace For LLMs"
+
+echo -e "${CYAN}" "Waiting for Anamnesis app to be ready" "$NC"
+
 for i in $(seq 1 120); do
 	if curl -sf "http://localhost:3010/health" >/dev/null 2>&1; then
-		echo ""
+		/bin/clear
+		display_block "ANAMNESIS - The AI Memory Palace For LLMs"
+
 		HOST_IP=$(hostname -I | awk '{print $1}')
-		echo -e "${GREEN:-}==========================================${NC:-}"
-		echo -e "${GREEN:-}  Anamnesis is LIVE${NC:-}"
+		repeat_print "═" "" "$CYAN"
+		echo -e "${CYAN:-}  Anamnesis is LIVE${NC:-}"
 		echo -e "  API:       http://${HOST_IP}:3010/docs"
 		echo -e "  Dashboard: http://${HOST_IP}:3010/dashboard"
 		echo -e "  Health:    http://${HOST_IP}:3010/health"
 		echo -e "  MongoDB:   ${HOST_IP}:5438"
-		echo -e "${GREEN:-}==========================================${NC:-}"
+		repeat_print "═" "" "$CYAN"
 		exit 0
 	fi
 	sleep 2

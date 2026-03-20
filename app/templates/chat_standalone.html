@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ANAMNESIS.CHAT</title>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <style>
+        :root {
+            --bg: #0a0d12;
+            --bg-panel: #0f1318;
+            --bg-card: #141920;
+            --border: #1e2530;
+            --accent: #58a6ff;
+            --accent-dim: #1a3a5c;
+            --text: #cdd9e5;
+            --text-dim: #636e7b;
+            --success: #3fb950;
+            --danger: #f85149;
+            --warning: #d29922;
+            --purple: #bc8cff;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ── Header ─────────────────────────────────── */
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 20px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+            background: var(--bg-panel);
+        }
+
+        .chat-brand {
+            font-size: 0.9em;
+            font-weight: 700;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: var(--accent);
+        }
+
+        .chat-brand span {
+            color: var(--text-dim);
+            font-weight: 300;
+        }
+
+        .chat-brand-wrap {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .brand-logo {
+            width: 36px;
+            height: 22px;
+            flex-shrink: 0;
+        }
+
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* ── Layout ─────────────────────────────────── */
+        .main-layout {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* ── Sessions sidebar ───────────────────────── */
+        .sessions-sidebar {
+            width: 200px;
+            flex-shrink: 0;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-panel);
+        }
+
+        .sidebar-header {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .sidebar-label {
+            font-size: 0.72em;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-dim);
+            font-weight: 600;
+        }
+
+        .btn-new {
+            background: none;
+            border: 1px solid var(--border);
+            color: var(--accent);
+            border-radius: 4px;
+            padding: 2px 7px;
+            font-size: 1em;
+            cursor: pointer;
+        }
+
+        .btn-new:hover { background: var(--accent-dim); }
+
+        .sessions-scroll {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .session-entry {
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            position: relative;
+        }
+
+        .session-entry:hover { background: var(--bg-card); }
+
+        .session-entry.active {
+            background: var(--bg-card);
+            border-left: 2px solid var(--accent);
+        }
+
+        .entry-title {
+            font-size: 0.79em;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            padding-right: 18px;
+        }
+
+        .entry-title[contenteditable="true"] {
+            white-space: normal;
+            overflow: visible;
+            outline: 1px solid var(--accent);
+            border-radius: 2px;
+        }
+
+        .entry-meta {
+            font-size: 0.69em;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
+        .entry-del {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            background: none;
+            border: none;
+            color: var(--danger);
+            font-size: 0.72em;
+            cursor: pointer;
+            opacity: 0;
+            padding: 2px 4px;
+        }
+
+        .session-entry:hover .entry-del { opacity: 0.6; }
+        .entry-del:hover { opacity: 1 !important; }
+
+        /* ── Chat area ──────────────────────────────── */
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Toolbar */
+        .chat-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 14px;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-panel);
+            flex-wrap: wrap;
+        }
+
+        .backend-badge {
+            font-size: 0.72em;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 10px;
+            border: 1px solid var(--success);
+            color: var(--success);
+            background: rgba(63,185,80,0.08);
+        }
+
+        .backend-badge.claude { border-color: var(--purple); color: var(--purple); background: rgba(188,140,255,0.08); }
+        .backend-badge.cli    { border-color: var(--warning); color: var(--warning); background: rgba(210,153,34,0.08); }
+
+        select, input[type="text"] {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text);
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 0.82em;
+        }
+
+        .btn {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            border-radius: 4px;
+            padding: 4px 12px;
+            font-size: 0.82em;
+            cursor: pointer;
+        }
+
+        .btn:hover { color: var(--text); border-color: var(--accent); }
+        .btn.active { border-color: var(--accent); color: var(--accent); }
+        .btn.danger { border-color: var(--danger); color: var(--danger); }
+        .btn.danger:hover { background: var(--danger); color: #fff; }
+
+        /* Messages */
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .msg {
+            display: flex;
+            flex-direction: column;
+            max-width: 80%;
+        }
+
+        .msg.user { align-self: flex-end; align-items: flex-end; }
+        .msg.assistant { align-self: flex-start; align-items: flex-start; }
+        .msg.system { align-self: center; align-items: center; opacity: 0.6; font-size: 0.8em; font-style: italic; }
+
+        .msg-label {
+            font-size: 0.7em;
+            color: var(--text-dim);
+            margin-bottom: 3px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .msg-bubble {
+            padding: 10px 14px;
+            border-radius: 10px;
+            font-size: 0.88em;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .msg.user .msg-bubble {
+            background: var(--accent-dim);
+            border: 1px solid var(--accent);
+            color: var(--text);
+        }
+
+        .msg.assistant .msg-bubble {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text);
+        }
+
+        .msg.system .msg-bubble {
+            background: none;
+            border: none;
+            padding: 0;
+            color: var(--text-dim);
+        }
+
+        /* Input row */
+        .input-row {
+            display: flex;
+            gap: 8px;
+            padding: 12px 14px;
+            border-top: 1px solid var(--border);
+            background: var(--bg-panel);
+        }
+
+        .input-row textarea {
+            flex: 1;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text);
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 0.88em;
+            font-family: inherit;
+            resize: none;
+            line-height: 1.5;
+        }
+
+        .input-row textarea:focus { outline: none; border-color: var(--accent); }
+
+        .btn-send {
+            background: var(--accent-dim);
+            border: 1px solid var(--accent);
+            color: var(--text);
+            border-radius: 6px;
+            padding: 8px 18px;
+            font-size: 0.88em;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .btn-send:hover { background: var(--accent); color: #000; }
+        .btn-send:disabled { opacity: 0.4; cursor: default; }
+
+        .cost-badge { font-size: 0.7em; color: var(--text-dim); font-style: italic; margin-top: 3px; }
+
+        a.back-link {
+            font-size: 0.78em;
+            color: var(--text-dim);
+            text-decoration: none;
+        }
+        a.back-link:hover { color: var(--accent); }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="chat-brand-wrap">
+        <img src="/static/img/logo.svg" class="brand-logo" alt="">
+        <div class="chat-brand">ANAMNESIS<span>.CHAT</span></div>
+    </div>
+    <div class="header-controls">
+        <span id="sc-backend-badge" class="backend-badge">Ollama</span>
+        <select id="sc-model-select"></select>
+        <button class="btn" id="sc-btn-cli" title="Claude CLI (subscription, $0)">CLI $0</button>
+        <button class="btn" id="sc-btn-claude" title="Claude API (billed)">Claude API</button>
+        <button class="btn danger" id="sc-btn-clear">Clear</button>
+        <a href="/dashboard" class="back-link">← Dashboard</a>
+    </div>
+</header>
+
+<div class="main-layout">
+
+    <!-- Sessions sidebar -->
+    <aside class="sessions-sidebar">
+        <div class="sidebar-header">
+            <span class="sidebar-label">Chats</span>
+            <button class="btn-new" id="sc-btn-new">＋</button>
+        </div>
+        <div class="sessions-scroll" id="sc-sessions-list">
+            <p style="padding:10px;font-size:0.78em;color:var(--text-dim)">Loading…</p>
+        </div>
+    </aside>
+
+    <!-- Chat -->
+    <div class="chat-area">
+        <div class="chat-toolbar" id="sc-toolbar">
+            <span style="font-size:0.78em;color:var(--text-dim)" id="sc-session-label">New chat</span>
+            <span id="sc-timer-badge" style="font-size:0.78em;color:var(--warning);display:none;"></span>
+        </div>
+        <div class="messages" id="sc-messages"></div>
+        <div class="input-row">
+            <textarea id="sc-input" rows="2" placeholder="Message Anamnesis… (Enter to send, Shift+Enter for newline)"></textarea>
+            <button class="btn-send" id="sc-btn-send">Send</button>
+        </div>
+    </div>
+
+</div>
+
+<script>
+$(function () {
+
+    // ── State ──────────────────────────────────────────────────────
+    var state = {
+        session_id: null,
+        backend: "ollama",
+        model: null,
+        streaming: false,
+        claude_enabled: false,
+        cli_enabled: false,
+    };
+
+    // ── Helpers ────────────────────────────────────────────────────
+    function esc(s) {
+        return $("<div>").text(s).html();
+    }
+
+    function scroll_bottom() {
+        var $m = $("#sc-messages");
+        $m.scrollTop($m[0].scrollHeight);
+    }
+
+    function new_session() {
+        state.session_id = "s-" + Math.random().toString(36).slice(2, 12);
+        $("#sc-session-label").text("New chat");
+    }
+
+    function append_msg(role, content, stream_id) {
+        var cls = role === "user" ? "user" : role === "assistant" ? "assistant" : "system";
+        var label = role === "user" ? "You" : role === "assistant" ? "Anamnesis" : "";
+        var id_attr = stream_id ? ' id="' + stream_id + '"' : "";
+        var html = '<div class="msg ' + cls + '"' + id_attr + '>' +
+            (label ? '<div class="msg-label">' + esc(label) + '</div>' : '') +
+            '<div class="msg-bubble">' + esc(content) + '</div></div>';
+        $("#sc-messages").append(html);
+        scroll_bottom();
+    }
+
+    function system_msg(text) {
+        $("#sc-messages").append('<div class="msg system"><div class="msg-bubble">' + esc(text) + '</div></div>');
+        scroll_bottom();
+    }
+
+    // ── Models ─────────────────────────────────────────────────────
+    $.getJSON("/api/chat/models", function (data) {
+        var $sel = $("#sc-model-select");
+        $sel.empty();
+        (data.models || []).forEach(function (m) {
+            var opt = $("<option>").val(m).text(m);
+            if (m === data.default) opt.prop("selected", true);
+            $sel.append(opt);
+        });
+        state.model = $sel.val();
+    });
+
+    $("#sc-model-select").on("change", function () { state.model = $(this).val(); });
+
+    // ── Backend toggles ────────────────────────────────────────────
+    function update_badge() {
+        var $b = $("#sc-backend-badge");
+        if (state.backend === "claude_cli") {
+            $b.attr("class", "backend-badge cli").text("Claude CLI");
+            $("#sc-btn-cli").addClass("active");
+            $("#sc-btn-claude").removeClass("active");
+        } else if (state.backend === "claude") {
+            $b.attr("class", "backend-badge claude").text("Claude API");
+            $("#sc-btn-claude").addClass("active");
+            $("#sc-btn-cli").removeClass("active");
+        } else {
+            $b.attr("class", "backend-badge").text("Ollama");
+            $("#sc-btn-claude").removeClass("active");
+            $("#sc-btn-cli").removeClass("active");
+        }
+    }
+
+    $("#sc-btn-claude").on("click", function () {
+        state.backend = state.backend === "claude" ? "ollama" : "claude";
+        update_badge();
+    });
+
+    $("#sc-btn-cli").on("click", function () {
+        state.backend = state.backend === "claude_cli" ? "ollama" : "claude_cli";
+        update_badge();
+    });
+
+    // ── Sessions ───────────────────────────────────────────────────
+    function load_sessions() {
+        $.getJSON("/api/chat/sessions", function (data) {
+            var $list = $("#sc-sessions-list");
+            $list.empty();
+            if (!data.sessions || !data.sessions.length) {
+                $list.append('<p style="padding:10px;font-size:0.78em;color:var(--text-dim)">No saved chats.</p>');
+                return;
+            }
+            data.sessions.forEach(function (s) {
+                var is_active = s.session_id === state.session_id;
+                var date = s.updated_at ? new Date(s.updated_at).toLocaleDateString() : "";
+                var $item = $(
+                    '<div class="session-entry' + (is_active ? " active" : "") + '" data-sid="' + s.session_id + '">' +
+                    '<div class="entry-title">' + esc(s.title || "Untitled") + '</div>' +
+                    '<div class="entry-meta">' + esc(s.backend || "") + ' · ' + date + '</div>' +
+                    '<button class="entry-del" title="Delete">✕</button>' +
+                    '</div>'
+                );
+
+                $item.on("click", function (e) {
+                    if ($(e.target).hasClass("entry-del")) return;
+                    if ($(e.target).attr("contenteditable") === "true") return;
+                    load_session(s.session_id);
+                });
+
+                $item.find(".entry-title").on("dblclick", function (e) {
+                    e.stopPropagation();
+                    var $t = $(this);
+                    $t.attr("contenteditable", "true").focus();
+                    var range = document.createRange();
+                    range.selectNodeContents(this);
+                    window.getSelection().removeAllRanges();
+                    window.getSelection().addRange(range);
+
+                    $t.off("keydown.r").on("keydown.r", function (ev) {
+                        if (ev.key === "Enter") { ev.preventDefault(); $t.blur(); }
+                        if (ev.key === "Escape") { $t.text(s.title || "Untitled").blur(); }
+                    });
+                    $t.off("blur.r").on("blur.r", function () {
+                        $t.removeAttr("contenteditable");
+                        var nt = $t.text().trim();
+                        if (nt && nt !== s.title) {
+                            $.ajax({ url: "/api/chat/sessions/" + s.session_id + "/title",
+                                method: "PATCH", contentType: "application/json",
+                                data: JSON.stringify({title: nt}) });
+                            s.title = nt;
+                        } else { $t.text(s.title || "Untitled"); }
+                    });
+                });
+
+                $item.find(".entry-del").on("click", function (e) {
+                    e.stopPropagation();
+                    if (!confirm("Delete this chat?")) return;
+                    $.ajax({ url: "/api/chat/sessions/" + s.session_id + "/delete", method: "DELETE",
+                        success: function () {
+                            if (state.session_id === s.session_id) {
+                                $("#sc-messages").empty();
+                                new_session();
+                            }
+                            load_sessions();
+                        }
+                    });
+                });
+
+                $list.append($item);
+            });
+        });
+    }
+
+    function load_session(session_id) {
+        $.getJSON("/api/chat/sessions/" + session_id, function (data) {
+            state.session_id = session_id;
+            $("#sc-messages").empty();
+            (data.messages || []).forEach(function (m) {
+                if (m.role === "user" || m.role === "assistant") append_msg(m.role, m.content);
+            });
+            scroll_bottom();
+            $("#sc-session-label").text(data.title || "Chat");
+            load_sessions();
+        });
+    }
+
+    $("#sc-btn-new").on("click", function () {
+        if (state.streaming) return;
+        $("#sc-messages").empty();
+        new_session();
+        system_msg("New chat started.");
+        load_sessions();
+    });
+
+    // ── Clear ──────────────────────────────────────────────────────
+    $("#sc-btn-clear").on("click", function () {
+        if (!confirm("Clear this conversation?")) return;
+        if (state.session_id) {
+            $.ajax({ url: "/api/chat/session/" + state.session_id, method: "DELETE" });
+        }
+        $("#sc-messages").empty();
+        new_session();
+        system_msg("Cleared.");
+    });
+
+    // ── Send ───────────────────────────────────────────────────────
+    function do_send() {
+        if (state.streaming) return;
+        var msg = $("#sc-input").val().trim();
+        if (!msg) return;
+        if (!state.session_id) new_session();
+
+        $("#sc-input").val("").prop("disabled", true);
+        $("#sc-btn-send").prop("disabled", true);
+        state.streaming = true;
+
+        append_msg("user", msg);
+
+        var stream_id = "sm-" + Date.now();
+        append_msg("assistant", "▋", stream_id);
+
+        fetch("/api/chat/stream", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                message: msg,
+                backend: state.backend,
+                model: state.model,
+                session_id: state.session_id,
+                top_k: 5,
+            }),
+        }).then(function (resp) {
+            var reader = resp.body.getReader();
+            var decoder = new TextDecoder();
+            var buffer = "";
+            var accumulated = "";
+
+            function read_chunk() {
+                reader.read().then(function (result) {
+                    if (result.done) { finish(); return; }
+                    buffer += decoder.decode(result.value, {stream: true});
+                    var lines = buffer.split("\n");
+                    buffer = lines.pop();
+                    lines.forEach(function (line) {
+                        if (!line.startsWith("data:")) return;
+                        var raw = line.slice(5).trim();
+                        if (!raw) return;
+                        try {
+                            var ev = JSON.parse(raw);
+                            if (ev.token) {
+                                accumulated += ev.token;
+                                $("#" + stream_id + " .msg-bubble").text(accumulated + "▋");
+                                scroll_bottom();
+                            } else if (ev.done) {
+                                $("#" + stream_id + " .msg-bubble").text(accumulated);
+                                if (ev.cost) {
+                                    $("#" + stream_id).append('<div class="cost-badge">' + esc(ev.cost) + '</div>');
+                                }
+                                finish();
+                                return;
+                            } else if (ev.error) {
+                                $("#" + stream_id + " .msg-bubble").html('<span style="color:var(--danger)">' + esc(ev.error) + '</span>');
+                                finish();
+                                return;
+                            }
+                        } catch (e) {}
+                    });
+                    read_chunk();
+                }).catch(function () { finish(); });
+            }
+            read_chunk();
+        }).catch(function (e) { system_msg("Error: " + e.message); finish(); });
+
+        function finish() {
+            state.streaming = false;
+            $("#sc-input").prop("disabled", false).focus();
+            $("#sc-btn-send").prop("disabled", false);
+            load_sessions();
+        }
+    }
+
+    $("#sc-btn-send").on("click", do_send);
+    $("#sc-input").on("keydown", function (e) {
+        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); do_send(); }
+    });
+
+    // ── Init ───────────────────────────────────────────────────────
+    new_session();
+    load_sessions();
+    system_msg("Anamnesis memory online. What do you remember?");
+
+});
+</script>
+</body>
+</html>

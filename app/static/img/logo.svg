@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 48" fill="none">
+  <!-- Möbius strip — two interleaved arcs suggesting a continuous loop with a twist -->
+  <!-- Back arc (dimmer) -->
+  <path d="M 10 34 C 10 14, 40 8, 55 18 C 62 23, 65 30, 60 36"
+        stroke="#1a3a5c" stroke-width="7" stroke-linecap="round" fill="none"/>
+  <!-- Front arc left (bright) -->
+  <path d="M 10 34 C 12 42, 28 46, 42 42 C 52 38, 60 32, 60 24"
+        stroke="#58a6ff" stroke-width="7" stroke-linecap="round" fill="none"/>
+  <!-- Twist cross piece -->
+  <path d="M 37 12 C 42 16, 44 22, 40 28 C 36 34, 32 36, 30 32"
+        stroke="#bc8cff" stroke-width="4" stroke-linecap="round" fill="none" opacity="0.75"/>
+  <!-- Front arc right (bright, continues loop) -->
+  <path d="M 60 24 C 60 14, 50 8, 38 10"
+        stroke="#58a6ff" stroke-width="7" stroke-linecap="round" fill="none" opacity="0.5"/>
+</svg>

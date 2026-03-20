@@ -62,10 +62,154 @@ def get_episodes_collection():
     return _episodes_collection
 
 
+def get_settings_collection():
+    """Return the settings collection for persistent app configuration."""
+    if _db is None:
+        raise RuntimeError("MongoDB not connected. Call connect_to_mongo() first.")
+    return _db["settings"]
+
+
+# ─── Chat session persistence ────────────────────────────────────
+
+def get_chat_sessions_collection():
+    if _db is None:
+        raise RuntimeError("MongoDB not connected.")
+    return _db["chat_sessions"]
+
+
+async def save_chat_session(session_id: str, title: str, messages: list, backend: str, model: str):
+    col = get_chat_sessions_collection()
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    await col.update_one(
+        {"session_id": session_id},
+        {"$set": {
+            "title": title,
+            "messages": messages,
+            "backend": backend,
+            "model": model,
+            "updated_at": now,
+            "message_count": len(messages),
+        }, "$setOnInsert": {"created_at": now}},
+        upsert=True,
+    )
+
+
+async def list_chat_sessions(limit: int = 50) -> list:
+    col = get_chat_sessions_collection()
+    cursor = col.find({}, {"messages": 0}).sort("updated_at", -1).limit(limit)
+    results = []
+    async for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        results.append(doc)
+    return results
+
+
+async def get_chat_session(session_id: str) -> dict | None:
+    col = get_chat_sessions_collection()
+    doc = await col.find_one({"session_id": session_id})
+    if doc:
+        doc["_id"] = str(doc["_id"])
+    return doc
+
+
+async def delete_chat_session(session_id: str):
+    col = get_chat_sessions_collection()
+    await col.delete_one({"session_id": session_id})
+
+
+async def rename_chat_session(session_id: str, new_title: str):
+    col = get_chat_sessions_collection()
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    # Append old title to name_history before overwriting
+    await col.update_one(
+        {"session_id": session_id},
+        {
+            "$set": {"title": new_title, "updated_at": now},
+            "$push": {"name_history": {"title": new_title, "at": now}},
+        },
+    )
+
+
+# ─── Reembed checkpoint persistence ─────────────────────────────
+
+async def save_reembed_checkpoint(model_id: str, done: int, total: int, last_id: str):
+    """Upsert reembed checkpoint. last_id is the str(_id) of last processed episode."""
+    settings = get_settings_collection()
+    from datetime import datetime, timezone
+    await settings.update_one(
+        {"_id": "reembed_checkpoint"},
+        {"$set": {
+            "model_id": model_id,
+            "done": done,
+            "total": total,
+            "last_id": last_id,
+            "saved_at": datetime.now(timezone.utc),
+        }},
+        upsert=True,
+    )
+
+
+async def load_reembed_checkpoint() -> dict:
+    settings = get_settings_collection()
+    doc = await settings.find_one({"_id": "reembed_checkpoint"})
+    if doc:
+        doc.pop("_id", None)
+    return doc or {}
+
+
+async def clear_reembed_checkpoint():
+    settings = get_settings_collection()
+    await settings.delete_one({"_id": "reembed_checkpoint"})
+
+
+# ─── Embedding config persistence ───────────────────────────────
+
+async def save_embedding_config(model_id: str, cpu_pct: int = None, cpu_cores: list = None):
+    """Persist active embedding model (and optionally CPU settings) to MongoDB."""
+    settings = get_settings_collection()
+    update = {"model_id": model_id}
+    if cpu_pct is not None:
+        update["cpu_pct"] = cpu_pct
+    if cpu_cores is not None:
+        update["cpu_cores"] = cpu_cores
+    await settings.update_one(
+        {"_id": "embedding_config"},
+        {"$set": update},
+        upsert=True,
+    )
+
+
+async def load_embedding_config() -> dict:
+    """Load persisted embedding config. Returns {} if never saved."""
+    settings = get_settings_collection()
+    doc = await settings.find_one({"_id": "embedding_config"})
+    if doc:
+        doc.pop("_id", None)
+    return doc or {}
+
+
 # ─── Vector Index ────────────────────────────────────────────────
 
+def _vector_index_definition(dimensions: int) -> dict:
+    return {
+        "fields": [
+            {
+                "type": "vector",
+                "path": "embedding",
+                "numDimensions": dimensions,
+                "similarity": "cosine",
+            },
+            {"type": "filter", "path": "project"},
+            {"type": "filter", "path": "instance"},
+            {"type": "filter", "path": "tags"},
+        ]
+    }
+
+
 async def ensure_vector_index():
-    """Create the vector search index if it does not exist.
+    """Create the vector search index, or recreate it if dimensions changed.
 
     Uses pymongo's synchronous SearchIndexModel because motor does not
     yet support create_search_index. We get a sync pymongo collection
@@ -73,42 +217,37 @@ async def ensure_vector_index():
     """
     sync_collection = _episodes_collection.delegate                # pymongo.Collection
 
-    # Check if index already exists
     existing_indexes = list(sync_collection.list_search_indexes())
     for idx in existing_indexes:
-        if idx.get("name") == VECTOR_INDEX_NAME:
-            logger.info(f"Vector index '{VECTOR_INDEX_NAME}' already exists.")
+        if idx.get("name") != VECTOR_INDEX_NAME:
+            continue
+
+        # Index exists — check if dimensions match
+        existing_dims = None
+        for field in idx.get("latestDefinition", {}).get("fields", []):
+            if field.get("type") == "vector":
+                existing_dims = field.get("numDimensions")
+                break
+
+        if existing_dims == EMBEDDING_DIMENSIONS:
+            logger.info(f"Vector index '{VECTOR_INDEX_NAME}' exists with correct dims ({EMBEDDING_DIMENSIONS}).")
             return
 
-    logger.info(f"Creating vector search index '{VECTOR_INDEX_NAME}'...")
+        # Dimension mismatch — drop and recreate
+        logger.warning(
+            f"Vector index dimension mismatch: index has {existing_dims}, "
+            f"config wants {EMBEDDING_DIMENSIONS}. Dropping and recreating."
+        )
+        sync_collection.drop_search_index(VECTOR_INDEX_NAME)
+        logger.info(f"Dropped vector index '{VECTOR_INDEX_NAME}'.")
+        break
 
+    logger.info(f"Creating vector search index '{VECTOR_INDEX_NAME}' ({EMBEDDING_DIMENSIONS} dims)...")
     search_index_model = SearchIndexModel(
         name=VECTOR_INDEX_NAME,
         type="vectorSearch",
-        definition={
-            "fields": [
-                {
-                    "type": "vector",
-                    "path": "embedding",
-                    "numDimensions": EMBEDDING_DIMENSIONS,
-                    "similarity": "cosine",
-                },
-                {                                                  # filterable fields
-                    "type": "filter",
-                    "path": "project",
-                },
-                {
-                    "type": "filter",
-                    "path": "instance",
-                },
-                {
-                    "type": "filter",
-                    "path": "tags",
-                },
-            ]
-        },
+        definition=_vector_index_definition(EMBEDDING_DIMENSIONS),
     )
-
     sync_collection.create_search_index(search_index_model)
     logger.info(f"Vector search index '{VECTOR_INDEX_NAME}' created.")
 

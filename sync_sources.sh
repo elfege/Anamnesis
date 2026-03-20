@@ -96,6 +96,17 @@ _sync_host() {
 		"${host}:${REMOTE_HOME}/0_CLAUDE_IC/user_profile_elfege.md" \
 		"${ic_dst}/" 2>/dev/null || true
 
+	# ── .claude/projects (JSONL conversation logs) ──────────────
+	local claude_dst="${dst}/.claude/projects"
+	mkdir -p "$claude_dst"
+	rsync -a \
+		--include="*/" \
+		--include="*.jsonl" \
+		--exclude="*" \
+		"${host}:${REMOTE_HOME}/.claude/projects/" \
+		"${claude_dst}/" 2>/dev/null || true
+	_log "  ${host}: .claude/projects JSONL synced"
+
 	_log "Done: ${host}"
 }
 

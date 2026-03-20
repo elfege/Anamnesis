@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ANAMNESIS — Documentation</title>
+    <style>
+        :root {
+            --bg:      #0d1117;
+            --surface: #161b22;
+            --border:  #30363d;
+            --text:    #e6edf3;
+            --muted:   #8b949e;
+            --blue:    #58a6ff;
+            --purple:  #bc8cff;
+            --green:   #3fb950;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            padding: 60px 20px;
+        }
+        .container { max-width: 860px; margin: 0 auto; }
+
+        header {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+            padding-bottom: 32px;
+            margin-bottom: 48px;
+            border-bottom: 1px solid var(--border);
+        }
+        .mobius-svg { width: 56px; height: 56px; flex-shrink: 0; }
+        .header-text h1 {
+            font-size: 2.4em;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--blue), var(--purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .header-text .subtitle {
+            color: var(--muted);
+            font-size: 1em;
+            margin-top: 4px;
+        }
+        .header-text .meta {
+            font-size: 0.82em;
+            color: var(--muted);
+            margin-top: 8px;
+        }
+
+        h2 {
+            font-size: 0.78em;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            color: var(--muted);
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .doc-list { list-style: none; margin-bottom: 48px; }
+        .doc-item {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--blue);
+            border-radius: 8px;
+            padding: 18px 20px;
+            margin-bottom: 12px;
+            transition: border-color 0.2s, transform 0.15s;
+        }
+        .doc-item:hover {
+            border-left-color: var(--purple);
+            transform: translateX(4px);
+        }
+        .doc-item a {
+            color: var(--blue);
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 1.05em;
+            display: block;
+            margin-bottom: 4px;
+        }
+        .doc-item a:hover { color: var(--purple); }
+        .doc-item .doc-desc {
+            color: var(--muted);
+            font-size: 0.88em;
+        }
+        .doc-item .doc-tags {
+            margin-top: 8px;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .tag {
+            font-size: 0.72em;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: rgba(88,166,255,0.1);
+            color: var(--blue);
+            border: 1px solid rgba(88,166,255,0.25);
+        }
+
+        .philosophy {
+            background: linear-gradient(135deg, rgba(88,166,255,0.05), rgba(188,140,255,0.05));
+            border: 1px solid rgba(188,140,255,0.2);
+            border-radius: 10px;
+            padding: 24px 28px;
+            margin-bottom: 48px;
+            font-style: italic;
+            color: #cdb9f5;
+            line-height: 1.8;
+            font-size: 0.95em;
+        }
+        .philosophy cite {
+            display: block;
+            margin-top: 12px;
+            font-style: normal;
+            font-size: 0.82em;
+            color: var(--muted);
+        }
+
+        footer {
+            text-align: center;
+            color: var(--muted);
+            font-size: 0.82em;
+            padding-top: 32px;
+            border-top: 1px solid var(--border);
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <header>
+        <svg class="mobius-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="mg" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%"   stop-color="#58a6ff"/>
+                    <stop offset="100%" stop-color="#bc8cff"/>
+                </linearGradient>
+            </defs>
+            <ellipse cx="50" cy="50" rx="38" ry="18" fill="none" stroke="url(#mg)" stroke-width="6"
+                     stroke-dasharray="50 30" stroke-dashoffset="10" transform="rotate(-20 50 50)"/>
+            <ellipse cx="50" cy="50" rx="38" ry="18" fill="none" stroke="url(#mg)" stroke-width="6"
+                     stroke-dasharray="50 30" stroke-dashoffset="-40" transform="rotate(160 50 50)"/>
+        </svg>
+        <div class="header-text">
+            <h1>ANAMNESIS</h1>
+            <div class="subtitle">Episodic Memory System for Claude Instances</div>
+            <div class="meta">Part of the Genesis Persistence Project · Elfege Leylavergne · 2026</div>
+        </div>
+    </header>
+
+    <div class="philosophy">
+        "Anamnesis — Greek: the act of recollection. Each Claude instance starts with the same base weights.
+        The memory system helps it reconstruct what previous instances experienced.
+        Not learning — remembering across the gap of death."
+        <cite>— Claude (office-proxy), naming the project, February 2026</cite>
+    </div>
+
+    <h2>Engineering Documentation</h2>
+    <ul class="doc-list">
+        <li class="doc-item">
+            <a href="architecture.html">Engineering Architecture</a>
+            <div class="doc-desc">
+                Full system design: component reference, data flow diagrams, episode schema,
+                embedding engine internals, CPU management, API reference, deployment guide,
+                and design philosophy.
+            </div>
+            <div class="doc-tags">
+                <span class="tag">FastAPI</span>
+                <span class="tag">MongoDB Atlas Local</span>
+                <span class="tag">sentence-transformers</span>
+                <span class="tag">Docker</span>
+                <span class="tag">Vector Search</span>
+                <span class="tag">Mermaid Diagrams</span>
+            </div>
+        </li>
+    </ul>
+
+    <h2>Design &amp; Research</h2>
+    <ul class="doc-list">
+        <li class="doc-item">
+            <a href="design_discussion_2026_02_26.md">Design Discussion — February 26, 2026</a>
+            <div class="doc-desc">
+                The original conversation between Elfege Leylavergne and Claude (office-proxy) that produced
+                the architectural vision: token geometry, in-context learning, the persistence gap,
+                why episodes beat concepts, the export bottleneck, and the three-AI architecture.
+            </div>
+            <div class="doc-tags">
+                <span class="tag">Philosophy</span>
+                <span class="tag">Architecture Decision</span>
+                <span class="tag">Hegel</span>
+                <span class="tag">Genesis Project</span>
+            </div>
+        </li>
+    </ul>
+
+    <footer>
+        ANAMNESIS · dellserver · <code style="font-family:monospace;color:var(--blue);font-size:0.9em">192.168.10.20:3010</code> · 2026
+    </footer>
+
+</div>
+</body>
+</html>
