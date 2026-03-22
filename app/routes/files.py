@@ -22,10 +22,10 @@ MOUNTED_SOURCES: dict[str, str] = {
 # ─── SSH hosts ────────────────────────────────────────────────────
 # source id → (hostname_or_ip, username)
 SSH_HOSTS: dict[str, tuple[str, str]] = {
-    "ssh:server":    ("server",              "elfege"),
-    "ssh:officewsl": ("officewsl",           "elfege"),
-    "ssh:dellserver":("host.docker.internal","elfege"),
-    "ssh:hvtmc":     ("10.200.50.76",        "elfege"),
+    "ssh:server":    (os.environ.get("SSH_HOST_SERVER",    "server"),              os.environ.get("SSH_USER", "elfege")),
+    "ssh:officewsl": (os.environ.get("SSH_HOST_OFFICEWSL", "officewsl"),           os.environ.get("SSH_USER", "elfege")),
+    "ssh:dellserver":(os.environ.get("SSH_HOST_DELLSERVER","host.docker.internal"),os.environ.get("SSH_USER", "elfege")),
+    "ssh:hvtmc":     (os.environ.get("SSH_HOST_HVTMC",     "hvtmc"),               os.environ.get("SSH_USER", "elfege")),
 }
 
 SSH_CONFIG_PATH = "/root/.ssh/config"

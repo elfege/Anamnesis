@@ -25,3 +25,10 @@ model_cache/
 .DS_Store
 Thumbs.db
 .claude
+
+# Private operational files — never track
+CLAUDE.md
+README_handoff*.md
+README_project_history*.md
+0_ANAMNESIS_SOURCES/
+*.log
