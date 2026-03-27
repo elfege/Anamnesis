@@ -16,6 +16,7 @@ from routes.jsonl import router as jsonl_router
 from routes.files import router as files_router
 from routes.bash import router as bash_router
 from routes.embedding import router as embedding_router
+from routes.anamnesis_gpt import router as anamnesis_gpt_router
 from crawler import start_crawler, stop_crawler
 from jsonl_ingester import run_jsonl_ingestion, initialize_ingester
 from scheduler import start_jsonl_scheduler, stop_jsonl_scheduler
@@ -122,6 +123,7 @@ app.include_router(jsonl_router)
 app.include_router(files_router)
 app.include_router(bash_router)
 app.include_router(embedding_router)
+app.include_router(anamnesis_gpt_router)
 
 
 @app.get("/health")

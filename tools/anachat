@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# anachat — Anamnesis episodic memory query tool
+# Canonical source: 0_ANAMNESIS/tools/anachat
+# Install:         bash install_anachat.sh
+#
+# Usage:
+#   anachat "query"            — single shot
+#   anachat --top_k N "query"  — single shot, N results
+#   anachat                    — interactive REPL (exit: q / Ctrl-C)
+#
+# Environment:
+#   ANAMNESIS_URL   Base URL of the Anamnesis API  (default: http://localhost:3010)
+
+API_BASE="${ANAMNESIS_URL:-http://localhost:3010}"
+ENDPOINT="$API_BASE/api/episodes/search"
+DEFAULT_TOP_K=5
+
+# Locate renderer — same directory as this script, with fallback to PATH
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RENDERER="$SCRIPT_DIR/anachat_render.py"
+if [[ ! -f "$RENDERER" ]]; then
+    RENDERER="$(command -v anachat_render.py 2>/dev/null || true)"
+fi
+if [[ -z "$RENDERER" || ! -f "$RENDERER" ]]; then
+    printf "[anachat] Cannot find anachat_render.py\n" >&2
+    exit 1
+fi
+
+# ── Colors ────────────────────────────────────────────────────────────────────
+if tput colors &>/dev/null 2>&1 && [ "$(tput colors 2>/dev/null)" -ge 8 ]; then
+    CYAN="$(tput setaf 6)"
+    TEAL="$(tput bold)$(tput setaf 6)"
+    YELLOW="$(tput bold)$(tput setaf 3)"
+    DIM="$(tput dim)"
+    BOLD="$(tput bold)"
+    RESET="$(tput sgr0)"
+else
+    CYAN="" TEAL="" YELLOW="" DIM="" BOLD="" RESET=""
+fi
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+print_header() {
+    printf "\n${TEAL}╔══════════════════════════════════════╗${RESET}\n"
+    printf "${TEAL}║  ANAMNESIS  │  %-22s║${RESET}\n" "$1 results"
+    printf "${TEAL}╚══════════════════════════════════════╝${RESET}\n\n"
+}
+
+json_escape() {
+    printf '%s' "$1" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))'
+}
+
+search() {
+    local query="$1" top_k="$2" body response
+    body=$(printf '{"query_text": %s, "top_k": %d}' "$(json_escape "$query")" "$top_k")
+
+    if ! response=$(curl -sf -X POST "$ENDPOINT" \
+            -H "Content-Type: application/json" \
+            -d "$body" 2>&1); then
+        printf "${DIM}[anachat] Cannot reach Anamnesis at %s${RESET}\n" "$API_BASE" >&2
+        return 1
+    fi
+
+    printf '%s' "$response" | python3 "$RENDERER"
+}
+
+# ── Argument parsing ──────────────────────────────────────────────────────────
+top_k=$DEFAULT_TOP_K
+query=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --top_k|-n)     top_k="$2"; shift 2 ;;
+        --top_k=*|-n=*) top_k="${1#*=}"; shift ;;
+        -h|--help)
+            printf "Usage: anachat [--top_k N] [\"query\"]\n"
+            printf "  No query = interactive REPL. q to quit.\n"
+            exit 0 ;;
+        -*)  printf "Unknown option: %s\n" "$1" >&2; exit 1 ;;
+        *)   query="$1"; shift ;;
+    esac
+done
+
+# ── Single-shot ───────────────────────────────────────────────────────────────
+if [[ -n "$query" ]]; then
+    print_header "$top_k"
+    search "$query" "$top_k"
+    exit 0
+fi
+
+# ── Interactive REPL ──────────────────────────────────────────────────────────
+printf "${CYAN}  Anamnesis  │  episodic memory  │  q to quit${RESET}\n\n"
+
+while true; do
+    printf "${BOLD}query>${RESET} "
+    if ! IFS= read -r query; then echo; break; fi
+
+    # trim whitespace
+    query="${query#"${query%%[![:space:]]*}"}"
+    query="${query%"${query##*[![:space:]]}"}"
+
+    [[ -z "$query" ]] && continue
+    [[ "$query" == "q" || "$query" == "quit" || "$query" == "exit" ]] && break
+
+    print_header "$top_k"
+    search "$query" "$top_k" || true
+done
+
+printf "${DIM}  bye.${RESET}\n"

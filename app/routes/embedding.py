@@ -18,6 +18,39 @@ logger = logging.getLogger("anamnesis.routes.embedding")
 
 router = APIRouter(prefix="/api/embedding", tags=["embedding"])
 
+_ENV_PATH = os.path.join(os.path.dirname(__file__), "../../.env")
+
+
+def _sync_env_file(model_id: str, dimensions: int) -> None:
+    """Write EMBEDDING_MODEL and EMBEDDING_DIMENSIONS back to .env so the
+    next deploy starts with the correct values without a manual edit."""
+    env_path = os.path.abspath(_ENV_PATH)
+    if not os.path.exists(env_path):
+        return
+    try:
+        with open(env_path, "r") as f:
+            lines = f.readlines()
+        updated = []
+        found_model = found_dims = False
+        for line in lines:
+            if line.startswith("EMBEDDING_MODEL="):
+                updated.append(f"EMBEDDING_MODEL={model_id}\n")
+                found_model = True
+            elif line.startswith("EMBEDDING_DIMENSIONS="):
+                updated.append(f"EMBEDDING_DIMENSIONS={dimensions}\n")
+                found_dims = True
+            else:
+                updated.append(line)
+        if not found_model:
+            updated.append(f"EMBEDDING_MODEL={model_id}\n")
+        if not found_dims:
+            updated.append(f"EMBEDDING_DIMENSIONS={dimensions}\n")
+        with open(env_path, "w") as f:
+            f.writelines(updated)
+        logger.info(f".env updated: EMBEDDING_MODEL={model_id}, EMBEDDING_DIMENSIONS={dimensions}")
+    except Exception as e:
+        logger.warning(f"Could not update .env: {e}")
+
 _TOTAL_CORES = multiprocessing.cpu_count()
 
 
@@ -69,6 +102,9 @@ async def update_embedding_config(update: EmbeddingConfigUpdate):
         # Persist model selection to MongoDB so it survives restarts
         await save_embedding_config(update.model_id, update.cpu_pct, update.cpu_cores)
 
+        # Keep .env in sync so next deploy starts with the correct dims
+        _sync_env_file(result["model_id"], result["dimensions"])
+
         # Auto-trigger reembed — model changed, existing vectors are stale
         _reembed_state["stale"] = True
         if not _reembed_state["running"]:
@@ -85,5 +121,6 @@ async def update_embedding_config(update: EmbeddingConfigUpdate):
         apply_cpu_config(cpu_pct=update.cpu_pct, cpu_cores=update.cpu_cores)
         info = get_active_model_info()
         await save_embedding_config(info["model_id"], update.cpu_pct, update.cpu_cores)
+        _sync_env_file(info["model_id"], info["dimensions"])
 
     return get_active_model_info()

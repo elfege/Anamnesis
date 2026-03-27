@@ -89,6 +89,7 @@ MACHINE_ROOTS = {
     "server":     "/sources/server",
     "officewsl":  "/sources/officewsl",
     "hvtmc":      "/sources/hvtmc",
+    "jessica":    "/sources/jessica",
 }
 
 # File extensions treated as code (ingested as whole-file episodes, not section-split)

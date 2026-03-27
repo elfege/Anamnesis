@@ -15,6 +15,7 @@ Schedule presets (in seconds):
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -80,9 +81,10 @@ async def update_schedule_settings(updates: dict) -> dict:
 
 
 def _seconds_until_hour(target_hour: int) -> int:
-    """Calculate seconds until the next occurrence of target_hour (local time)."""
-    import time
-    now = datetime.now()
+    """Calculate seconds until the next occurrence of target_hour in the configured timezone."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(os.environ.get("SCHEDULER_TIMEZONE", "America/New_York"))
+    now = datetime.now(tz=tz)
     target = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
     if target <= now:
         target = target.replace(day=target.day + 1)

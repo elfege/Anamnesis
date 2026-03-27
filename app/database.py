@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -214,10 +215,25 @@ async def ensure_vector_index():
     Uses pymongo's synchronous SearchIndexModel because motor does not
     yet support create_search_index. We get a sync pymongo collection
     reference from the motor client's delegate.
+
+    Retries up to 30s — the Search Index Management service starts a few
+    seconds after the replica set becomes healthy, so the first attempt
+    may hit 'Error connecting to Search Index Management service.'
     """
+    import time
     sync_collection = _episodes_collection.delegate                # pymongo.Collection
 
-    existing_indexes = list(sync_collection.list_search_indexes())
+    # Wait for Search Index Management service to be ready
+    for attempt in range(1, 13):
+        try:
+            existing_indexes = list(sync_collection.list_search_indexes())
+            break
+        except Exception as e:
+            if "Search Index Management" in str(e) and attempt < 12:
+                logger.warning(f"Search Index Management not ready (attempt {attempt}/12), retrying in 5s...")
+                await asyncio.sleep(5)
+            else:
+                raise
     for idx in existing_indexes:
         if idx.get("name") != VECTOR_INDEX_NAME:
             continue
@@ -275,6 +291,9 @@ async def vector_search(
     if filter_conditions:
         pre_filter = {"$and": filter_conditions} if len(filter_conditions) > 1 else filter_conditions[0]
 
+    # Oversample so priority reranking has enough candidates to work with
+    fetch_limit = min(top_k * 4, 80)
+
     pipeline = [
         {
             "$vectorSearch": {
@@ -282,14 +301,45 @@ async def vector_search(
                 "path": "embedding",
                 "queryVector": query_vector,
                 "numCandidates": top_k * 10,                      # oversample for better recall
-                "limit": top_k,
+                "limit": fetch_limit,                              # wider net; reranked below
             }
         },
         {
             "$addFields": {
-                "similarity_score": {"$meta": "vectorSearchScore"}
+                "similarity_score": {"$meta": "vectorSearchScore"},
             }
         },
+        # Priority boost — episodes tagged 'critical' or 'correction' score higher
+        {
+            "$addFields": {
+                "priority_multiplier": {
+                    "$cond": {
+                        "if": {
+                            "$gt": [
+                                {
+                                    "$size": {
+                                        "$setIntersection": [
+                                            {"$ifNull": ["$tags", []]},
+                                            ["critical", "correction"],
+                                        ]
+                                    }
+                                },
+                                0,
+                            ]
+                        },
+                        "then": 1.5,
+                        "else": 1.0,
+                    }
+                }
+            }
+        },
+        {
+            "$addFields": {
+                "boosted_score": {"$multiply": ["$similarity_score", "$priority_multiplier"]}
+            }
+        },
+        {"$sort": {"boosted_score": -1}},
+        {"$limit": top_k},
     ]
 
     # Add filter to $vectorSearch stage if present

@@ -28,6 +28,7 @@
         <button class="tab" data-tab="jsonl">JSONL Ingester</button>
         <button class="tab" data-tab="chat">Chat</button>
         <button class="tab" data-tab="embedding">Embedding</button>
+        <button class="tab" data-tab="training">Training</button>
         <button class="tab" data-tab="architecture">Architecture</button>
     </nav>
 
@@ -271,6 +272,10 @@
                 <button id="btn-claude-toggle" class="btn-claude-off" title="Enable Claude API (billed per token)">
                     Claude API
                 </button>
+                <button id="btn-anamnesis-toggle" class="btn-claude-off btn-anamnesis-checking"
+                        title="AnamnesisGPT — personal LLM trained on your data." disabled>
+                    Anamnesis
+                </button>
                 <span id="claude-timer-badge" class="claude-timer-badge" style="display:none;"></span>
             </div>
             <div class="chat-balance-group" id="chat-balance-group" style="display:none;">
@@ -401,6 +406,58 @@
             </div>
             <div id="reembed-status" class="crawler-status-panel" style="display:none;margin-top:8px;"></div>
         </div>
+
+    </section>
+
+    <!-- ─── Training Tab ────────────────────────────────────── -->
+    <section id="tab-training" class="tab-content">
+
+        <div id="training-machines"></div>
+
+        <template id="tpl-trainer-card">
+            <div class="trainer-card">
+                <div class="trainer-header">
+                    <span class="trainer-name"></span>
+                    <span class="trainer-gpu-badge"></span>
+                    <span class="trainer-status-dot"></span>
+                    <span class="trainer-status-label"></span>
+                    <div class="trainer-actions">
+                        <button class="btn-trainer-start btn-primary btn-small">Start</button>
+                        <button class="btn-trainer-stop btn-danger btn-small">Stop</button>
+                    </div>
+                </div>
+
+                <div class="trainer-progress-wrap">
+                    <div class="trainer-progress-bar-bg">
+                        <div class="trainer-progress-bar"></div>
+                    </div>
+                    <span class="trainer-progress-label">—</span>
+                </div>
+
+                <div class="trainer-kpis">
+                    <div class="trainer-kpi"><span class="tk-val tk-loss">—</span><span class="tk-lbl">Loss</span></div>
+                    <div class="trainer-kpi"><span class="tk-val tk-acc">—</span><span class="tk-lbl">Token Acc</span></div>
+                    <div class="trainer-kpi"><span class="tk-val tk-epoch">—</span><span class="tk-lbl">Epoch</span></div>
+                    <div class="trainer-kpi"><span class="tk-val tk-eta">—</span><span class="tk-lbl">ETA</span></div>
+                    <div class="trainer-kpi"><span class="tk-val tk-sps">—</span><span class="tk-lbl">s/step</span></div>
+                    <div class="trainer-kpi"><span class="tk-val tk-gpu-pct">—</span><span class="tk-lbl">GPU %</span></div>
+                    <div class="trainer-kpi"><span class="tk-val tk-vram">—</span><span class="tk-lbl">VRAM</span></div>
+                    <div class="trainer-kpi"><span class="tk-val tk-temp">—</span><span class="tk-lbl">Temp</span></div>
+                    <div class="trainer-kpi"><span class="tk-val tk-power">—</span><span class="tk-lbl">Power</span></div>
+                </div>
+
+                <!-- Loss history sparkline -->
+                <div class="trainer-chart-wrap">
+                    <canvas class="trainer-loss-chart" height="60"></canvas>
+                </div>
+
+                <!-- Log tail toggle -->
+                <div class="trainer-log-wrap">
+                    <button class="btn-trainer-log btn-small">Show Log</button>
+                    <pre class="trainer-log-output" style="display:none;"></pre>
+                </div>
+            </div>
+        </template>
 
     </section>
 

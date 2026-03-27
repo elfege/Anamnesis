@@ -1,0 +1,26 @@
+services:
+  trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: anamnesis-trainer:server-1
+    container_name: anamnesis-trainer-server-1
+    ports:
+      - "3011:3011"
+    volumes:
+      - ./app:/app
+      - /home/elfege/0_LLM_finetune:/train
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - "${RENDER_GID:-992}"   # render group GID (host-specific, set in .env)
+      - "${VIDEO_GID:-44}"     # video group GID
+    environment:
+      GPU_TYPE: rocm
+      HSA_OVERRIDE_GFX_VERSION: "10.3.0"
+      MACHINE_NAME: SERVER-1
+      TRAIN_DIR: /train
+      VENV_PYTHON: /train/venv/bin/python
+      TRAIN_SCRIPT: /train/qlora_train_rocm.py
+    restart: unless-stopped

@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 
 import httpx
@@ -142,3 +143,19 @@ async def status_summary():
     _banner_cache["text"] = text
     _banner_cache["at"] = now
     return {"text": text, "cached": False}
+
+
+@router.get("/api/config/trainers")
+async def trainer_config():
+    """Return trainer endpoint URLs from environment (keeps IPs out of public JS)."""
+    raw = os.environ.get("TRAINER_URLS", "")
+    # Format: "server-1:http://host:3011,server-2:http://host2:3011"
+    trainers = []
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if ":" not in entry:
+            continue
+        name, _, url = entry.partition(":")
+        label = os.environ.get(f"TRAINER_LABEL_{name.upper()}", name)
+        trainers.append({"name": name.strip(), "url": url.strip(), "label": label})
+    return {"trainers": trainers}

@@ -23,11 +23,11 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM EXIT ERR
 
-type source_env &>/dev/null || {
+type source_global_env &>/dev/null || {
 	. ~/.bash_utils --no-exec &>/dev/null
 }
-source_env >/dev/null 2>&1 || {
-	echo -e "${RED:-}Failed to load environment variables from .env${NC:-}"
+source_global_env >/dev/null 2>&1 || {
+	echo -e "${RED:-}Failed to load general environment${NC:-}"
 	exit 1
 }
 

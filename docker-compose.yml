@@ -37,16 +37,23 @@ services:
       OLLAMA_DEFAULT_MODEL: "${OLLAMA_DEFAULT_MODEL:-llama3.2}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       CLAUDE_MODEL: "${CLAUDE_MODEL:-claude-sonnet-4-6}"
+      AUTHORIZED_MACHINE_ID: "${AUTHORIZED_MACHINE_ID:-}"
+      NANOGPT_URL: "${NANOGPT_URL:-http://localhost:3011}"
+      TRAINER_URLS: "${TRAINER_URLS:-}"
+      TRAINER_LABEL_SERVER1: "${TRAINER_LABEL_SERVER1:-SERVER-1 · ROCm}"
+      TRAINER_LABEL_SERVER2: "${TRAINER_LABEL_SERVER2:-SERVER-2 · CUDA}"
     volumes:
+      - /etc/machine-id:/etc/host-machine-id:ro
       - ./app:/app
       - model_cache:/root/.cache/torch/sentence_transformers
       # ── Machine roots (read-only) ─────────────────────────────
-      # dellserver: local $HOME (direct mount)
-      - /home/elfege:/sources/dellserver:ro
-      # server, officewsl, hvtmc: staged via sync_sources.sh (hourly cron)
-      - /home/elfege/0_ANAMNESIS_SOURCES/server:/sources/server:ro
-      - /home/elfege/0_ANAMNESIS_SOURCES/officewsl:/sources/officewsl:ro
-      - /home/elfege/0_ANAMNESIS_SOURCES/hvtmc:/sources/hvtmc:ro
+      # SERVER-0: local $HOME (direct mount — this machine)
+      - /home/elfege:/sources/server-0:ro
+      # SERVER-1, SERVER-2, etc: staged via sync_sources.sh (hourly cron)
+      - /home/elfege/0_ANAMNESIS_SOURCES/server-1:/sources/server-1:ro
+      - /home/elfege/0_ANAMNESIS_SOURCES/server-2:/sources/server-2:ro
+      - /home/elfege/0_ANAMNESIS_SOURCES/server-3:/sources/server-3:ro
+      - /home/elfege/0_ANAMNESIS_SOURCES/server-4:/sources/server-4:ro
       # ── Other source directories ──────────────────────────────
       - /home/elfege/0_TEACHINGS:/sources/teachings:ro
       - /mnt/sdb/onedrive_documents:/sources/documents:ro

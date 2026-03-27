@@ -85,6 +85,14 @@ class EpisodeSearchResult(EpisodeOut):
         ...,
         description="Cosine similarity score (0.0 to 1.0)"
     )
+    boosted_score: Optional[float] = Field(
+        None,
+        description="Priority-boosted score used for ranking (similarity × multiplier)"
+    )
+    priority_multiplier: Optional[float] = Field(
+        None,
+        description="Score multiplier applied (1.5 for critical/correction, 1.0 otherwise)"
+    )
 
 
 class DashboardStats(BaseModel):

@@ -546,6 +546,9 @@ $(function () {
         model: null,
         claude_enabled: false,
         claude_cli_enabled: false,
+        anamnesis_enabled: false,
+        anamnesis_available: false,
+        anamnesis_unavailable_msg: "",
         claude_enabled_at: null,
         claude_timer_interval: null,
         balance_poll_interval: null,
@@ -603,7 +606,8 @@ $(function () {
 
     function enable_claude_cli() {
         // Disable other backends first
-        if (chat_state.claude_enabled) disable_claude();
+        if (chat_state.claude_enabled)     disable_claude();
+        if (chat_state.anamnesis_enabled)  disable_anamnesis();
 
         chat_state.claude_cli_enabled = true;
         chat_state.backend = "claude_cli";
@@ -628,6 +632,64 @@ $(function () {
         load_ollama_models();
     }
 
+    // ── AnamnesisGPT — machine-gated toggle ────────────────────────
+    // Check availability on page load
+    $.getJSON("/api/anamnesis-gpt/status", function (data) {
+        chat_state.anamnesis_available = data.available;
+        chat_state.anamnesis_unavailable_msg = data.message || "";
+        var btn = $("#btn-anamnesis-toggle");
+        btn.removeClass("btn-anamnesis-checking");
+        if (data.available) {
+            btn.prop("disabled", false);
+        } else {
+            btn.addClass("btn-anamnesis-unavailable");
+        }
+    }).fail(function () {
+        $("#btn-anamnesis-toggle").removeClass("btn-anamnesis-checking")
+            .addClass("btn-anamnesis-unavailable");
+    });
+
+    $("#btn-anamnesis-toggle").on("click", function () {
+        if (!chat_state.anamnesis_available) {
+            show_chat_system(chat_state.anamnesis_unavailable_msg ||
+                "AnamnesisGPT is not available on this host. " +
+                "Custom training on your own data is coming soon.");
+            return;
+        }
+        if (chat_state.anamnesis_enabled) {
+            disable_anamnesis();
+        } else {
+            enable_anamnesis();
+        }
+    });
+
+    function enable_anamnesis() {
+        if (chat_state.claude_enabled)     disable_claude();
+        if (chat_state.claude_cli_enabled) disable_claude_cli();
+
+        chat_state.anamnesis_enabled = true;
+        chat_state.backend = "anamnesis";
+
+        $("#btn-anamnesis-toggle").text("Anamnesis ON — click to disable")
+            .removeClass("btn-claude-off").addClass("btn-claude-on");
+        $("#chat-backend-badge").text("AnamnesisGPT")
+            .removeClass("ollama-badge claude-badge").addClass("anamnesis-badge");
+        $("#chat-model-select").hide();
+        show_chat_system("AnamnesisGPT active — personal LLM trained on your data.");
+    }
+
+    function disable_anamnesis() {
+        chat_state.anamnesis_enabled = false;
+        chat_state.backend = "ollama";
+
+        $("#btn-anamnesis-toggle").text("Anamnesis")
+            .removeClass("btn-claude-on").addClass("btn-claude-off");
+        $("#chat-backend-badge").text("Ollama")
+            .removeClass("anamnesis-badge").addClass("ollama-badge");
+        $("#chat-model-select").show();
+        load_ollama_models();
+    }
+
     // ── Claude toggle ─────────────────────────────────────────────
     $("#btn-claude-toggle").on("click", function () {
         if (chat_state.claude_enabled) {
@@ -638,8 +700,9 @@ $(function () {
     });
 
     function enable_claude() {
-        // Disable CLI backend if active
+        // Disable other backends if active
         if (chat_state.claude_cli_enabled) disable_claude_cli();
+        if (chat_state.anamnesis_enabled)  disable_anamnesis();
 
         chat_state.claude_enabled = true;
         chat_state.backend = "claude";
@@ -743,7 +806,8 @@ $(function () {
     // ── Message rendering ─────────────────────────────────────────
     function append_message(role, content, streaming_id) {
         var cls = role === "user" ? "chat-msg-user" : "chat-msg-assistant";
-        var label = role === "user" ? "You" : "Anamnesis";
+        var label = role === "user" ? "You" :
+            (chat_state.backend === "anamnesis" ? "AnamnesisGPT" : "Anamnesis");
         var id_attr = streaming_id ? ' id="' + streaming_id + '"' : "";
         var html =
             '<div class="chat-msg ' + cls + '"' + id_attr + ">" +
@@ -1348,6 +1412,12 @@ $(function () {
         attached_files = [];
         render_attached_chips();
 
+        // ── Anamnesis retrieval: bypass LLM entirely ──────────────
+        if (chat_state.backend === "anamnesis") {
+            do_anamnesis_search(msg, stream_id);
+            return;
+        }
+
         fetch("/api/chat/stream", {
             method:  "POST",
             headers: {"Content-Type": "application/json"},
@@ -1429,6 +1499,61 @@ $(function () {
         }).catch(function (err) {
             $("#" + stream_id + " .chat-msg-content")
                 .html('<span style="color:var(--danger)">Error: ' + escape_html(err.message) + "</span>");
+            finish_streaming();
+        });
+    }
+
+    // ── AnamnesisGPT generation (streaming) ────────────────────────
+    function do_anamnesis_search(query, stream_id) {
+        var $content = $("#" + stream_id + " .chat-msg-content");
+        $content.addClass("chat-streaming").text("");
+        var accumulated = "";
+
+        fetch("/api/anamnesis-gpt/generate", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({prompt: query, max_tokens: 512, temperature: 0.8, stream: true}),
+        }).then(function (resp) {
+            if (!resp.ok) throw new Error("HTTP " + resp.status);
+            var reader = resp.body.getReader();
+            var decoder = new TextDecoder();
+            var buffer = "";
+
+            function read_chunk() {
+                reader.read().then(function (result) {
+                    if (result.done) {
+                        $content.text(accumulated).removeClass("chat-streaming");
+                        finish_streaming();
+                        return;
+                    }
+                    buffer += decoder.decode(result.value, {stream: true});
+                    var lines = buffer.split("\n");
+                    buffer = lines.pop();
+                    lines.forEach(function (line) {
+                        if (!line.startsWith("data:")) return;
+                        try {
+                            var ev = JSON.parse(line.slice(5).trim());
+                            if (ev.token) {
+                                accumulated += ev.token;
+                                $content.text(accumulated);
+                                scroll_chat();
+                            }
+                            if (ev.done) {
+                                $content.text(accumulated).removeClass("chat-streaming");
+                                finish_streaming();
+                                return;
+                            }
+                        } catch(e) { /* ignore */ }
+                    });
+                    read_chunk();
+                }).catch(function (err) {
+                    $content.html('<span style="color:var(--danger)">Stream error: ' + escape_html(err.message) + "</span>");
+                    finish_streaming();
+                });
+            }
+            read_chunk();
+        }).catch(function (err) {
+            $content.html('<span style="color:var(--danger)">Error: ' + escape_html(err.message) + "</span>");
             finish_streaming();
         });
     }
@@ -1666,3 +1791,162 @@ $(function () {
     });
 
 });
+
+/* ── Training Tab ────────────────────────────────────────────────── */
+
+(function () {
+
+    var TRAINERS = [];   // populated from /api/config/trainers
+
+    const cards = {};   // name → { $el, chart, history }
+
+    function drawSparkline(canvas, history) {
+        if (!canvas || !history.length) return;
+        const ctx = canvas.getContext("2d");
+        const W = canvas.offsetWidth || 400;
+        const H = canvas.height;
+        canvas.width = W;
+        ctx.clearRect(0, 0, W, H);
+
+        const losses = history.map(h => h.loss);
+        const min = Math.min(...losses), max = Math.max(...losses) || 1;
+        const pad = 4;
+
+        ctx.beginPath();
+        ctx.strokeStyle = "#58a6ff";
+        ctx.lineWidth = 1.5;
+        losses.forEach((v, i) => {
+            const x = pad + (i / (losses.length - 1 || 1)) * (W - pad * 2);
+            const y = H - pad - ((v - min) / (max - min || 1)) * (H - pad * 2);
+            i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+    }
+
+    function statusDot(running, done, err) {
+        if (err)     return "error";
+        if (running) return "running";
+        if (done)    return "done";
+        return "";
+    }
+
+    function statusLabel(running, done, err) {
+        if (err)     return "unreachable";
+        if (running) return "training";
+        if (done)    return "done";
+        return "idle";
+    }
+
+    function updateCard(name, data, err) {
+        const c = cards[name];
+        if (!c) return;
+        const $el = c.$el;
+
+        const running = !err && data && data.running;
+        const done    = !err && data && data.done;
+        const cls = statusDot(running, done, err);
+
+        $el.find(".trainer-status-dot").attr("class", "trainer-status-dot " + cls);
+        $el.find(".trainer-status-label").text(statusLabel(running, done, err));
+
+        const p = data && data.progress;
+        const pct = p ? p.pct : 0;
+        $el.find(".trainer-progress-bar").css("width", pct + "%");
+        $el.find(".trainer-progress-label").text(
+            p ? `step ${p.step}/${p.total} (${pct}%) · ETA ${p.eta}` : "—"
+        );
+
+        const m = data && data.latest_metrics;
+        $el.find(".tk-loss").text(m ? m.loss.toFixed(3) : "—");
+        $el.find(".tk-acc").text(m ? (m.accuracy * 100).toFixed(1) + "%" : "—");
+        $el.find(".tk-epoch").text(m ? m.epoch.toFixed(3) : "—");
+        $el.find(".tk-eta").text(p ? p.eta : "—");
+        $el.find(".tk-sps").text(p ? p.sec_per_step.toFixed(1) + "s" : "—");
+
+        const g = data && data.gpu;
+        $el.find(".tk-gpu-pct").text(g && g.gpu_pct != null ? g.gpu_pct.toFixed(0) + "%" : "—");
+        $el.find(".tk-vram").text(g && g.vram_used_mb != null
+            ? (g.vram_used_mb / 1024).toFixed(1) + "/" + (g.vram_total_mb / 1024).toFixed(1) + "G"
+            : "—");
+        $el.find(".tk-temp").text(g && g.temp_c != null ? g.temp_c.toFixed(0) + "°C" : "—");
+        $el.find(".tk-power").text(g && g.power_w != null ? g.power_w.toFixed(0) + "W" : "—");
+
+        // Sparkline
+        if (data && data.history && data.history.length) {
+            c.history = data.history;
+            drawSparkline($el.find(".trainer-loss-chart")[0], c.history);
+        }
+    }
+
+    function pollTrainer(t) {
+        $.ajax({
+            url: t.url + "/status",
+            timeout: 6000,
+            success: function (data) { updateCard(t.name, data, false); },
+            error:   function ()     { updateCard(t.name, null,  true);  },
+        });
+    }
+
+    function buildCards() {
+        const $container = $("#training-machines");
+        $container.empty();
+        const tpl = document.getElementById("tpl-trainer-card");
+
+        TRAINERS.forEach(function (t) {
+            const $clone = $(tpl.content.cloneNode(true));
+            $clone.find(".trainer-name").text(t.name);
+            $clone.find(".trainer-gpu-badge").text(t.label || t.name);
+            const $card = $clone.find(".trainer-card");
+
+            // Start button
+            $clone.find(".btn-trainer-start").on("click", function () {
+                $.post(t.url + "/start", JSON.stringify({}), null, "json")
+                    .always(function () { pollTrainer(t); });
+            });
+
+            // Stop button
+            $clone.find(".btn-trainer-stop").on("click", function () {
+                $.post(t.url + "/stop")
+                    .always(function () { pollTrainer(t); });
+            });
+
+            // Log tail toggle
+            $clone.find(".btn-trainer-log").on("click", function () {
+                const $log = $(this).siblings(".trainer-log-output");
+                if ($log.is(":visible")) {
+                    $log.hide();
+                    $(this).text("Show Log");
+                } else {
+                    $.getJSON(t.url + "/log/tail?lines=60", function (d) {
+                        $log.text((d.lines || []).join("\n")).show();
+                    });
+                    $(this).text("Hide Log");
+                }
+            });
+
+            $container.append($clone);
+            cards[t.name] = { $el: $container.find(".trainer-card").last(), history: [] };
+            pollTrainer(t);
+        });
+    }
+
+    // Poll every 10s when tab is active
+    var _pollInterval = null;
+
+    $(".tab[data-tab='training']").on("click", function () {
+        $.getJSON("/api/config/trainers", function (cfg) {
+            TRAINERS = cfg.trainers || [];
+            buildCards();
+            clearInterval(_pollInterval);
+            _pollInterval = setInterval(function () {
+                TRAINERS.forEach(pollTrainer);
+            }, 10000);
+        });
+    });
+
+    // Stop polling when leaving training tab
+    $(".tab:not([data-tab='training'])").on("click", function () {
+        clearInterval(_pollInterval);
+    });
+
+})();
