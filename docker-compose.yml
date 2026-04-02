@@ -38,7 +38,7 @@ services:
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       CLAUDE_MODEL: "${CLAUDE_MODEL:-claude-sonnet-4-6}"
       AUTHORIZED_MACHINE_ID: "${AUTHORIZED_MACHINE_ID:-}"
-      NANOGPT_URL: "${NANOGPT_URL:-http://localhost:3011}"
+      NANOGPT_URLS: "${NANOGPT_URLS:-http://localhost:3011}"
       TRAINER_URLS: "${TRAINER_URLS:-}"
       TRAINER_LABEL_SERVER1: "${TRAINER_LABEL_SERVER1:-SERVER-1 · ROCm}"
       TRAINER_LABEL_SERVER2: "${TRAINER_LABEL_SERVER2:-SERVER-2 · CUDA}"
@@ -47,18 +47,19 @@ services:
       - ./app:/app
       - model_cache:/root/.cache/torch/sentence_transformers
       # ── Machine roots (read-only) ─────────────────────────────
+      # Customize these volume mounts for your deployment.
       # SERVER-0: local $HOME (direct mount — this machine)
-      - /home/elfege:/sources/server-0:ro
-      # SERVER-1, SERVER-2, etc: staged via sync_sources.sh (hourly cron)
-      - /home/elfege/0_ANAMNESIS_SOURCES/server-1:/sources/server-1:ro
-      - /home/elfege/0_ANAMNESIS_SOURCES/server-2:/sources/server-2:ro
-      - /home/elfege/0_ANAMNESIS_SOURCES/server-3:/sources/server-3:ro
-      - /home/elfege/0_ANAMNESIS_SOURCES/server-4:/sources/server-4:ro
+      - ${LOCAL_HOME:-/home/user}:/sources/server-0:ro
+      # Additional servers: staged via sync_sources.sh (hourly cron)
+      - ${SOURCES_DIR:-./sources}/server-1:/sources/server-1:ro
+      - ${SOURCES_DIR:-./sources}/server-2:/sources/server-2:ro
+      - ${SOURCES_DIR:-./sources}/server-3:/sources/server-3:ro
+      - ${SOURCES_DIR:-./sources}/server-4:/sources/server-4:ro
       # ── Other source directories ──────────────────────────────
-      - /home/elfege/0_TEACHINGS:/sources/teachings:ro
-      - /mnt/sdb/onedrive_documents:/sources/documents:ro
+      - ${TEACHINGS_DIR:-./sources/teachings}:/sources/teachings:ro
+      - ${DOCUMENTS_DIR:-./sources/documents}:/sources/documents:ro
       # ── SSH keys (read-only — enables SSH browsing to other machines) ──
-      - /home/elfege/.ssh:/root/.ssh:ro
+      - ${SSH_DIR:-~/.ssh}:/root/.ssh:ro
     depends_on:
       anamnesis-mongo:
         condition: service_healthy

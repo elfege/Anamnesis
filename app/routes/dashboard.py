@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from crawler import SOURCES, MACHINE_ROOTS, TEACHINGS_DIR, DOCUMENTS_DIR, get_crawler_status
+from jsonl_ingester import JSONL_SOURCE_ROOTS
 from database import get_dashboard_stats
 from embedding import get_active_model_info
 from jsonl_ingester import get_ingester_status
@@ -54,6 +55,7 @@ async def dashboard(request: Request):
         "request": request,
         "stats": stats,
         "sources": sources,
+        "jsonl_source_roots": JSONL_SOURCE_ROOTS,
     })
 
 

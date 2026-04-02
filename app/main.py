@@ -17,8 +17,8 @@ from routes.files import router as files_router
 from routes.bash import router as bash_router
 from routes.embedding import router as embedding_router
 from routes.anamnesis_gpt import router as anamnesis_gpt_router
-from crawler import start_crawler, stop_crawler
-from jsonl_ingester import run_jsonl_ingestion, initialize_ingester
+from crawler import start_crawler, stop_crawler, load_crawler_config
+from jsonl_ingester import run_jsonl_ingestion, initialize_ingester, load_jsonl_source_roots
 from scheduler import start_jsonl_scheduler, stop_jsonl_scheduler
 from models_registry import seed_models_registry
 
@@ -60,6 +60,12 @@ async def lifespan(app: FastAPI):
 
     logger.info("Seeding models registry...")
     await seed_models_registry()
+
+    logger.info("Loading crawler config from DB...")
+    await load_crawler_config()
+
+    logger.info("Loading JSONL source roots from DB...")
+    await load_jsonl_source_roots()
 
     logger.info("Initializing JSONL ingester (loading state, reconciling orphans)...")
     await initialize_ingester()

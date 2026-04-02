@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Anamnesis Dashboard</title>
+    <link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg" sizes="any">
     <link rel="stylesheet" href="/static/css/style.css">
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 </head>
@@ -174,7 +175,56 @@
             </div>
         </div>
 
-        <h3>Crawler Sources</h3>
+        <h3>Machine Roots</h3>
+        <div class="settings-panel">
+            <div class="project-description" style="margin-bottom:12px">
+                <p>Directories scanned for projects (by <code>docker-compose.yml</code> presence) and scripts (<code>0_SCRIPTS/</code>). Paths are as seen <em>inside the container</em> via volume mounts.</p>
+            </div>
+            <table id="machine-roots-table">
+                <thead><tr><th>Machine</th><th>Path (in container)</th><th></th></tr></thead>
+                <tbody id="machine-roots-body"></tbody>
+            </table>
+            <div class="settings-row" style="margin-top:8px">
+                <button id="btn-add-machine-root" class="btn-secondary">+ Add Machine</button>
+                <button id="btn-save-machine-roots" class="btn-primary">Save Machine Roots</button>
+
+                <span id="machine-roots-status" class="settings-status"></span>
+            </div>
+        </div>
+
+        <h3>Named Sources</h3>
+        <div class="settings-panel">
+            <div class="project-description" style="margin-bottom:12px">
+                <p>Specific files scanned by name (genesis, handoff, intercom, etc.). Each is ingested as markdown sections.</p>
+            </div>
+            <table id="named-sources-table">
+                <thead><tr><th>Name</th><th>Path</th><th>Instance</th><th>Project</th><th>Description</th><th></th></tr></thead>
+                <tbody id="named-sources-body"></tbody>
+            </table>
+            <div class="settings-row" style="margin-top:8px">
+                <button id="btn-add-named-source" class="btn-secondary">+ Add Source</button>
+                <button id="btn-save-named-sources" class="btn-primary">Save Sources</button>
+                <span id="named-sources-status" class="settings-status"></span>
+            </div>
+        </div>
+
+        <h3>Docx Tag Patterns</h3>
+        <div class="settings-panel">
+            <div class="project-description" style="margin-bottom:12px">
+                <p>Rules applied to <code>.docx</code> files during crawling to assign tags. Match against <code>filename</code> or <code>content</code>. Regex or plain substring.</p>
+            </div>
+            <table id="docx-patterns-table">
+                <thead><tr><th>Match</th><th>Tag</th><th>Field</th><th>Regex</th><th></th></tr></thead>
+                <tbody id="docx-patterns-body"></tbody>
+            </table>
+            <div class="settings-row" style="margin-top:8px">
+                <button id="btn-add-docx-pattern" class="btn-secondary">+ Add Pattern</button>
+                <button id="btn-save-docx-patterns" class="btn-primary">Save Patterns</button>
+                <span id="docx-patterns-status" class="settings-status"></span>
+            </div>
+        </div>
+
+        <h3>All Active Sources (read-only)</h3>
         <table>
             <thead><tr><th>Source</th><th>Path (in container)</th><th>Description</th></tr></thead>
             <tbody>
@@ -247,14 +297,20 @@
             <p><strong>Deduplication:</strong> SHA-256 content hashing prevents re-ingestion of already-processed exchanges.</p>
         </div>
         <h3>Source Roots</h3>
-        <table>
-            <thead><tr><th>Machine</th><th>Path (in container)</th></tr></thead>
-            <tbody>
-                <tr><td>dellserver</td><td>/sources/dellserver/.claude/projects</td></tr>
-                <tr><td>server</td><td>/sources/server/.claude/projects</td></tr>
-                <tr><td>officewsl</td><td>/sources/officewsl/.claude/projects</td></tr>
-            </tbody>
-        </table>
+        <div class="settings-panel">
+            <div class="project-description" style="margin-bottom:12px">
+                <p>Directories containing Claude Code <code>.claude/projects</code> JSONL conversation logs. Paths are inside the container.</p>
+            </div>
+            <table id="jsonl-roots-table">
+                <thead><tr><th>Machine</th><th>Path (in container)</th><th></th></tr></thead>
+                <tbody id="jsonl-roots-body"></tbody>
+            </table>
+            <div class="settings-row" style="margin-top:8px">
+                <button id="btn-add-jsonl-root" class="btn-secondary">+ Add Machine</button>
+                <button id="btn-save-jsonl-roots" class="btn-primary">Save Source Roots</button>
+                <span id="jsonl-roots-status" class="settings-status"></span>
+            </div>
+        </div>
     </section>
 
     <!-- ─── Chat Tab ─────────────────────────────────────────── -->
@@ -324,10 +380,7 @@
                     <div class="terminal-input-row">
                         <select id="terminal-host-select" class="terminal-host-select">
                             <option value="local">local</option>
-                            <option value="dellserver">dellserver</option>
-                            <option value="server">server</option>
-                            <option value="officewsl">officewsl</option>
-                            <option value="hvtmc">hvtmc</option>
+                            <!-- Additional hosts populated dynamically from /api/files/sources -->
                         </select>
                         <input id="terminal-cmd-input" class="terminal-cmd-input" type="text" placeholder="$ command…" spellcheck="false">
                         <button id="btn-terminal-run" class="btn-small">&#9654;</button>
@@ -411,6 +464,14 @@
 
     <!-- ─── Training Tab ────────────────────────────────────── -->
     <section id="tab-training" class="tab-content">
+        <div class="project-description" style="margin-bottom:16px">
+            <p><strong>What this is:</strong> Each card represents a GPU machine running a trainer container. Training metrics are refreshed every 10 seconds (parsed from the training log). GPU health metrics refresh every 0.5 seconds from a lightweight sidecar endpoint — no log parsing involved, so the polling cost is negligible.</p>
+            <p style="margin-top:6px;color:var(--muted)">
+                <strong>Start</strong> — launch the training script on that machine (uses the last checkpoint if one exists). &nbsp;
+                <strong>Stop</strong> — send SIGTERM; training saves a checkpoint before exiting. &nbsp;
+                <strong>Show Log</strong> — tail the last 60 lines of the training log.
+            </p>
+        </div>
 
         <div id="training-machines"></div>
 
@@ -435,15 +496,15 @@
                 </div>
 
                 <div class="trainer-kpis">
-                    <div class="trainer-kpi"><span class="tk-val tk-loss">—</span><span class="tk-lbl">Loss</span></div>
-                    <div class="trainer-kpi"><span class="tk-val tk-acc">—</span><span class="tk-lbl">Token Acc</span></div>
-                    <div class="trainer-kpi"><span class="tk-val tk-epoch">—</span><span class="tk-lbl">Epoch</span></div>
-                    <div class="trainer-kpi"><span class="tk-val tk-eta">—</span><span class="tk-lbl">ETA</span></div>
-                    <div class="trainer-kpi"><span class="tk-val tk-sps">—</span><span class="tk-lbl">s/step</span></div>
-                    <div class="trainer-kpi"><span class="tk-val tk-gpu-pct">—</span><span class="tk-lbl">GPU %</span></div>
-                    <div class="trainer-kpi"><span class="tk-val tk-vram">—</span><span class="tk-lbl">VRAM</span></div>
-                    <div class="trainer-kpi"><span class="tk-val tk-temp">—</span><span class="tk-lbl">Temp</span></div>
-                    <div class="trainer-kpi"><span class="tk-val tk-power">—</span><span class="tk-lbl">Power</span></div>
+                    <div class="trainer-kpi" title="Cross-entropy loss — lower is better. Measures how surprised the model is by the next token. Starts ~2.5, target &lt;1.5."><span class="tk-val tk-loss">—</span><span class="tk-lbl">Loss</span></div>
+                    <div class="trainer-kpi" title="Fraction of tokens predicted correctly (next-token accuracy). Rises as the model learns your writing patterns."><span class="tk-val tk-acc">—</span><span class="tk-lbl">Token Acc</span></div>
+                    <div class="trainer-kpi" title="Training epoch — how many full passes through the dataset have been completed."><span class="tk-val tk-epoch">—</span><span class="tk-lbl">Epoch</span></div>
+                    <div class="trainer-kpi" title="Estimated time remaining to finish the current training run."><span class="tk-val tk-eta">—</span><span class="tk-lbl">ETA</span></div>
+                    <div class="trainer-kpi" title="Seconds per gradient step. Lower = faster GPU. At 4–6s you're near flash-attn speed; above 25s suggests no hardware acceleration."><span class="tk-val tk-sps">—</span><span class="tk-lbl">s/step</span></div>
+                    <div class="trainer-kpi" title="GPU compute utilization. Should be near 100% during training. Drops indicate CPU bottlenecks or data loading stalls. Refreshes every 0.5s."><span class="tk-val tk-gpu-pct">—</span><span class="tk-lbl">GPU %</span></div>
+                    <div class="trainer-kpi" title="VRAM used / total. Fine-tuning a 1.5B model with LoRA typically uses 6–10 GB. OOM crashes the run. Refreshes every 0.5s."><span class="tk-val tk-vram">—</span><span class="tk-lbl">VRAM</span></div>
+                    <div class="trainer-kpi" title="GPU die temperature in °C. Safe range: &lt;85°C. Above 90°C the GPU throttles, slowing training. Check airflow. Refreshes every 0.5s."><span class="tk-val tk-temp">—</span><span class="tk-lbl">Temp</span></div>
+                    <div class="trainer-kpi" title="GPU power draw in watts. Indicates how hard the GPU is working. Significantly below TDP = underutilized. Refreshes every 0.5s."><span class="tk-val tk-power">—</span><span class="tk-lbl">Power</span></div>
                 </div>
 
                 <!-- Loss history sparkline -->
@@ -464,17 +525,18 @@
     <!-- ─── Architecture Tab ─────────────────────────────────── -->
     <section id="tab-architecture" class="tab-content">
 
-        <h3 class="arch-diagram-toggle" id="arch-diagram-toggle">
+        <h3 class="arch-diagram-toggle open" id="arch-diagram-toggle">
             System Diagram <span class="arch-toggle-arrow">▶</span>
         </h3>
         <div class="arch-diagram" id="arch-diagram-wrap">
             <pre class="mermaid">
 flowchart TD
-    subgraph SRC [Sources]
+    subgraph SRC [Sources — multi-machine]
         S1[CLAUDE.md]
         S2[Handoff docs]
         S3[JSONL logs]
         S4[Teaching files]
+        S5[Code / scripts]
     end
 
     subgraph ING [Ingestion]
@@ -484,20 +546,20 @@ flowchart TD
     end
 
     subgraph SUM [Summarization]
-        OL[Ollama]
+        OL[Ollama\nSERVER-0 / SERVER-1]
         CA[Claude API]
     end
 
-    ST[bge-large-en-v1.5]
+    ST[bge-large-en-v1.5\n1024-dim local embeddings]
 
-    subgraph MDB [MongoDB]
+    subgraph MDB [MongoDB Atlas Local]
         EP[(episodes)]
         CS[(crawl_state)]
     end
 
     subgraph RET [Retrieval]
-        VS[vectorSearch]
-        FP[FastAPI 3010]
+        VS[$vectorSearch\ncosine similarity]
+        FP[FastAPI :3010]
     end
 
     subgraph CON [Consumers]
@@ -506,9 +568,15 @@ flowchart TD
         DH[Dashboard]
     end
 
+    subgraph TR [Trainer containers — GPU machines]
+        T1[SERVER-1 · ROCm\nRX 6800 · :3011]
+        T2[SERVER-2 · CUDA\nGTX 1660S · :3011]
+    end
+
     S1 --> CR
     S2 --> CR
     S4 --> CR
+    S5 --> CR
     S3 --> JI
     JI --> SC
     SC --> OL
@@ -523,16 +591,22 @@ flowchart TD
     FP --> CH
     FP --> CL
     FP --> DH
+    FP -.->|status poll| T1
+    FP -.->|status poll| T2
+    T1 -.->|fine-tuned adapter| EP
+    T2 -.->|fine-tuned adapter| EP
 
     classDef local fill:#1c2128,stroke:#58a6ff,color:#e6edf3
     classDef llm fill:#1c2128,stroke:#d29922,color:#e6edf3
     classDef store fill:#1c2128,stroke:#3fb950,color:#e6edf3
     classDef source fill:#1c2128,stroke:#30363d,color:#8b949e
+    classDef trainer fill:#1c2128,stroke:#bc8cff,color:#e6edf3
 
     class ST,VS,FP local
     class OL,CA llm
     class EP,CS store
-    class S1,S2,S3,S4 source
+    class S1,S2,S3,S4,S5 source
+    class T1,T2 trainer
             </pre>
         </div>
 
@@ -547,6 +621,7 @@ flowchart TD
                 <tr><td>JSONL Ingester</td><td>Python async</td><td>Parses conversation logs, scores exchanges, summarizes high-value ones</td><td><span class="arch-badge ollama">Ollama</span> or <span class="arch-badge claude">Claude API</span></td><td>—</td></tr>
                 <tr><td>Chat</td><td>FastAPI + streaming</td><td>Anamnesis-identity chat. Searches own memory on every turn</td><td><span class="arch-badge ollama">Ollama</span> or <span class="arch-badge claude">Claude API</span></td><td>—</td></tr>
                 <tr><td>Status banner</td><td>Ollama</td><td>Generates the live one-liner in the header</td><td><span class="arch-badge ollama">Ollama</span></td><td>—</td></tr>
+                <tr><td>Trainer containers</td><td>FastAPI (thin — no torch)</td><td>Manages LLM fine-tune jobs on GPU machines. One container per machine. Mounts host venv for GPU access.</td><td>No</td><td>3011</td></tr>
             </tbody>
         </table>
 
@@ -567,11 +642,13 @@ flowchart TD
         <table class="arch-table">
             <thead><tr><th>Machine</th><th>Mount</th><th>What gets ingested</th></tr></thead>
             <tbody>
-                <tr><td>dellserver</td><td>/sources/dellserver</td><td>CLAUDE.md files, handoffs, project code, scripts</td></tr>
-                <tr><td>server</td><td>/sources/server</td><td>Same — synced hourly via sync_sources.sh</td></tr>
-                <tr><td>officewsl</td><td>/sources/officewsl</td><td>Same — synced hourly</td></tr>
-                <tr><td>dellserver</td><td>/sources/teachings</td><td>~/0_TEACHINGS/** — teaching session files</td></tr>
-                <tr><td>dellserver</td><td>/sources/documents</td><td>/mnt/sdb/onedrive_documents — .docx files</td></tr>
+                <tr><td>SERVER-0 (local)</td><td>/sources/server-0</td><td>CLAUDE.md files, handoffs, project code, scripts — direct mount</td></tr>
+                <tr><td>SERVER-1</td><td>/sources/server-1</td><td>Same — synced hourly via sync_sources.sh</td></tr>
+                <tr><td>SERVER-2</td><td>/sources/server-2</td><td>Same — synced hourly</td></tr>
+                <tr><td>SERVER-3</td><td>/sources/server-3</td><td>Same — synced hourly</td></tr>
+                <tr><td>SERVER-4</td><td>/sources/server-4</td><td>Same — synced hourly</td></tr>
+                <tr><td>SERVER-0</td><td>/sources/teachings</td><td>~/0_TEACHINGS/** — teaching session files</td></tr>
+                <tr><td>SERVER-0</td><td>/sources/documents</td><td>OneDrive .docx files</td></tr>
                 <tr><td>all</td><td>via JSONL ingester</td><td>~/.claude/projects/**/*.jsonl — conversation logs</td></tr>
             </tbody>
         </table>

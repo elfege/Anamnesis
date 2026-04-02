@@ -1233,7 +1233,7 @@ pre.term-output {
     margin-bottom: 24px;
     overflow: hidden;
     text-align: center;
-    display: none;
+    display: block;
 }
 
 .arch-table {
@@ -1432,4 +1432,81 @@ pre.term-output {
     color: var(--text-muted);
     white-space: pre-wrap;
     word-break: break-all;
+}
+
+/* ─── Config Editor Tables ──────────────────────────────────── */
+
+#named-sources-table,
+#machine-roots-table,
+#jsonl-roots-table {
+    table-layout: fixed;
+    width: 100%;
+    min-width: 700px;
+}
+
+/* Allow horizontal scroll when panel is narrow */
+.settings-panel:has(#named-sources-table),
+.settings-panel:has(#machine-roots-table),
+.settings-panel:has(#jsonl-roots-table) {
+    overflow-x: auto;
+}
+
+/* Named sources: 6 columns — name / path / instance / project / description / delete */
+#named-sources-table th:nth-child(1),
+#named-sources-table td:nth-child(1) { width: 12%; }
+#named-sources-table th:nth-child(2),
+#named-sources-table td:nth-child(2) { width: 30%; }
+#named-sources-table th:nth-child(3),
+#named-sources-table td:nth-child(3) { width: 12%; }
+#named-sources-table th:nth-child(4),
+#named-sources-table td:nth-child(4) { width: 12%; }
+#named-sources-table th:nth-child(5),
+#named-sources-table td:nth-child(5) { width: 28%; }
+#named-sources-table th:nth-child(6),
+#named-sources-table td:nth-child(6) { width: 36px; }
+
+/* Machine roots / JSONL roots: 3 columns — name / path / delete */
+#machine-roots-table th:nth-child(1),
+#machine-roots-table td:nth-child(1),
+#jsonl-roots-table th:nth-child(1),
+#jsonl-roots-table td:nth-child(1) { width: 25%; }
+#machine-roots-table th:nth-child(2),
+#machine-roots-table td:nth-child(2),
+#jsonl-roots-table th:nth-child(2),
+#jsonl-roots-table td:nth-child(2) { width: auto; }
+#machine-roots-table th:nth-child(3),
+#machine-roots-table td:nth-child(3),
+#jsonl-roots-table th:nth-child(3),
+#jsonl-roots-table td:nth-child(3) { width: 36px; }
+
+input.config-input {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg-card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 4px 6px;
+    font-family: inherit;
+    font-size: 0.85em;
+    text-overflow: ellipsis;
+}
+input.config-input:focus {
+    border-color: var(--accent);
+    outline: none;
+}
+.btn-remove-row {
+    padding: 2px 6px;
+    font-size: 0.8em;
+    cursor: pointer;
+}
+.btn-danger-outline {
+    background: transparent;
+    color: var(--danger);
+    border: 1px solid var(--danger);
+    border-radius: 3px;
+}
+.btn-danger-outline:hover {
+    background: var(--danger);
+    color: #fff;
 }

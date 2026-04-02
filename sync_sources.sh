@@ -8,7 +8,7 @@
 # Staging layout: ~/0_ANAMNESIS_SOURCES/{host}/
 #   {host}/{PROJECT_DIR}/CLAUDE.md, README.md, docker-compose.yml, *.sh, *.py
 #   {host}/0_SCRIPTS/**/*.sh       (bash style authority)
-#   {host}/0_CLAUDE_IC/intercom.md, user_profile_elfege.md
+#   {host}/0_CLAUDE_IC/intercom.md, user_profile.md
 #
 # Run hourly via cron. Gracefully skips unreachable hosts (ConnectTimeout=5).
 # Some hosts are always optional — may be unreachable.
@@ -20,7 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . ~/.env.colors 2>/dev/null || true
 
 STAGING="${HOME}/0_ANAMNESIS_SOURCES"
-REMOTE_HOME="/home/elfege"
+REMOTE_HOME="${REMOTE_HOME:-/home/${USER}}"
 LOG_FILE="${HOME}/0_LOGS/anamnesis_sync.log"
 mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -94,7 +94,7 @@ _sync_host() {
 	mkdir -p "$ic_dst"
 	rsync -a \
 		"${host}:${remote_home}/0_CLAUDE_IC/intercom.md" \
-		"${host}:${remote_home}/0_CLAUDE_IC/user_profile_elfege.md" \
+		"${host}:${remote_home}/0_CLAUDE_IC/user_profile*.md" \
 		"${ic_dst}/" 2>/dev/null || true
 
 	# ── Root CLAUDE.md ───────────────────────────────────────────

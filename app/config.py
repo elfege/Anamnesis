@@ -35,8 +35,5 @@ CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
 
 # Claude CLI (subscription backend, $0 per message)
 # Path to claude binary on the host — accessed via SSH from inside the container
-CLAUDE_CLI_HOST = os.environ.get("CLAUDE_CLI_HOST", "dellserver")
-CLAUDE_CLI_PATH = os.environ.get(
-    "CLAUDE_CLI_PATH",
-    "/home/elfege/.nvm/versions/node/v20.19.5/bin/claude",
-)
+CLAUDE_CLI_HOST = os.environ.get("CLAUDE_CLI_HOST", "localhost")
+CLAUDE_CLI_PATH = os.environ.get("CLAUDE_CLI_PATH", "claude")

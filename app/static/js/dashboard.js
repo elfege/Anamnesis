@@ -15,6 +15,19 @@ $(function () {
     refresh_banner();
     setInterval(refresh_banner, 60000);
 
+    // ─── Populate terminal host dropdown from configured sources ─
+    (function populateTerminalHosts() {
+        $.getJSON("/api/files/sources", function (sources) {
+            var sel = $("#terminal-host-select");
+            (sources || []).forEach(function (s) {
+                if (s.type === "ssh" && s.id) {
+                    var label = s.label || s.id;
+                    sel.append($("<option>").val(s.id).text(label));
+                }
+            });
+        });
+    })();
+
     // ─── Tab Switching ──────────────────────────────────────────
     $(".tab").on("click", function () {
         var target_tab = $(this).data("tab");
@@ -194,6 +207,177 @@ $(function () {
                     .css("color", "var(--danger)");
             },
         });
+    });
+
+    // ─── Crawler Config Editor (Machine Roots + Named Sources) ────
+
+    function _editable_row_html(fields) {
+        // fields: [{name, value, placeholder}]
+        var cells = "";
+        for (var i = 0; i < fields.length; i++) {
+            var f = fields[i];
+            cells += '<td><input type="text" class="config-input" data-field="' + f.name + '" value="' + (f.value || "").replace(/"/g, "&quot;") + '" placeholder="' + (f.placeholder || "") + '"></td>';
+        }
+        cells += '<td><button class="btn-small btn-danger-outline btn-remove-row" title="Remove">✕</button></td>';
+        return "<tr>" + cells + "</tr>";
+    }
+
+    function _collect_table_dict(tbody_id) {
+        var result = {};
+        $("#" + tbody_id + " tr").each(function () {
+            var inputs = $(this).find("input.config-input");
+            var key = inputs.eq(0).val().trim();
+            var val = inputs.eq(1).val().trim();
+            if (key && val) result[key] = val;
+        });
+        return result;
+    }
+
+    function _status_flash(selector, text, color) {
+        $(selector).text(text).css("color", "var(--" + color + ")");
+        setTimeout(function () { $(selector).text(""); }, 3000);
+    }
+
+    // ── Machine Roots ──
+    function load_machine_roots() {
+        $.getJSON("/api/crawler/config", function (cfg) {
+            var tbody = $("#machine-roots-body").empty();
+            var roots = cfg.machine_roots || {};
+            Object.keys(roots).forEach(function (machine) {
+                tbody.append(_editable_row_html([
+                    {name: "machine", value: machine, placeholder: "machine-name"},
+                    {name: "path", value: roots[machine], placeholder: "/sources/machine"},
+                ]));
+            });
+        });
+    }
+
+    $("#btn-add-machine-root").on("click", function () {
+        $("#machine-roots-body").append(_editable_row_html([
+            {name: "machine", value: "", placeholder: "machine-name"},
+            {name: "path", value: "", placeholder: "/sources/machine"},
+        ]));
+    });
+
+    $("#machine-roots-table").on("click", ".btn-remove-row", function () {
+        $(this).closest("tr").remove();
+    });
+
+    $("#btn-save-machine-roots").on("click", function () {
+        var roots = _collect_table_dict("machine-roots-body");
+        $.ajax({
+            url: "/api/crawler/config/machine-roots",
+            method: "PUT",
+            contentType: "application/json",
+            data: JSON.stringify({machine_roots: roots}),
+            success: function () { _status_flash("#machine-roots-status", "Saved!", "success"); },
+            error: function (xhr) { _status_flash("#machine-roots-status", "Error: " + (xhr.responseJSON?.detail || xhr.statusText), "danger"); },
+        });
+    });
+
+
+
+    // ── Named Sources ──
+    function load_named_sources() {
+        $.getJSON("/api/crawler/config", function (cfg) {
+            var tbody = $("#named-sources-body").empty();
+            var sources = cfg.sources || [];
+            sources.forEach(function (s) {
+                tbody.append(_editable_row_html([
+                    {name: "name", value: s.name, placeholder: "source-name"},
+                    {name: "path", value: s.path, placeholder: "/sources/..."},
+                    {name: "instance", value: s.instance, placeholder: "instance-id"},
+                    {name: "project", value: s.project, placeholder: "project-name"},
+                    {name: "description", value: s.description, placeholder: "description"},
+                ]));
+            });
+        });
+    }
+
+    function _collect_sources_list() {
+        var result = [];
+        $("#named-sources-body tr").each(function () {
+            var inputs = $(this).find("input.config-input");
+            var obj = {};
+            inputs.each(function () { obj[$(this).data("field")] = $(this).val().trim(); });
+            if (obj.name && obj.path) result.push(obj);
+        });
+        return result;
+    }
+
+    $("#btn-add-named-source").on("click", function () {
+        $("#named-sources-body").append(_editable_row_html([
+            {name: "name", value: "", placeholder: "source-name"},
+            {name: "path", value: "", placeholder: "/sources/..."},
+            {name: "instance", value: "", placeholder: "instance-id"},
+            {name: "project", value: "", placeholder: "project-name"},
+            {name: "description", value: "", placeholder: "description"},
+        ]));
+    });
+
+    $("#named-sources-table").on("click", ".btn-remove-row", function () {
+        $(this).closest("tr").remove();
+    });
+
+    $("#btn-save-named-sources").on("click", function () {
+        var sources = _collect_sources_list();
+        $.ajax({
+            url: "/api/crawler/config/sources",
+            method: "PUT",
+            contentType: "application/json",
+            data: JSON.stringify({sources: sources}),
+            success: function () { _status_flash("#named-sources-status", "Saved!", "success"); },
+            error: function (xhr) { _status_flash("#named-sources-status", "Error: " + (xhr.responseJSON?.detail || xhr.statusText), "danger"); },
+        });
+    });
+
+
+    // ── JSONL Source Roots ──
+    function load_jsonl_roots() {
+        $.getJSON("/api/crawler/config/jsonl-roots", function (cfg) {
+            var tbody = $("#jsonl-roots-body").empty();
+            var roots = cfg.roots || {};
+            Object.keys(roots).forEach(function (machine) {
+                tbody.append(_editable_row_html([
+                    {name: "machine", value: machine, placeholder: "machine-name"},
+                    {name: "path", value: roots[machine], placeholder: "/sources/machine/.claude/projects"},
+                ]));
+            });
+        });
+    }
+
+    $("#btn-add-jsonl-root").on("click", function () {
+        $("#jsonl-roots-body").append(_editable_row_html([
+            {name: "machine", value: "", placeholder: "machine-name"},
+            {name: "path", value: "", placeholder: "/sources/machine/.claude/projects"},
+        ]));
+    });
+
+    $("#jsonl-roots-table").on("click", ".btn-remove-row", function () {
+        $(this).closest("tr").remove();
+    });
+
+    $("#btn-save-jsonl-roots").on("click", function () {
+        var roots = _collect_table_dict("jsonl-roots-body");
+        $.ajax({
+            url: "/api/crawler/config/jsonl-roots",
+            method: "PUT",
+            contentType: "application/json",
+            data: JSON.stringify({roots: roots}),
+            success: function () { _status_flash("#jsonl-roots-status", "Saved!", "success"); },
+            error: function (xhr) { _status_flash("#jsonl-roots-status", "Error: " + (xhr.responseJSON?.detail || xhr.statusText), "danger"); },
+        });
+    });
+
+
+    // Load config editors when switching to crawler/jsonl tabs
+    $(".tab[data-tab='crawler']").on("click", function () {
+        load_machine_roots();
+        load_named_sources();
+        load_docx_patterns();
+    });
+    $(".tab[data-tab='jsonl']").on("click", function () {
+        load_jsonl_roots();
     });
 
     // ─── JSONL Ingester ──────────────────────────────────────────
@@ -1418,12 +1602,20 @@ $(function () {
             return;
         }
 
+        var backend_label = chat_state.backend === "claude" ? "Claude API" :
+                           chat_state.backend === "claude_cli" ? "Claude CLI" : "Ollama";
+        term_log('<span class="term-tool">&#128172; ' + backend_label + '</span> <span class="term-dim">' + escape_html(msg.substring(0, 100)) + (msg.length > 100 ? '…' : '') + '</span>');
+
         fetch("/api/chat/stream", {
             method:  "POST",
             headers: {"Content-Type": "application/json"},
             body:    payload,
         }).then(function (resp) {
-            if (!resp.ok) throw new Error("HTTP " + resp.status);
+            if (!resp.ok) {
+                term_log('<span class="term-error">HTTP ' + resp.status + '</span>');
+                throw new Error("HTTP " + resp.status);
+            }
+            term_log('<span class="term-dim">Stream connected</span>');
             var reader  = resp.body.getReader();
             var decoder = new TextDecoder();
             var buffer  = "";
@@ -1508,13 +1700,20 @@ $(function () {
         var $content = $("#" + stream_id + " .chat-msg-content");
         $content.addClass("chat-streaming").text("");
         var accumulated = "";
+        var token_count = 0;
+
+        term_log('<span class="term-tool">&#129504; AnamnesisGPT</span> <span class="term-dim">prompt: ' + escape_html(query.substring(0, 100)) + (query.length > 100 ? '…' : '') + '</span>');
 
         fetch("/api/anamnesis-gpt/generate", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({prompt: query, max_tokens: 512, temperature: 0.8, stream: true}),
         }).then(function (resp) {
-            if (!resp.ok) throw new Error("HTTP " + resp.status);
+            if (!resp.ok) {
+                term_log('<span class="term-error">HTTP ' + resp.status + '</span>');
+                throw new Error("HTTP " + resp.status);
+            }
+            term_log('<span class="term-dim">Stream connected — generating…</span>');
             var reader = resp.body.getReader();
             var decoder = new TextDecoder();
             var buffer = "";
@@ -1523,6 +1722,7 @@ $(function () {
                 reader.read().then(function (result) {
                     if (result.done) {
                         $content.text(accumulated).removeClass("chat-streaming");
+                        term_log('<span class="term-dim">&#10003; Generation complete — ' + token_count + ' tokens</span>');
                         finish_streaming();
                         return;
                     }
@@ -1533,13 +1733,22 @@ $(function () {
                         if (!line.startsWith("data:")) return;
                         try {
                             var ev = JSON.parse(line.slice(5).trim());
+                            if (ev.error) {
+                                $content.html('<span style="color:var(--danger)">' + escape_html(ev.error) + "</span>")
+                                    .removeClass("chat-streaming");
+                                term_log('<span class="term-error">&#10007; ' + escape_html(ev.error) + '</span>');
+                                finish_streaming();
+                                return;
+                            }
                             if (ev.token) {
                                 accumulated += ev.token;
+                                token_count++;
                                 $content.text(accumulated);
                                 scroll_chat();
                             }
                             if (ev.done) {
                                 $content.text(accumulated).removeClass("chat-streaming");
+                                term_log('<span class="term-dim">&#10003; Generation complete — ' + token_count + ' tokens</span>');
                                 finish_streaming();
                                 return;
                             }
@@ -1548,6 +1757,7 @@ $(function () {
                     read_chunk();
                 }).catch(function (err) {
                     $content.html('<span style="color:var(--danger)">Stream error: ' + escape_html(err.message) + "</span>");
+                    term_log('<span class="term-error">&#10007; Stream error: ' + escape_html(err.message) + '</span>');
                     finish_streaming();
                 });
             }
@@ -1760,21 +1970,69 @@ $(function () {
         poll_reembed_status();
     });
 
-    // ─── Architecture diagram toggle ─────────────────────────────
-    var _arch_peek_done = false;
-
-    $(".tab[data-tab='architecture']").on("click", function () {
-        if (_arch_peek_done) return;
-        _arch_peek_done = true;
-        var wrap = $("#arch-diagram-wrap");
-        var toggle = $("#arch-diagram-toggle");
-        if (typeof maybeRenderMermaid === "function") maybeRenderMermaid();
-        wrap.slideDown(900, function () {
-            setTimeout(function () {
-                wrap.slideUp(250);
-                toggle.removeClass("open");
-            }, 600);
+    // ── Docx Tag Patterns ──
+    function load_docx_patterns() {
+        $.getJSON("/api/crawler/config/docx-tag-patterns", function (data) {
+            var tbody = $("#docx-patterns-body").empty();
+            (data.patterns || []).forEach(function (p) {
+                tbody.append(_docx_pattern_row(p.match, p.tag, p.field, p.regex));
+            });
         });
+    }
+
+    function _docx_pattern_row(match, tag, field, regex) {
+        match = match || ""; tag = tag || ""; field = field || "filename"; regex = !!regex;
+        return $(
+            '<tr>' +
+            '<td><input class="config-input" data-field="match" value="' + $('<span>').text(match).html() + '" placeholder="pattern"></td>' +
+            '<td><input class="config-input" data-field="tag" value="' + $('<span>').text(tag).html() + '" placeholder="tag"></td>' +
+            '<td><select class="config-input" data-field="field">' +
+                '<option value="filename"' + (field === "filename" ? " selected" : "") + '>filename</option>' +
+                '<option value="content"' + (field === "content" ? " selected" : "") + '>content</option>' +
+            '</select></td>' +
+            '<td style="text-align:center"><input type="checkbox" class="config-input" data-field="regex"' + (regex ? " checked" : "") + '></td>' +
+            '<td><button class="btn-remove-row btn-danger-sm">✕</button></td>' +
+            '</tr>'
+        );
+    }
+
+    $("#btn-add-docx-pattern").on("click", function () {
+        $("#docx-patterns-body").append(_docx_pattern_row("", "", "filename", false));
+    });
+
+    $("#docx-patterns-table").on("click", ".btn-remove-row", function () {
+        $(this).closest("tr").remove();
+    });
+
+    $("#btn-save-docx-patterns").on("click", function () {
+        var patterns = [];
+        $("#docx-patterns-body tr").each(function () {
+            var row = $(this);
+            var match = row.find('[data-field="match"]').val().trim();
+            var tag   = row.find('[data-field="tag"]').val().trim();
+            if (!match || !tag) return;
+            patterns.push({
+                match: match,
+                tag:   tag,
+                field: row.find('[data-field="field"]').val(),
+                regex: row.find('[data-field="regex"]').is(":checked"),
+            });
+        });
+        $.ajax({
+            url: "/api/crawler/config/docx-tag-patterns",
+            method: "PUT",
+            contentType: "application/json",
+            data: JSON.stringify({patterns: patterns}),
+            success: function () { _status_flash("#docx-patterns-status", "Saved!", "success"); },
+            error: function (xhr) { _status_flash("#docx-patterns-status", "Error: " + (xhr.responseJSON?.detail || xhr.statusText), "danger"); },
+        });
+    });
+
+    // ─── Architecture diagram toggle ─────────────────────────────
+    $(".tab[data-tab='architecture']").on("click", function () {
+        setTimeout(function () {
+            if (typeof maybeRenderMermaid === "function") maybeRenderMermaid();
+        }, 0);
     });
 
     $("#arch-diagram-toggle").on("click", function () {
@@ -1785,7 +2043,7 @@ $(function () {
             toggle.removeClass("open");
         } else {
             if (typeof maybeRenderMermaid === "function") maybeRenderMermaid();
-            wrap.slideDown(800);
+            wrap.slideDown(250);
             toggle.addClass("open");
         }
     });
@@ -1837,16 +2095,14 @@ $(function () {
         return "idle";
     }
 
-    function updateCard(name, data, err) {
+    function updateCardStatus(name, data, err) {
         const c = cards[name];
         if (!c) return;
         const $el = c.$el;
 
         const running = !err && data && data.running;
         const done    = !err && data && data.done;
-        const cls = statusDot(running, done, err);
-
-        $el.find(".trainer-status-dot").attr("class", "trainer-status-dot " + cls);
+        $el.find(".trainer-status-dot").attr("class", "trainer-status-dot " + statusDot(running, done, err));
         $el.find(".trainer-status-label").text(statusLabel(running, done, err));
 
         const p = data && data.progress;
@@ -1863,27 +2119,39 @@ $(function () {
         $el.find(".tk-eta").text(p ? p.eta : "—");
         $el.find(".tk-sps").text(p ? p.sec_per_step.toFixed(1) + "s" : "—");
 
-        const g = data && data.gpu;
-        $el.find(".tk-gpu-pct").text(g && g.gpu_pct != null ? g.gpu_pct.toFixed(0) + "%" : "—");
-        $el.find(".tk-vram").text(g && g.vram_used_mb != null
-            ? (g.vram_used_mb / 1024).toFixed(1) + "/" + (g.vram_total_mb / 1024).toFixed(1) + "G"
-            : "—");
-        $el.find(".tk-temp").text(g && g.temp_c != null ? g.temp_c.toFixed(0) + "°C" : "—");
-        $el.find(".tk-power").text(g && g.power_w != null ? g.power_w.toFixed(0) + "W" : "—");
-
-        // Sparkline
         if (data && data.history && data.history.length) {
             c.history = data.history;
             drawSparkline($el.find(".trainer-loss-chart")[0], c.history);
         }
     }
 
-    function pollTrainer(t) {
+    function updateCardGpu(name, g) {
+        const c = cards[name];
+        if (!c) return;
+        const $el = c.$el;
+        $el.find(".tk-gpu-pct").text(g && g.gpu_pct != null ? g.gpu_pct.toFixed(0) + "%" : "—");
+        $el.find(".tk-vram").text(g && g.vram_used_mb != null
+            ? (g.vram_used_mb / 1024).toFixed(1) + "/" + (g.vram_total_mb / 1024).toFixed(1) + "G"
+            : "—");
+        $el.find(".tk-temp").text(g && g.temp_c != null ? g.temp_c.toFixed(0) + "°C" : "—");
+        $el.find(".tk-power").text(g && g.power_w != null ? g.power_w.toFixed(0) + "W" : "—");
+    }
+
+    function pollTrainerStatus(t) {
         $.ajax({
             url: t.url + "/status",
             timeout: 6000,
-            success: function (data) { updateCard(t.name, data, false); },
-            error:   function ()     { updateCard(t.name, null,  true);  },
+            success: function (data) { updateCardStatus(t.name, data, false); },
+            error:   function ()     { updateCardStatus(t.name, null,  true);  },
+        });
+    }
+
+    function pollTrainerGpu(t) {
+        $.ajax({
+            url: t.url + "/gpu",
+            timeout: 1500,
+            success: function (g) { updateCardGpu(t.name, g); },
+            error:   function ()  { updateCardGpu(t.name, null); },
         });
     }
 
@@ -1896,21 +2164,17 @@ $(function () {
             const $clone = $(tpl.content.cloneNode(true));
             $clone.find(".trainer-name").text(t.name);
             $clone.find(".trainer-gpu-badge").text(t.label || t.name);
-            const $card = $clone.find(".trainer-card");
 
-            // Start button
             $clone.find(".btn-trainer-start").on("click", function () {
                 $.post(t.url + "/start", JSON.stringify({}), null, "json")
-                    .always(function () { pollTrainer(t); });
+                    .always(function () { pollTrainerStatus(t); });
             });
 
-            // Stop button
             $clone.find(".btn-trainer-stop").on("click", function () {
                 $.post(t.url + "/stop")
-                    .always(function () { pollTrainer(t); });
+                    .always(function () { pollTrainerStatus(t); });
             });
 
-            // Log tail toggle
             $clone.find(".btn-trainer-log").on("click", function () {
                 const $log = $(this).siblings(".trainer-log-output");
                 if ($log.is(":visible")) {
@@ -1926,27 +2190,30 @@ $(function () {
 
             $container.append($clone);
             cards[t.name] = { $el: $container.find(".trainer-card").last(), history: [] };
-            pollTrainer(t);
+            pollTrainerStatus(t);
+            pollTrainerGpu(t);
         });
     }
 
-    // Poll every 10s when tab is active
-    var _pollInterval = null;
+    // Two intervals: training metrics every 10s, GPU stats every 500ms
+    var _statusInterval = null;
+    var _gpuInterval    = null;
 
     $(".tab[data-tab='training']").on("click", function () {
         $.getJSON("/api/config/trainers", function (cfg) {
             TRAINERS = cfg.trainers || [];
             buildCards();
-            clearInterval(_pollInterval);
-            _pollInterval = setInterval(function () {
-                TRAINERS.forEach(pollTrainer);
-            }, 10000);
+            clearInterval(_statusInterval);
+            clearInterval(_gpuInterval);
+            _statusInterval = setInterval(function () { TRAINERS.forEach(pollTrainerStatus); }, 10000);
+            _gpuInterval    = setInterval(function () { TRAINERS.forEach(pollTrainerGpu); },    500);
         });
     });
 
     // Stop polling when leaving training tab
     $(".tab:not([data-tab='training'])").on("click", function () {
-        clearInterval(_pollInterval);
+        clearInterval(_statusInterval);
+        clearInterval(_gpuInterval);
     });
 
 })();

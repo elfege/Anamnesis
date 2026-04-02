@@ -80,14 +80,26 @@ fi
 start_spinner "" "${CYAN:-}Ollama ready: http://localhost:11434${NC:-}"
 # ─────────────────────────────────────────────────────────────────
 
-# ── Pull ANTHROPIC_API_KEY from AWS ──────────────────────────────
-start_spinner "" "${CYAN:-}Pulling secrets from aws${NC:-}"
-pull_aws_secrets ELFEGE-secrets 1 &>/dev/null || {
-	echo -e "${RED:-}Failed to pull secrets from AWS. Ensure AWS CLI is configured and you have access to ELFEGE-secrets.${NC:-}"
+# ── Pull secrets from AWS (optional — skipped if .env already exists) ──
+if command -v aws &>/dev/null && [[ -z "${SKIP_AWS_PULL:-}" ]]; then
+	start_spinner "" "${CYAN:-}Pulling secrets from AWS${NC:-}"
+
+	# Deployment config → .env (docker-compose reads this)
+	"$SCRIPT_DIR/pull_env.sh" 1 &>/dev/null || {
+		start_spinner "" "${YELLOW:-}Could not pull ANAMNESIS-Secrets — using existing .env${NC:-}"
+	}
+
+	# Anthropic API key (from personal secrets)
+	pull_aws_secrets ELFEGE-secrets 1 &>/dev/null && export ANTHROPIC_API_KEY || true
+else
+	start_spinner "" "${CYAN:-}Skipping AWS pull — using existing .env${NC:-}"
+fi
+
+# Bail if no .env at all
+if [[ ! -f "$SCRIPT_DIR/.env" ]]; then
+	echo -e "${RED:-}No .env found. Copy .env.example → .env and fill in your values.${NC:-}"
 	exit 1
-}
-start_spinner "" "${YELLOW:-}Exporting ANTHROPIC_API_KEY{NC:-}"
-export ANTHROPIC_API_KEY
+fi
 # ─────────────────────────────────────────────────────────────────
 
 # ── MongoDB health guard ──────────────────────────────────────────

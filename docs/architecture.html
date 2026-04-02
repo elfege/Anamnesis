@@ -365,7 +365,7 @@
             <span><span class="badge">MongoDB Atlas Local</span></span>
             <span><span class="badge">sentence-transformers</span></span>
             <span><span class="badge">Docker</span></span>
-            <span style="color:var(--muted)">March 2026 · dellserver · Elfege Leylavergne</span>
+            <span style="color:var(--muted)">2026 · Multi-machine · Elfege Leylavergne</span>
         </div>
     </header>
 
@@ -381,7 +381,8 @@
             <li><a href="#schema">Episode Schema</a></li>
             <li><a href="#embedding">Embedding Engine</a></li>
             <li><a href="#ingestion">JSONL Ingestion</a></li>
-            <li><a href="#crawler">Crawler</a></li>
+            <li><a href="#crawler">Crawler &amp; Deep Scanner</a></li>
+            <li><a href="#trainers">GPU Trainer Containers</a></li>
             <li><a href="#api">API Reference</a></li>
             <li><a href="#deployment">Deployment</a></li>
             <li><a href="#philosophy">Design Philosophy</a></li>
@@ -407,7 +408,7 @@
 
         <div class="metrics">
             <div class="metric">
-                <div class="metric-value">3 354+</div>
+                <div class="metric-value">7 700+</div>
                 <div class="metric-label">Episodes Stored</div>
             </div>
             <div class="metric">
@@ -416,11 +417,11 @@
             </div>
             <div class="metric">
                 <div class="metric-value">56</div>
-                <div class="metric-label">CPU Cores (dellserver)</div>
+                <div class="metric-label">CPU Cores (SERVER-0)</div>
             </div>
             <div class="metric">
-                <div class="metric-value">5 min</div>
-                <div class="metric-label">Crawler Interval</div>
+                <div class="metric-value">5</div>
+                <div class="metric-label">Machines Crawled</div>
             </div>
             <div class="metric">
                 <div class="metric-value">3 010</div>
@@ -442,7 +443,6 @@ flowchart TD
     subgraph CLIENTS["External Clients"]
         C1["Claude Instance\n(any machine)"]
         C2["Dashboard\n(browser)"]
-        C3["JSONL\nIngestor"]
     end
 
     subgraph APP["FastAPI App — anamnesis-app :3010"]
@@ -451,17 +451,17 @@ flowchart TD
         CHAT["/api/chat\nStreaming Chat"]
         JSONL["/api/jsonl\nIngestion Control"]
         DASH["/dashboard\n/chat"]
-        EMB["embedding.py\nSentenceTransformer"]
-        CRAWLER["crawler.py\n5-min auto-ingest"]
+        EMB["embedding.py\nbge-large-en-v1.5\n1024d"]
+        CRAWLER["crawler.py\nDeep project scanner\n5-min interval"]
         SCHED["scheduler.py\nJSONL 5AM cron"]
         INGESTER["jsonl_ingester.py\nParse + Summarize + Embed"]
     end
 
     subgraph MONGO["MongoDB — anamnesis-mongo :5438"]
         COL_EP[("episodes\ncollection")]
-        COL_SET[("settings\ncollection")]
-        COL_CHAT[("chat_sessions\ncollection")]
-        IDX["$vectorSearch\nIndex — 1024d HNSW"]
+        COL_SET[("settings +\ncrawl_state")]
+        COL_CHAT[("chat_sessions")]
+        IDX["$vectorSearch\n1024d HNSW"]
     end
 
     subgraph LLM["LLM Backends"]
@@ -470,11 +470,15 @@ flowchart TD
         API["Claude API\nAnthropic"]
     end
 
+    subgraph TRAINERS["Trainer Containers :3011"]
+        T1["SERVER-1\nROCm · RX 6800\nQLoRA fine-tune"]
+        T2["SERVER-2\nCUDA · GTX 1660S"]
+    end
+
     C1 -->|"POST /api/episodes/search"| EP
     C1 -->|"POST /api/episodes"| EP
     C2 --> DASH
     C2 --> CHAT
-    C3 --> JSONL
 
     EP --> EMB
     EP --> COL_EP
@@ -484,17 +488,25 @@ flowchart TD
     JSONL --> INGESTER
     SCHED --> INGESTER
     CRAWLER --> EP
-    INGESTER --> CLI
     INGESTER --> EMB
     INGESTER --> COL_EP
 
     COL_EP --- IDX
     COL_SET -.->|"load on startup"| APP
     APP -.->|"save on change"| COL_SET
+
+    C2 -.->|"poll /status, /gpu"| TRAINERS
+
+    style CLIENTS fill:#1a3a5c,stroke:#58a6ff,color:#e6edf3
+    style APP fill:#2d1b4e,stroke:#bc8cff,color:#e6edf3
+    style MONGO fill:#1b3a2a,stroke:#3fb950,color:#e6edf3
+    style LLM fill:#3a2a0a,stroke:#d29922,color:#e6edf3
+    style TRAINERS fill:#3a1520,stroke:#f85149,color:#e6edf3
             </div>
         </div>
         <div class="note note-blue">
-            All components run in Docker on <strong>dellserver (192.168.10.20)</strong>.
+            All core components run in Docker on <strong>SERVER-0</strong> (SERVER-0).
+            Trainer containers run on GPU machines (SERVER-1: ROCm, SERVER-2: CUDA).
             The app container has SSH access to the host for Claude CLI calls.
             MongoDB Atlas Local provides native <code>$vectorSearch</code> without a cloud dependency.
         </div>
@@ -525,9 +537,14 @@ flowchart TD
                 <p>CRUD + similarity search. Hosts the re-embed-all process with pause/resume/checkpoint support. Background <code>asyncio.Task</code> processes episodes sequentially through the embedding pool, checkpointing every 25 episodes.</p>
             </div>
             <div class="card">
-                <div class="card-title">Crawler</div>
+                <div class="card-title">Crawler &amp; Deep Scanner</div>
                 <div class="card-subtitle">app/crawler.py</div>
-                <p>Background thread on 5-minute interval. Ingests CLAUDE.md files, handoff buffers, project histories, and source code across all configured machines via SSH. Auto-deduplicates by content hash.</p>
+                <p>Background thread on 5-minute interval. Scans all <code>0_*</code>, <code>HUBITAT</code>, <code>NETWORK</code> dirs across all machines. Ingests <code>.ino</code>, <code>.cpp</code>, <code>.h</code>, <code>.groovy</code>, <code>.py</code>, <code>.sh</code>, <code>.js</code>, <code>.ts</code>, <code>.md</code> (max 64KB each). Docx tag patterns stored in MongoDB, editable via UI. Auto-deduplicates by SHA-256 content hash.</p>
+            </div>
+            <div class="card">
+                <div class="card-title">Trainer Containers</div>
+                <div class="card-subtitle">trainers/app/main.py</div>
+                <p>Thin FastAPI containers running on GPU machines. Each exposes <code>/status</code> (log parsing), <code>/gpu</code> (hardware stats via rocm-smi/nvidia-smi), <code>/start</code>, <code>/stop</code>, <code>/log/tail</code>. Mount host venv for GPU access. Dashboard polls <code>/gpu</code> every 500ms, <code>/status</code> every 10s.</p>
             </div>
             <div class="card">
                 <div class="card-title">JSONL Ingester</div>
@@ -732,6 +749,10 @@ flowchart LR
     POOL -->|"initializer"| A2
     A1 --> B1
     A2 --> B2
+
+    style MAIN fill:#2d1b4e,stroke:#bc8cff,color:#e6edf3
+    style W1 fill:#1a3a5c,stroke:#58a6ff,color:#e6edf3
+    style W2 fill:#1b3a2a,stroke:#3fb950,color:#e6edf3
             </div>
         </div>
 
@@ -739,7 +760,7 @@ flowchart LR
             <strong>Critical — the N×N thread explosion:</strong>
             If <code>torch.set_num_threads(N)</code> is called globally or per worker where N = number of cores,
             and the pool has N workers, each worker spawns N PyTorch internal threads → N × N threads on N cores.
-            On dellserver: 28 workers × 28 torch threads = 784 threads contending on 28 cores.
+            On SERVER-0: 28 workers × 28 torch threads = 784 threads contending on 28 cores.
             <br><br>
             Fix: <code>torch.set_num_threads(1)</code> inside the <strong>worker initializer</strong>
             (not the main thread). Each worker uses exactly 1 PyTorch thread. N workers × 1 thread = N cores max.
@@ -821,44 +842,130 @@ flowchart LR
 
     <!-- ─── 9. Crawler ───────────────────────────── -->
     <section id="crawler">
-        <h2>9. Crawler</h2>
+        <h2>9. Crawler &amp; Deep Project Scanner</h2>
         <p>
             A background thread ingests project knowledge automatically every 5 minutes,
             ensuring the episode store stays current without manual intervention.
+            The deep project scanner recursively walks all <code>0_*</code> dirs plus <code>HUBITAT</code>
+            and <code>NETWORK</code> across all configured machines.
         </p>
+        <div class="note note-green">
+            <strong>DB-only configuration:</strong> All crawler source roots and machine roots are stored
+            exclusively in MongoDB (<code>settings</code> collection, <code>_id: "crawler_config"</code>).
+            There are no hardcoded paths in the code. On first run, empty config is seeded — configure
+            sources and machine roots via the dashboard <strong>Settings</strong> tab. The JSONL ingester
+            source roots are also DB-only (<code>_id: "jsonl_config"</code>).
+        </div>
         <h3>Sources Crawled</h3>
         <table>
-            <tr><th>Source Type</th><th>Examples</th><th>Machine</th></tr>
+            <tr><th>Source Type</th><th>Examples</th><th>Scope</th></tr>
             <tr>
-                <td>CLAUDE.md files</td>
-                <td>Project instructions, rules, context</td>
-                <td>All machines via SSH</td>
-            </tr>
-            <tr>
-                <td>Handoff buffers</td>
-                <td><code>README_handoff.md</code></td>
+                <td>Named sources</td>
+                <td>CLAUDE.md, handoffs, histories, intercom, genesis</td>
                 <td>All machines</td>
             </tr>
             <tr>
-                <td>Project histories</td>
-                <td><code>README_project_history_*.md</code></td>
+                <td>Docker projects</td>
+                <td>CLAUDE.md, README.md, *.py, *.sh at project root</td>
                 <td>All machines</td>
             </tr>
             <tr>
-                <td>Source code</td>
-                <td>Key <code>.py</code>, <code>.sh</code>, config files</td>
-                <td>dellserver (local)</td>
+                <td>Deep project scanner</td>
+                <td><code>.ino</code>, <code>.cpp</code>, <code>.h</code>, <code>.groovy</code>, <code>.py</code>, <code>.sh</code>, <code>.js</code>, <code>.ts</code>, <code>.md</code>, <code>.yml</code></td>
+                <td>All 0_* dirs + HUBITAT/NETWORK on all machines</td>
+            </tr>
+            <tr>
+                <td>Scripts</td>
+                <td><code>0_SCRIPTS/**/*.sh</code></td>
+                <td>All machines</td>
+            </tr>
+            <tr>
+                <td>Teachings</td>
+                <td><code>0_TEACHINGS/**/*.md</code></td>
+                <td>SERVER-0</td>
+            </tr>
+            <tr>
+                <td>Documents</td>
+                <td>OneDrive <code>.docx</code> files (tags from DB patterns)</td>
+                <td>SERVER-0</td>
             </tr>
         </table>
         <div class="note note-blue">
-            Deduplication is content-hash based. Re-crawling the same unchanged file produces no new episode.
-            Only modified or new content generates an ingest.
+            Deduplication is SHA-256 content-hash based. Re-crawling the same unchanged file produces no new episode.
+            Files over 64KB are skipped. Build dirs, <code>node_modules</code>, vendored libraries, and archives are excluded.
+            Docx tag patterns (filename/content matching with optional regex) are stored in MongoDB and editable from the dashboard.
         </div>
     </section>
 
-    <!-- ─── 10. API ──────────────────────────────── -->
+    <!-- ─── 10. Trainers ─────────────────────────── -->
+    <section id="trainers">
+        <h2>10. GPU Trainer Containers (Training + Inference)</h2>
+        <p>
+            Each GPU machine runs a FastAPI trainer container that serves both fine-tuning management
+            and model inference. The Dockerfile installs PyTorch via a <code>TORCH_INDEX_URL</code> build arg
+            (CUDA: <code>cu121</code>, ROCm: <code>rocm6.2</code>, CPU: <code>cpu</code>).
+            On startup, the container auto-loads the base model (Qwen2.5-1.5B) + QLoRA adapter in 4-bit
+            quantization and exposes a <code>/generate</code> endpoint for streaming text generation.
+        </p>
+        <h3>Architecture</h3>
+        <table>
+            <tr><th>Aspect</th><th>Design</th></tr>
+            <tr>
+                <td>Container image</td>
+                <td><code>python:3.12-slim</code> + procps + torch + transformers + peft + bitsandbytes + accelerate. <code>TORCH_INDEX_URL</code> build arg selects GPU backend.</td>
+            </tr>
+            <tr>
+                <td>GPU access</td>
+                <td>ROCm: <code>/dev/kfd</code>, <code>/dev/dri</code> + <code>group_add</code> GIDs. CUDA: NVIDIA Container Toolkit + <code>deploy.resources.reservations.devices</code> block.</td>
+            </tr>
+            <tr>
+                <td>Training process</td>
+                <td>Subprocess running host Python with host venv's PyTorch. Managed via PID tracking.</td>
+            </tr>
+            <tr>
+                <td>Inference</td>
+                <td>Base model + QLoRA adapter loaded in 4-bit (bitsandbytes NF4). Streaming via <code>TextIteratorStreamer</code>. Auto-loads on startup (<code>AUTO_LOAD_MODEL=true</code>).</td>
+            </tr>
+            <tr>
+                <td>Status parsing</td>
+                <td>Regex on tqdm progress lines + HF Trainer metric dicts from <code>train.log</code></td>
+            </tr>
+            <tr>
+                <td>GPU stats</td>
+                <td><code>rocm-smi</code> (mounted from host) or <code>nvidia-smi</code> — polled at 500ms</td>
+            </tr>
+            <tr>
+                <td>Checkpointing</td>
+                <td>HF Trainer saves every 500 steps. Resume with <code>--resume True</code>. Survives reboot.</td>
+            </tr>
+        </table>
+
+        <h3>Compose files</h3>
+        <table>
+            <tr><th>File</th><th>GPU</th><th>TORCH_INDEX_URL</th></tr>
+            <tr><td><code>docker-compose.server.yml</code></td><td>NVIDIA (CUDA)</td><td><code>cu121</code></td></tr>
+            <tr><td><code>docker-compose.office.yml</code></td><td>AMD (ROCm 6.2)</td><td><code>rocm6.2</code></td></tr>
+        </table>
+
+        <div class="note note-green">
+            <strong>NVIDIA Container Toolkit required</strong> on CUDA GPU machines. The compose file uses
+            <code>deploy.resources.reservations.devices</code> which requires the toolkit. ROCm machines
+            use direct device mounts instead.
+        </div>
+
+        <h3>AnamnesisGPT Proxy</h3>
+        <p>
+            The main Anamnesis app acts as a proxy to the trainer inference endpoints via the
+            <code>NANOGPT_URLS</code> env var (comma-separated list of trainer URLs). When a chat
+            request uses the AnamnesisGPT backend, the proxy tries each GPU endpoint in order
+            until one responds — automatic failover across machines. Both streaming (SSE) and
+            non-streaming modes are supported.
+        </p>
+    </section>
+
+    <!-- ─── 11. API ──────────────────────────────── -->
     <section id="api">
-        <h2>10. API Reference</h2>
+        <h2>11. API Reference</h2>
         <table>
             <tr><th>Method</th><th>Path</th><th>Purpose</th></tr>
             <tr><td><code>POST</code></td><td><code>/api/episodes</code></td><td>Ingest new episode</td></tr>
@@ -879,15 +986,37 @@ flowchart LR
             <tr><td><code>GET</code></td><td><code>/api/embedding/config</code></td><td>Current model + CPU config</td></tr>
             <tr><td><code>POST</code></td><td><code>/api/embedding/model</code></td><td>Switch embedding model</td></tr>
             <tr><td><code>POST</code></td><td><code>/api/embedding/cpu</code></td><td>Update CPU affinity (no reload)</td></tr>
-            <tr><td><code>GET</code></td><td><code>/dashboard</code></td><td>HTML dashboard</td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/crawler/config</code></td><td>Crawler machine roots + named sources</td></tr>
+            <tr><td><code>PUT</code></td><td><code>/api/crawler/config/machine-roots</code></td><td>Update machine roots</td></tr>
+            <tr><td><code>PUT</code></td><td><code>/api/crawler/config/sources</code></td><td>Update named sources</td></tr>
+            <tr><td><code>GET/PUT</code></td><td><code>/api/crawler/config/docx-tag-patterns</code></td><td>Docx filename/content tag patterns (DB-stored)</td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/anamnesis-gpt/status</code></td><td>AnamnesisGPT availability + GPU endpoints</td></tr>
+            <tr><td><code>POST</code></td><td><code>/api/anamnesis-gpt/generate</code></td><td>Proxy to trainer /generate with multi-endpoint failover</td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/config/trainers</code></td><td>Trainer URLs + labels (env-backed)</td></tr>
+            <tr><td><code>GET</code></td><td><code>/dashboard</code></td><td>HTML dashboard (all tabs)</td></tr>
             <tr><td><code>GET</code></td><td><code>/chat</code></td><td>Standalone ANAMNESIS.CHAT page</td></tr>
             <tr><td><code>GET</code></td><td><code>/health</code></td><td>Health check</td></tr>
         </table>
+
+        <h3>Trainer Container API (per GPU machine, port 3011)</h3>
+        <table>
+            <tr><th>Method</th><th>Path</th><th>Purpose</th></tr>
+            <tr><td><code>GET</code></td><td><code>/health</code></td><td>Machine name + GPU type</td></tr>
+            <tr><td><code>GET</code></td><td><code>/status</code></td><td>Training progress, metrics, loss history (log parsing)</td></tr>
+            <tr><td><code>GET</code></td><td><code>/gpu</code></td><td>GPU stats only — lightweight, safe at 500ms poll</td></tr>
+            <tr><td><code>POST</code></td><td><code>/start</code></td><td>Launch training script (optional resume from checkpoint)</td></tr>
+            <tr><td><code>POST</code></td><td><code>/stop</code></td><td>SIGTERM training process</td></tr>
+            <tr><td><code>GET</code></td><td><code>/log/tail</code></td><td>Last N lines of training log</td></tr>
+            <tr><td><code>POST</code></td><td><code>/generate</code></td><td>Streaming SSE text generation (or non-streaming). Proxied by AnamnesisGPT.</td></tr>
+            <tr><td><code>GET</code></td><td><code>/inference/status</code></td><td>Model loaded? Base model, adapter path, device, error.</td></tr>
+            <tr><td><code>POST</code></td><td><code>/inference/load</code></td><td>Load fine-tuned model into GPU memory</td></tr>
+            <tr><td><code>POST</code></td><td><code>/inference/unload</code></td><td>Unload model, free GPU memory</td></tr>
+        </table>
     </section>
 
-    <!-- ─── 11. Deployment ──────────────────────── -->
+    <!-- ─── 12. Deployment ──────────────────────── -->
     <section id="deployment">
-        <h2>11. Deployment</h2>
+        <h2>12. Deployment</h2>
         <h3>Docker Compose Services</h3>
         <table>
             <tr><th>Service</th><th>Image</th><th>Port</th><th>Notes</th></tr>
@@ -903,16 +1032,40 @@ flowchart LR
                 <td>3010</td>
                 <td>Uvicorn + <code>--reload</code> (watchfiles), SSH keys mounted</td>
             </tr>
+            <tr>
+                <td><code>anamnesis-trainer</code></td>
+                <td>python:3.12-slim + torch (built with <code>TORCH_INDEX_URL</code>)</td>
+                <td>3011</td>
+                <td>FastAPI per GPU machine: training + inference. CUDA via NVIDIA Container Toolkit, ROCm via device mounts. Separate compose files: <code>docker-compose.server.yml</code> (CUDA), <code>docker-compose.office.yml</code> (ROCm).</td>
+            </tr>
         </table>
         <h3>Operations</h3>
-        <pre># Full rebuild + start
+        <pre># Pull deployment config from AWS Secrets Manager → .env
+./pull_env.sh            # pulls ANAMNESIS-Secrets (profile 1)
+./pull_env.sh 2          # use profile 2 (work)
+
+# Full rebuild + start
 ./deploy.sh
 
-# Start existing containers
+# Start existing containers (auto-runs pull_env.sh)
 ./start.sh
 
 # Stop (triggers shutdown checkpoint for in-progress re-embed)
 ./stop.sh</pre>
+
+        <h3>Environment &amp; Secrets</h3>
+        <p>All deployment-specific config (IPs, paths, hostnames, usernames) lives in
+        <strong>AWS Secrets Manager</strong> under the secret <code>ANAMNESIS-Secrets</code>.
+        No private values are committed to the repo.</p>
+        <table>
+            <tr><th>Tool</th><th>Purpose</th></tr>
+            <tr><td><code>pull_env.sh</code></td><td>Pulls <code>ANAMNESIS-Secrets</code> from AWS → writes <code>.env</code> (gitignored). Called automatically by <code>start.sh</code>.</td></tr>
+            <tr><td><code>.env.example</code></td><td>Documents all env vars with placeholder values. Copy and edit for manual setup.</td></tr>
+            <tr><td><code>.env</code></td><td>Consumed by <code>docker-compose.yml</code> for volume mounts, URLs, SSH hosts. Never committed.</td></tr>
+        </table>
+        <p>To add or update a secret field:</p>
+        <pre># Uses bash_utils helper (source ~/.bash_utils first)
+update_aws_secret ANAMNESIS-Secrets NEW_KEY new_value</pre>
 
         <div class="note note-green">
             <strong>Live reload:</strong> The app container runs with Uvicorn <code>--reload</code>.
@@ -923,7 +1076,7 @@ flowchart LR
 
         <h3>Re-embed Checkpoint System</h3>
         <p>
-            Re-embedding 3000+ episodes takes hours on CPU. The checkpoint system ensures progress
+            Re-embedding 7000+ episodes takes hours on CPU. The checkpoint system ensures progress
             is never fully lost:
         </p>
         <table>
@@ -947,9 +1100,9 @@ flowchart LR
         </table>
     </section>
 
-    <!-- ─── 12. Philosophy ──────────────────────── -->
+    <!-- ─── 13. Philosophy ──────────────────────── -->
     <section id="philosophy">
-        <h2>12. Design Philosophy</h2>
+        <h2>13. Design Philosophy</h2>
 
         <div class="philosophy">
             "The unit of storage must be the episode, not the concept. Concepts are not stored —
@@ -1000,7 +1153,7 @@ flowchart LR
 
     <footer>
         <p>ANAMNESIS · Part of the Genesis Persistence Project · Elfege Leylavergne · 2026</p>
-        <p style="margin-top:8px; font-size:0.8em">dellserver · 192.168.10.20:3010 · MongoDB Atlas Local · sentence-transformers · FastAPI</p>
+        <p style="margin-top:8px; font-size:0.8em">SERVER-0 · :3010 · MongoDB Atlas Local · sentence-transformers · FastAPI</p>
     </footer>
 
 </div>
@@ -1011,14 +1164,15 @@ flowchart LR
         theme: 'dark',
         themeVariables: {
             background: '#161b22',
-            primaryColor: '#1f2937',
+            primaryColor: '#1a3a5c',
             primaryTextColor: '#e6edf3',
-            primaryBorderColor: '#30363d',
+            primaryBorderColor: '#58a6ff',
             lineColor: '#58a6ff',
-            secondaryColor: '#0d1117',
-            tertiaryColor: '#161b22',
-            nodeBorder: '#30363d',
+            secondaryColor: '#2d1b4e',
+            tertiaryColor: '#1b3a2a',
+            nodeBorder: '#58a6ff',
             clusterBkg: '#161b22',
+            clusterBorder: '#30363d',
             titleColor: '#e6edf3',
             edgeLabelBackground: '#161b22',
             fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif'

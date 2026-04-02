@@ -1,0 +1,31 @@
+services:
+  trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/rocm6.2
+    image: anamnesis-trainer:office
+    container_name: anamnesis-trainer-office
+    ports:
+      - "3011:3011"
+    volumes:
+      - ./app:/app
+      - ${TRAIN_HOST_DIR:-./train_data}:/train
+      - ${HF_CACHE_DIR:-~/.cache/huggingface}:/root/.cache/huggingface
+      - /opt/rocm-6.3.3:/opt/rocm-6.3.3:ro
+      - /usr/bin/rocm-smi:/usr/bin/rocm-smi:ro
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - "44"    # video
+      - "992"   # render
+    environment:
+      GPU_TYPE: rocm
+      HSA_OVERRIDE_GFX_VERSION: "10.3.0"
+      MACHINE_NAME: office
+      TRAIN_DIR: /train
+      VENV_PYTHON: /usr/local/bin/python
+      TRAIN_SCRIPT: /train/qlora_train_rocm.py
+    restart: unless-stopped

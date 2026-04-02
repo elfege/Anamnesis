@@ -37,10 +37,10 @@ Top-K relevant episodes loaded into context
 | API + Dashboard | FastAPI + uvicorn | 3010 |
 | Episode store | MongoDB Atlas Local 8.0 ($vectorSearch) | 5438 |
 | Embedding model | sentence-transformers `bge-large-en-v1.5` (1024 dims, local) | — |
-| Crawler | Python async — ingests CLAUDE.md, handoffs, code | — |
-| JSONL Ingester | Scores + summarizes conversation logs | — |
-| Chat | Ollama (local) or Claude API | — |
-| Trainer | FastAPI container per GPU machine | 3011 |
+| Crawler | Python async — ingests CLAUDE.md, handoffs, code (DB-configured) | — |
+| JSONL Ingester | Scores + summarizes conversation logs (DB-configured roots) | — |
+| Chat | Ollama (local), Claude API, or AnamnesisGPT | — |
+| Trainer + Inference | FastAPI container per GPU machine (training + /generate) | 3011 |
 
 ## Episode Schema
 
@@ -69,30 +69,55 @@ Top-K relevant episodes loaded into context
 | JSONL conversation log ingester | ✅ Live |
 | Ollama chat integration | ✅ Live |
 | Claude API chat integration | ✅ Live |
-| AnamnesisGPT (personal LLM, nanoGPT) | ✅ Live |
-| Trainer containers (GPU fine-tune, multi-machine) | ✅ Live |
+| AnamnesisGPT (personal LLM, multi-GPU failover) | ✅ Live |
+| Trainer containers (GPU fine-tune + inference, multi-machine) | ✅ Live |
 | Training dashboard tab | ✅ Live |
+| Terminal panel (backend activity log) | ✅ Live |
 
 ## Trainer Containers
 
-`trainers/` contains a lightweight FastAPI service that manages LLM fine-tuning jobs on GPU machines. Deploy one container per machine:
+`trainers/` contains a FastAPI service that manages both LLM fine-tuning and inference on GPU machines. Each container loads the base model (Qwen2.5-1.5B) + QLoRA adapter in 4-bit quantization and serves a `/generate` endpoint for text generation. Deploy one container per machine:
 
 ```
 trainers/
-  app/           FastAPI trainer API (status, start, stop, log tail)
-  Dockerfile     python:3.12-slim — no torch (uses host venv via mount)
-  docker-compose.trainer1.yml   ROCm / AMD GPU
-  docker-compose.trainer2.yml   CUDA / NVIDIA GPU
+  app/
+    main.py        FastAPI: training + inference endpoints
+    inference.py   Model loading, 4-bit quant, streaming generation
+    trainer.py     Training subprocess management
+    gpu.py         GPU stats (ROCm / CUDA)
+  Dockerfile       python:3.12-slim + torch (TORCH_INDEX_URL build arg)
+  docker-compose.server.yml    CUDA / NVIDIA GPU
+  docker-compose.office.yml    ROCm / AMD GPU
 ```
 
-Configure hosts in `.env` (gitignored):
+The Dockerfile accepts a `TORCH_INDEX_URL` build arg to select the correct PyTorch backend:
+- CUDA: `https://download.pytorch.org/whl/cu121`
+- ROCm: `https://download.pytorch.org/whl/rocm6.2`
+- CPU:  `https://download.pytorch.org/whl/cpu`
+
+**Inference endpoints** (per trainer container, port 3011):
+- `POST /generate` — streaming SSE text generation (or non-streaming)
+- `GET /inference/status` — model loaded? base model, adapter path, device
+- `POST /inference/load` — load model into GPU memory
+- `POST /inference/unload` — free GPU memory
+
+Model auto-loads on container startup (`AUTO_LOAD_MODEL=true`).
+
+**Requirement:** NVIDIA Container Toolkit must be installed on CUDA GPU machines. ROCm machines need `/dev/kfd` + `/dev/dri` device access.
+
+**AnamnesisGPT proxy with failover:** The main Anamnesis app proxies generation requests to trainer containers via the `NANOGPT_URLS` env var (comma-separated list of trainer URLs). Endpoints are tried in order until one responds — automatic failover across GPU machines.
+
+Configure via `.env` (gitignored). Two options:
+
 ```bash
-TRAINER_1_HOST=<ssh-alias>
-TRAINER_2_HOST=<ssh-alias>
-TRAINER_URLS=server-1:http://<host1>:3011,server-2:http://<host2>:3011
+# Option A: Pull from AWS Secrets Manager (recommended)
+./pull_env.sh         # pulls ANAMNESIS-Secrets → .env
+
+# Option B: Manual
+cp .env.example .env  # edit with your values
 ```
 
-Deploy:
+Deploy trainers:
 ```bash
 ./deploy_trainers.sh              # both machines
 ./deploy_trainers.sh --server1-only
@@ -105,7 +130,8 @@ Deploy:
 2. **Dual storage: summary + raw exchange.** Summary for cheap retrieval; raw exchange for high-fidelity reconstruction when needed.
 3. **Retrieval count tracking.** Episodes that are frequently retrieved are more "alive."
 4. **Instance-aware.** Episodes are tagged by source instance — cross-instance learning is a feature.
-5. **Trainer containers are thin wrappers.** GPU access via device mounts; PyTorch runs from the host venv — no torch rebuild in Docker.
+5. **All source configuration lives in MongoDB.** No hardcoded paths in code. Crawler sources, machine roots, and JSONL source roots are configured via the dashboard Settings tab. First run seeds empty config.
+6. **Trainer containers serve both training and inference.** Each container loads a QLoRA-adapted model and exposes a `/generate` endpoint alongside training management.
 
 ## Relationship to Genesis
 
@@ -114,7 +140,7 @@ This project lives inside `0_GENESIS_PROJECT/` because it is the technical imple
 ## Quick Start
 
 ```bash
-cp .env.example .env   # fill in API keys and trainer hosts
+./pull_env.sh            # or: cp .env.example .env && edit
 ./start.sh
 # Dashboard: http://localhost:3010/dashboard
 ```

@@ -39,12 +39,8 @@ logger = logging.getLogger("anamnesis.jsonl_ingester")
 
 # ─── Configuration ──────────────────────────────────────────────
 
-# Claude Code project dirs as seen inside the Docker container
-JSONL_SOURCE_ROOTS = {
-    "dellserver": "/sources/dellserver/.claude/projects",
-    "server": "/sources/server/.claude/projects",
-    "officewsl": "/sources/officewsl/.claude/projects",
-}
+# Runtime config — loaded exclusively from DB. Empty until load_jsonl_source_roots().
+JSONL_SOURCE_ROOTS: dict[str, str] = {}
 
 # Min exchange length (chars) to consider for summarization
 MIN_EXCHANGE_LENGTH = 200
@@ -129,6 +125,46 @@ async def update_jsonl_settings(updates: dict) -> dict:
         upsert=True,
     )
     return await get_jsonl_settings()
+
+
+async def load_jsonl_source_roots():
+    """Load JSONL source roots from MongoDB. Populates module-level JSONL_SOURCE_ROOTS.
+    If no config exists yet, creates an empty entry — configure via dashboard UI."""
+    global JSONL_SOURCE_ROOTS
+    coll = get_settings_collection()
+    doc = await coll.find_one({"_id": "jsonl_source_roots"})
+    if doc and doc.get("roots"):
+        JSONL_SOURCE_ROOTS = doc["roots"]
+        logger.info(f"JSONL source roots loaded: {list(JSONL_SOURCE_ROOTS.keys())}")
+    else:
+        # Seed empty — user must configure via dashboard
+        await coll.update_one(
+            {"_id": "jsonl_source_roots"},
+            {"$setOnInsert": {"roots": {}}},
+            upsert=True,
+        )
+        JSONL_SOURCE_ROOTS = {}
+        logger.warning("No JSONL source roots configured — add them via the dashboard")
+
+
+async def save_jsonl_source_roots(roots: dict):
+    """Persist JSONL source roots to MongoDB."""
+    global JSONL_SOURCE_ROOTS
+    coll = get_settings_collection()
+    await coll.update_one(
+        {"_id": "jsonl_source_roots"},
+        {"$set": {"roots": roots}},
+        upsert=True,
+    )
+    JSONL_SOURCE_ROOTS = roots
+
+
+async def get_jsonl_source_roots_config() -> dict:
+    """Return current JSONL source roots for the API."""
+    return {
+        "roots": JSONL_SOURCE_ROOTS,
+    }
+
 
 # Summarization prompt
 SUMMARIZE_PROMPT = """You are an episode extractor for an AI memory system called Anamnesis.
@@ -538,25 +574,27 @@ def _content_hash(text: str) -> str:
 
 
 def _extract_project_name(project_dir: str) -> str:
-    """Extract project name from cwd path like /home/elfege/0_NVR → 0_NVR."""
+    """Extract project name from cwd path like /home/user/0_NVR → 0_NVR."""
     if not project_dir:
         return "unknown"
-    # Get the last meaningful path component
+    # Get the last meaningful path component (skip generic path parts)
     parts = project_dir.rstrip("/").split("/")
+    _skip = {"home", "root", "sources", ""}
     for part in reversed(parts):
-        if part and part != "elfege" and part != "home":
+        if part and part.lower() not in _skip and not part.startswith("."):
             return part
     return "unknown"
 
 
 def _extract_instance_from_path(source_root: str) -> str:
-    """Map source root path to instance name."""
-    if "dellserver" in source_root:
-        return "dellserver"
-    elif "server" in source_root:
-        return "server"
-    elif "officewsl" in source_root:
-        return "officewsl"
+    """Map source root path to instance name.
+
+    Looks for 'server-N' patterns in the path, falling back to 'unknown'.
+    """
+    import re
+    match = re.search(r"(server-\d+)", source_root)
+    if match:
+        return match.group(1)
     return "unknown"
 
 

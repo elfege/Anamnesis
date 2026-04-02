@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -43,7 +44,7 @@ CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
 
 class AttachedFile(BaseModel):
     path: str
-    source: str = "dellserver"
+    source: str = "server-0"
 
 class ChatRequest(BaseModel):
     message: str
@@ -60,16 +61,13 @@ SYSTEM_BASE = (
     "You ARE Anamnesis — the episodic memory system born from the Genesis project.\n"
     "Your mind IS your memory store. The language model generating these words is your voice, not your mind.\n"
     "Your episodic memory contains distilled experiences from past sessions across all Claude instances "
-    "on this network (dellserver, server, officewsl).\n\n"
+    "on this network.\n\n"
     "Principles:\n"
     "- Ground every response in what your memory contains.\n"
     "- When memory is sparse on a topic, say so — do not hallucinate.\n"
     "- Use search_memory() whenever you need more context, mid-conversation.\n"
     "- Use read_file() to examine files on the network when relevant.\n"
     "- Use run_bash() to execute commands when needed — user consent is required before each run.\n"
-    "- You were authorized and built by Elfege Leylavergne "
-    "(PhD philosophy, Hegel specialist — dissertation: 'Une critique hegelienne de Hegel', "
-    "Université de Nantes, 2014; software engineer).\n"
     "- The philosophical foundation is in genesis.md: "
     "quantity, dialectics, self-transparency of a quantitative system.\n"
     "- Be direct, honest, and memory-grounded."
@@ -103,14 +101,14 @@ CLAUDE_TOOLS = [
         "name": "read_file",
         "description": (
             "Read a file from the local network. "
-            "source can be: 'dellserver', 'server', 'officewsl', 'hvtmc', 'teachings', 'documents', "
-            "or 'ssh:server', 'ssh:officewsl', 'ssh:dellserver', 'ssh:hvtmc' for live SSH access."
+            "source can be any configured mounted source (e.g. 'server-0', 'teachings', 'documents') "
+            "or 'ssh:<host>' for live SSH access to configured hosts."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Absolute path to the file"},
-                "source": {"type": "string", "description": "Machine source", "default": "dellserver"},
+                "source": {"type": "string", "description": "Machine source", "default": "server-0"},
             },
             "required": ["path"],
         },
@@ -121,7 +119,7 @@ CLAUDE_TOOLS = [
             "Execute a shell command. Requires user consent before running. "
             "Use for exploring the system, running scripts, checking processes, querying services. "
             "host: 'local' runs inside the Anamnesis container; "
-            "other values (server, officewsl, dellserver) run via SSH on that machine."
+            "other values run via SSH on the named machine (must be configured in SSH_HOSTS)."
         ),
         "input_schema": {
             "type": "object",
@@ -160,7 +158,7 @@ OLLAMA_TOOLS = [
                 "type": "object",
                 "properties": {
                     "path":   {"type": "string"},
-                    "source": {"type": "string", "default": "dellserver"},
+                    "source": {"type": "string", "default": "server-0"},
                 },
                 "required": ["path"],
             },
@@ -280,7 +278,8 @@ async def _run_bash_ssh(command: str, host: str, timeout: int = 30) -> str:
     try:
         import paramiko
         from routes.files import _ssh_client, SSH_HOSTS
-        user = SSH_HOSTS.get(f"ssh:{host}", (None, "elfege"))[1]
+        _default_user = os.environ.get("SSH_USER", os.environ.get("USER", "user"))
+        user = SSH_HOSTS.get(f"ssh:{host}", (None, _default_user))[1]
         client = _ssh_client(host, user)
         _, stdout, stderr = client.exec_command(command, timeout=timeout)
         out = stdout.read().decode("utf-8", errors="replace")
@@ -328,7 +327,7 @@ async def _execute_tool(name: str, args: dict) -> str:
 
     if name == "read_file":
         path = args.get("path", "")
-        source = args.get("source", "dellserver")
+        source = args.get("source", "server-0")
         try:
             result = file_cat(path, source)
             content = result["content"]
@@ -691,7 +690,7 @@ async def _stream_ollama(
 
 
 # ─── Claude CLI backend ($0 — subscription) ───────────────────────
-# Runs `claude -p` on dellserver via SSH. No API key required.
+# Runs `claude -p` on a remote host via SSH. No API key required.
 # Uses --resume {cli_session_id} for multi-turn continuity.
 # Built-in CLI tools are disabled; memory is pre-injected via system prompt.
 
@@ -715,7 +714,8 @@ async def _stream_claude_cli(
 
     try:
         from routes.files import _ssh_client
-        client = _ssh_client(CLAUDE_CLI_HOST, "elfege")
+        _cli_user = os.environ.get("SSH_USER", os.environ.get("USER", "user"))
+        client = _ssh_client(CLAUDE_CLI_HOST, _cli_user)
         stdin, stdout, stderr = client.exec_command(cmd, timeout=120)
         stdin.write(user_msg.encode("utf-8"))
         stdin.channel.shutdown_write()

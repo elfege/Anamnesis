@@ -16,7 +16,7 @@ Schedule presets (in seconds):
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from database import get_settings_collection
@@ -87,7 +87,7 @@ def _seconds_until_hour(target_hour: int) -> int:
     now = datetime.now(tz=tz)
     target = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
     if target <= now:
-        target = target.replace(day=target.day + 1)
+        target += timedelta(days=1)
     return int((target - now).total_seconds())
 
 

@@ -11,7 +11,8 @@ async def get_gpu_stats(gpu_type: str) -> dict:
 async def _rocm_stats() -> dict:
     try:
         proc = await asyncio.create_subprocess_exec(
-            "rocm-smi", "--showuse", "--showmeminfo", "vram", "--showtemp", "--showpower", "--json",
+            "python3", "/opt/rocm-6.3.3/libexec/rocm_smi/rocm_smi.py",
+            "--showuse", "--showmeminfo", "vram", "--showtemp", "--showpower", "--json",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )

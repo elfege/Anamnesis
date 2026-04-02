@@ -9,11 +9,13 @@ Source types:
   - Named SOURCES: specific files (genesis, handoff, history, intercom, user profile)
   - Project scanner: discovers projects by docker-compose.yml presence, ingests
     CLAUDE.md, README.md, docker-compose.yml, *.sh, *.py at project root
+  - Deep project scanner: recursively scans all 0_* dirs + HUBITAT/NETWORK for
+    code files (.ino, .cpp, .h, .groovy, .py, .sh, .js, .ts, etc.) up to 64KB each
   - Scripts scanner: crawls 0_SCRIPTS/ for .sh files (bash style authority)
   - Teachings: each .md file in 0_TEACHINGS/ = one episode
   - Documents: .docx files from OneDrive
 
-Machines: dellserver (local $HOME), server, officewsl, hvtmc (OHVD_APP_PROD).
+Machines are configured via the dashboard (stored in MongoDB).
 Remote machines are staged via sync_sources.sh (runs hourly via cron).
 """
 
@@ -29,71 +31,95 @@ from typing import Optional
 from docx import Document as DocxDocument
 from docx.opc.exceptions import PackageNotFoundError
 
-from database import get_episodes_collection
+from database import get_episodes_collection, get_settings_collection
 from embedding import get_embedding
 from config import MONGO_DB
 
 logger = logging.getLogger("anamnesis.crawler")
 
-# ─── Source Definitions ──────────────────────────────────────────
-# Paths are as seen inside the Docker container (via volume mounts)
+# ─── Source Config ────────────────────────────────────────────────
+# All config lives in MongoDB (settings collection, _id: "crawler_config").
+# On first run with empty DB, empty lists are seeded — configure via dashboard.
+# No hardcoded paths in code (this repo is public).
 
-SOURCES = [
-    {
-        "name": "genesis",
-        "path": "/sources/dellserver/0_GENESIS_PROJECT/genesis.md",
-        "instance": "office-genesis",
-        "project": "0_GENESIS_PROJECT",
-        "description": "Philosophical persistence insights — Hegel, quantity, AI growth",
-    },
-    {
-        "name": "handoff",
-        "path": "/sources/dellserver/README_handoff.md",
-        "instance": "office",
-        "project": "cross-project",
-        "description": "Session handoff buffer — recent work, TODOs, file changes",
-    },
-    {
-        "name": "project_history_officewsl",
-        "path": "/sources/dellserver/README_project_history_officewsl.md",
-        "instance": "office",
-        "project": "cross-project",
-        "description": "Long-term project history (officewsl)",
-    },
-    {
-        "name": "project_history_server",
-        "path": "/sources/dellserver/README_project_history_server.md",
-        "instance": "office",
-        "project": "cross-project",
-        "description": "Long-term project history (server)",
-    },
-    {
-        "name": "intercom",
-        "path": "/sources/server/0_CLAUDE_IC/intercom.md",
-        "instance": "cross-instance",
-        "project": "0_CLAUDE_IC",
-        "description": "Cross-instance intercom messages",
-    },
-    {
-        "name": "user_profile",
-        "path": "/sources/server/0_CLAUDE_IC/user_profile_elfege.md",
-        "instance": "cross-instance",
-        "project": "0_CLAUDE_IC",
-        "description": "Elfege's persistent user profile — background, preferences, history",
-    },
-]
+# Runtime config — populated by load_crawler_config() from DB at startup.
+SOURCES: list[dict] = []
+MACHINE_ROOTS: dict[str, str] = {}
 
-# Machine roots — paths as seen inside the container (via volume mounts / staging)
-MACHINE_ROOTS = {
-    "dellserver": "/sources/dellserver",
-    "server":     "/sources/server",
-    "officewsl":  "/sources/officewsl",
-    "hvtmc":      "/sources/hvtmc",
-    "jessica":    "/sources/jessica",
-}
+
+# ─── Persistent Config ───────────────────────────────────────────
+
+async def load_crawler_config():
+    """Load crawler config from MongoDB. Seeds empty config on first run.
+    After this call, SOURCES and MACHINE_ROOTS are always DB-driven."""
+    global SOURCES, MACHINE_ROOTS
+    coll = get_settings_collection()
+    doc = await coll.find_one({"_id": "crawler_config"})
+
+    if not doc:
+        # First run — seed empty config; user configures via dashboard
+        logger.warning("No crawler config in DB — seeding empty. Configure via dashboard.")
+        seed = {"sources": [], "machine_roots": {}}
+        await coll.update_one({"_id": "crawler_config"}, {"$set": seed}, upsert=True)
+        doc = seed
+
+    SOURCES = doc.get("sources", [])
+    MACHINE_ROOTS = doc.get("machine_roots", {})
+    logger.info(f"Crawler config loaded: {len(SOURCES)} sources, {len(MACHINE_ROOTS)} machine roots")
+
+
+async def save_crawler_config(sources: list = None, machine_roots: dict = None):
+    """Persist crawler config to MongoDB. Only updates provided fields."""
+    global SOURCES, MACHINE_ROOTS
+    coll = get_settings_collection()
+    update = {}
+    if sources is not None:
+        update["sources"] = sources
+        SOURCES = sources
+    if machine_roots is not None:
+        update["machine_roots"] = machine_roots
+        MACHINE_ROOTS = machine_roots
+    if update:
+        await coll.update_one({"_id": "crawler_config"}, {"$set": update}, upsert=True)
+
+
+async def get_crawler_config() -> dict:
+    """Return current crawler config for the API."""
+    return {
+        "sources": SOURCES,
+        "machine_roots": MACHINE_ROOTS,
+    }
 
 # File extensions treated as code (ingested as whole-file episodes, not section-split)
 _CODE_EXTENSIONS = {".sh", ".py", ".yml", ".yaml"}
+
+# Extended code extensions for deep project scanning
+_DEEP_CODE_EXTENSIONS = {
+    ".ino", ".cpp", ".c", ".h",          # Arduino / C/C++
+    ".groovy",                             # Hubitat
+    ".py", ".sh",                          # Python / Bash
+    ".js", ".ts", ".jsx", ".tsx",          # JS/TS
+    ".yml", ".yaml",                       # Config
+    ".java", ".go", ".rs",                 # Other langs
+}
+
+# Dirs to skip when recursively scanning projects
+_SKIP_DIRS = {
+    "build", "node_modules", ".git", "__pycache__", ".gradle",
+    "libraries", "ARCHIVE", "DEPRECATED", "TRASH", "CONFLICTS",
+    "venv", ".venv", "dist", "target", ".pio", ".platformio",
+    "Copy", "copy", "BACKUP", ".idea", ".vscode",
+    "Marlin", "marlin", "ArduinoJson", "ESP8266WiFi",        # Arduino libraries/firmware
+    "packages", "vendor", "third_party", "deps", "lib",      # vendored deps
+    "0_ANAMNESIS_SOURCES",                                     # staged copies (avoid double-ingestion)
+}
+
+# Project dirs to scan (beyond docker-compose-based discovery)
+# Matches: any dir starting with "0_" plus these named dirs
+_EXTRA_PROJECT_NAMES = {"HUBITAT", "0_HUBITAT", "NETWORK", "0_NETWORK"}
+
+# Max file size for code ingestion (skip huge generated/vendored files)
+_MAX_CODE_FILE_BYTES = 64 * 1024  # 64 KB
 
 # Dir name fragments to skip when walking 0_SCRIPTS/
 _SCRIPTS_SKIP = {"DEPRECATED", "TRASH", "ARCHIVE", "CONFLICTS"}
@@ -211,25 +237,17 @@ def _parse_docx(filepath: str) -> str:
     return "\n".join(paragraphs)
 
 
-def _categorize_docx(filename: str, content: str) -> list[str]:
-    """Infer tags for a docx file from filename patterns and content."""
+async def _categorize_docx(filename: str, content: str) -> list[str]:
+    """Infer tags for a docx file using patterns stored in MongoDB."""
+    from database import load_docx_tag_patterns
     tags = ["document", "onedrive"]
     name_lower = filename.lower()
-
-    # Student evaluation pattern: lastname.year.docx
-    if re.match(r"^[a-z]+\.\d{4}\.docx$", name_lower):
-        tags.append("student-evaluation")
-
-    # Named document patterns
-    if "agreement" in name_lower or "authorization" in name_lower:
-        tags.append("legal")
-    if "portfolio" in name_lower:
-        tags.append("portfolio")
-    if "notes" in name_lower:
-        tags.append("notes")
-    if "fasny" in name_lower or "lfny" in name_lower:
-        tags.append("school")
-
+    patterns = await load_docx_tag_patterns()
+    for p in patterns:
+        subject = name_lower if p.get("field", "filename") == "filename" else content.lower()
+        matched = re.search(p["match"], subject) if p.get("regex") else p["match"] in subject
+        if matched and p["tag"] not in tags:
+            tags.append(p["tag"])
     return tags
 
 
@@ -450,7 +468,7 @@ async def _scan_documents_dir() -> int:
             doc_title = filename.replace(".docx", "")
             summary = f"[Document: {doc_title}]\n\n{content}"
 
-            tags = _categorize_docx(filename, content)
+            tags = await _categorize_docx(filename, content)
             source = {
                 "name": f"doc_{doc_title}",
                 "instance": "office",
@@ -529,6 +547,88 @@ async def _scan_projects_dir(machine_root: str, machine_name: str) -> int:
                 except Exception as e:
                     logger.error(f"Failed to ingest {filepath}: {e}")
 
+    return ingested_count
+
+
+async def _scan_deep_projects(machine_root: str, machine_name: str) -> int:
+    """Scan all 0_* dirs + HUBITAT/NETWORK for code files recursively.
+
+    Discovers projects by directory name (0_* prefix or _EXTRA_PROJECT_NAMES).
+    Recurses into subdirs, skipping build/vendor/archive dirs.
+    Ingests .ino, .cpp, .h, .groovy, .py, .sh, .js, .ts, .md, etc.
+    Files over _MAX_CODE_FILE_BYTES are skipped.
+    """
+    root_path = Path(machine_root)
+    if not root_path.is_dir():
+        return 0
+
+    # Find eligible project dirs
+    project_dirs: list[Path] = []
+    for entry in sorted(root_path.iterdir()):
+        if not entry.is_dir():
+            continue
+        name = entry.name
+        if name.startswith("0_") or name in _EXTRA_PROJECT_NAMES:
+            project_dirs.append(entry)
+
+    ingested_count = 0
+    for project_dir in project_dirs:
+        project_name = project_dir.name
+
+        for root, dirs, files in os.walk(project_dir):
+            # Prune skip dirs in-place
+            dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+
+            for filename in files:
+                filepath = os.path.join(root, filename)
+                ext = os.path.splitext(filename)[1].lower()
+
+                if ext == ".md":
+                    pass  # markdown is always welcome
+                elif ext not in _DEEP_CODE_EXTENSIONS:
+                    continue
+
+                # Skip oversized files
+                try:
+                    if os.path.getsize(filepath) > _MAX_CODE_FILE_BYTES:
+                        continue
+                except OSError:
+                    continue
+
+                rel_path = os.path.relpath(filepath, str(project_dir))
+                source_name = f"{machine_name}_{project_name}_{re.sub(r'[^a-zA-Z0-9_-]', '_', rel_path)}"
+                source = {"name": source_name, "instance": machine_name, "project": project_name}
+
+                if ext == ".md":
+                    try:
+                        content = Path(filepath).read_text(encoding="utf-8", errors="replace")
+                    except Exception:
+                        continue
+                    sections = _parse_markdown_sections(content)
+                    tags = ["project", machine_name, project_name, "markdown"]
+                else:
+                    sections = _parse_code_file(filepath)
+                    # Determine language tag
+                    lang_map = {
+                        ".ino": "arduino", ".cpp": "cpp", ".c": "c", ".h": "c-header",
+                        ".groovy": "groovy", ".py": "python", ".sh": "bash",
+                        ".js": "javascript", ".ts": "typescript",
+                        ".jsx": "react", ".tsx": "react",
+                        ".yml": "yaml", ".yaml": "yaml",
+                        ".java": "java", ".go": "go", ".rs": "rust",
+                    }
+                    lang = lang_map.get(ext, "code")
+                    tags = ["project", machine_name, project_name, "code", lang]
+
+                for section in sections:
+                    try:
+                        if await _ingest_section(source, section, tags):
+                            ingested_count += 1
+                    except Exception as e:
+                        logger.error(f"Failed to ingest {filepath}: {e}")
+
+    if ingested_count > 0:
+        logger.info(f"  {machine_name} deep projects: {ingested_count} new episodes")
     return ingested_count
 
 
@@ -613,6 +713,14 @@ async def run_crawl_cycle():
                 logger.info(f"  {machine_name} scripts: {count} new episodes")
         except Exception as e:
             error_msg = f"{machine_name}_scripts: {e}"
+            logger.error(f"  {error_msg}")
+            errors.append(error_msg)
+
+        try:
+            count = await _scan_deep_projects(machine_root, machine_name)
+            total_ingested += count
+        except Exception as e:
+            error_msg = f"{machine_name}_deep_projects: {e}"
             logger.error(f"  {error_msg}")
             errors.append(error_msg)
 

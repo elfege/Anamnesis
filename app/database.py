@@ -191,6 +191,43 @@ async def load_embedding_config() -> dict:
     return doc or {}
 
 
+# ─── Docx tag patterns ──────────────────────────────────────────
+
+_DEFAULT_DOCX_PATTERNS = [
+    {"match": r"^[a-z]+\.\d{4}\.docx$", "tag": "student-evaluation", "field": "filename", "regex": True},
+    {"match": "agreement",               "tag": "legal",              "field": "filename", "regex": False},
+    {"match": "authorization",           "tag": "legal",              "field": "filename", "regex": False},
+    {"match": "portfolio",               "tag": "portfolio",          "field": "filename", "regex": False},
+    {"match": "notes",                   "tag": "notes",              "field": "filename", "regex": False},
+    {"match": "fasny",                   "tag": "school",             "field": "filename", "regex": False},
+    {"match": "lfny",                    "tag": "school",             "field": "filename", "regex": False},
+]
+
+
+async def load_docx_tag_patterns() -> list[dict]:
+    """Load docx tag patterns from DB. Seeds defaults on first call."""
+    settings = get_settings_collection()
+    doc = await settings.find_one({"_id": "docx_tag_patterns"})
+    if doc:
+        return doc.get("patterns", [])
+    # First call — seed defaults
+    await settings.update_one(
+        {"_id": "docx_tag_patterns"},
+        {"$set": {"patterns": _DEFAULT_DOCX_PATTERNS}},
+        upsert=True,
+    )
+    return _DEFAULT_DOCX_PATTERNS
+
+
+async def save_docx_tag_patterns(patterns: list[dict]):
+    settings = get_settings_collection()
+    await settings.update_one(
+        {"_id": "docx_tag_patterns"},
+        {"$set": {"patterns": patterns}},
+        upsert=True,
+    )
+
+
 # ─── Vector Index ────────────────────────────────────────────────
 
 def _vector_index_definition(dimensions: int) -> dict:

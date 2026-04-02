@@ -3,13 +3,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: anamnesis-trainer:server-2
-    container_name: anamnesis-trainer-server-2
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu121
+    image: anamnesis-trainer:server
+    container_name: anamnesis-trainer-server
     ports:
       - "3011:3011"
     volumes:
       - ./app:/app
       - ${TRAIN_HOST_DIR:-./train_data}:/train
+      - ${HF_CACHE_DIR:-~/.cache/huggingface}:/root/.cache/huggingface
     deploy:
       resources:
         reservations:
@@ -19,8 +22,8 @@ services:
               capabilities: [gpu]
     environment:
       GPU_TYPE: cuda
-      MACHINE_NAME: SERVER-2
+      MACHINE_NAME: server
       TRAIN_DIR: /train
-      VENV_PYTHON: /train/venv/bin/python
+      VENV_PYTHON: /usr/local/bin/python
       TRAIN_SCRIPT: /train/qlora_train.py
     restart: unless-stopped

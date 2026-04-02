@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <!-- Möbius strip — square crop, fills favicon slot -->
+  <!-- Back arc (dimmer) -->
+  <path d="M 4 36 C 4 10, 26 4, 38 14 C 44 19, 46 28, 41 35"
+        stroke="#1a3a5c" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <!-- Front arc left (bright) -->
+  <path d="M 4 36 C 6 44, 18 48, 28 44 C 37 40, 42 33, 42 24"
+        stroke="#58a6ff" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <!-- Twist cross piece -->
+  <path d="M 22 8 C 28 13, 30 20, 26 27 C 22 34, 18 36, 16 31"
+        stroke="#bc8cff" stroke-width="4" stroke-linecap="round" fill="none" opacity="0.8"/>
+  <!-- Front arc right (bright, continues loop) -->
+  <path d="M 42 24 C 42 12, 34 5, 23 7"
+        stroke="#58a6ff" stroke-width="6" stroke-linecap="round" fill="none" opacity="0.5"/>
+</svg>

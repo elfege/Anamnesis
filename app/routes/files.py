@@ -10,22 +10,37 @@ logger = logging.getLogger("anamnesis.routes.files")
 router = APIRouter(tags=["files"])
 
 # ─── Mounted sources ──────────────────────────────────────────────
-MOUNTED_SOURCES: dict[str, str] = {
-    "dellserver": "/sources/dellserver",
-    "server":     "/sources/server",
-    "officewsl":  "/sources/officewsl",
-    "hvtmc":      "/sources/hvtmc",
-    "teachings":  "/sources/teachings",
-    "documents":  "/sources/documents",
+# Default source mounts — override via MOUNTED_SOURCES_JSON env var
+# e.g. '{"server-0":"/sources/server-0","server-1":"/sources/server-1"}'
+_DEFAULT_MOUNTED_SOURCES = {
+    "server-0":  "/sources/server-0",
+    "server-1":  "/sources/server-1",
+    "server-2":  "/sources/server-2",
+    "teachings": "/sources/teachings",
+    "documents": "/sources/documents",
 }
+
+def _load_mounted_sources() -> dict[str, str]:
+    raw = os.environ.get("MOUNTED_SOURCES_JSON", "")
+    if raw:
+        import json
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+    return dict(_DEFAULT_MOUNTED_SOURCES)
+
+MOUNTED_SOURCES: dict[str, str] = _load_mounted_sources()
 
 # ─── SSH hosts ────────────────────────────────────────────────────
 # source id → (hostname_or_ip, username)
+# Configure via SSH_HOST_* and SSH_USER env vars; defaults are generic.
+_SSH_USER = os.environ.get("SSH_USER", os.environ.get("USER", "user"))
 SSH_HOSTS: dict[str, tuple[str, str]] = {
-    "ssh:server":    (os.environ.get("SSH_HOST_SERVER",    "server"),              os.environ.get("SSH_USER", "elfege")),
-    "ssh:officewsl": (os.environ.get("SSH_HOST_OFFICEWSL", "officewsl"),           os.environ.get("SSH_USER", "elfege")),
-    "ssh:dellserver":(os.environ.get("SSH_HOST_DELLSERVER","host.docker.internal"),os.environ.get("SSH_USER", "elfege")),
-    "ssh:hvtmc":     (os.environ.get("SSH_HOST_HVTMC",     "hvtmc"),               os.environ.get("SSH_USER", "elfege")),
+    "ssh:server-0": (os.environ.get("SSH_HOST_SERVER0", "host.docker.internal"), _SSH_USER),
+    "ssh:server-1": (os.environ.get("SSH_HOST_SERVER1", "server-1"),             _SSH_USER),
+    "ssh:server-2": (os.environ.get("SSH_HOST_SERVER2", "server-2"),             _SSH_USER),
+    "ssh:server-3": (os.environ.get("SSH_HOST_SERVER3", "server-3"),             _SSH_USER),
 }
 
 SSH_CONFIG_PATH = "/root/.ssh/config"
@@ -225,10 +240,10 @@ async def list_sources():
 
 
 @router.get("/api/files/ls")
-async def api_ls(path: str = "/", source: str = "dellserver"):
+async def api_ls(path: str = "/", source: str = "server-0"):
     return ls(path, source)
 
 
 @router.get("/api/files/cat")
-async def api_cat(path: str, source: str = "dellserver"):
+async def api_cat(path: str, source: str = "server-0"):
     return cat(path, source)
