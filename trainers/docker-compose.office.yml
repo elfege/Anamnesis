@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        TORCH_INDEX_URL: https://download.pytorch.org/whl/rocm6.2
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/rocm6.3
     image: anamnesis-trainer:office
     container_name: anamnesis-trainer-office
     ports:
@@ -27,5 +27,5 @@ services:
       MACHINE_NAME: office
       TRAIN_DIR: /train
       VENV_PYTHON: /usr/local/bin/python
-      TRAIN_SCRIPT: /train/qlora_train_rocm.py
+      TRAIN_SCRIPT: /train/qlora_train.py
     restart: unless-stopped
