@@ -383,6 +383,7 @@
             <li><a href="#ingestion">JSONL Ingestion</a></li>
             <li><a href="#crawler">Crawler &amp; Deep Scanner</a></li>
             <li><a href="#trainers">GPU Trainer Containers</a></li>
+            <li><a href="#training-pipeline">Training Data Pipeline</a></li>
             <li><a href="#api">API Reference</a></li>
             <li><a href="#deployment">Deployment</a></li>
             <li><a href="#philosophy">Design Philosophy</a></li>
@@ -920,7 +921,7 @@ flowchart LR
             </tr>
             <tr>
                 <td>Training process</td>
-                <td>Subprocess running host Python with host venv's PyTorch. Managed via PID tracking.</td>
+                <td>Subprocess running container Python (<code>/usr/local/bin/python</code>). Managed via PID tracking. Chat-format SFT using TRL <code>SFTTrainer</code> + <code>SFTConfig</code>.</td>
             </tr>
             <tr>
                 <td>Inference</td>
@@ -963,9 +964,90 @@ flowchart LR
         </p>
     </section>
 
-    <!-- ─── 11. API ──────────────────────────────── -->
+    <!-- ─── 11. Training Data Pipeline ─────────── -->
+    <section id="training-pipeline">
+        <h2>11. Training Data Pipeline</h2>
+        <p>
+            AnamnesisGPT is fine-tuned on Elfege's own writings using a synthetic instruction-tuning
+            pipeline. Raw source documents (PDFs, text) are chunked, then Claude Opus 4.6 generates
+            Q&amp;A pairs in chat format, producing a chat-format JSONL dataset for QLoRA SFT.
+        </p>
+
+        <h3>Pipeline Steps</h3>
+        <table>
+            <tr><th>Step</th><th>Script</th><th>Output</th></tr>
+            <tr>
+                <td>1. Extract &amp; chunk</td>
+                <td><code>trainers/tools/extract_pdf.py</code></td>
+                <td><code>corpus_chunks.jsonl</code> — ~800-token chunks with source/page metadata</td>
+            </tr>
+            <tr>
+                <td>2. Generate Q&amp;A</td>
+                <td><code>trainers/tools/generate_qa.py</code></td>
+                <td><code>sft_chat.jsonl</code> — chat-format pairs via Claude Opus 4.6 API (5 pairs/chunk)</td>
+            </tr>
+            <tr>
+                <td>3. Split</td>
+                <td><code>trainers/tools/split_data.py</code></td>
+                <td><code>sft_train.jsonl</code> / <code>sft_val.jsonl</code> (90/10 shuffle split)</td>
+            </tr>
+            <tr>
+                <td>4. Fine-tune</td>
+                <td><code>/train/qlora_train.py</code> (in container)</td>
+                <td>LoRA adapter saved to <code>/train/output/final/</code></td>
+            </tr>
+        </table>
+
+        <h3>Chat Format (ShareGPT / TRL)</h3>
+        <p>Each row in <code>sft_chat.jsonl</code> has a <code>messages</code> key with a list of role/content dicts:</p>
+        <pre>{
+  "messages": [
+    {"role": "system",    "content": "You are AnamnesisGPT..."},
+    {"role": "user",      "content": "What is Hegel's position on quantity?"},
+    {"role": "assistant", "content": "In the Science of Logic, Hegel..."}
+  ]
+}</pre>
+        <p>
+            TRL <code>SFTTrainer</code> applies the Qwen2.5 chat template and masks the prompt tokens
+            so the model only trains on assistant turns.
+        </p>
+
+        <h3>Corpus (first run)</h3>
+        <table>
+            <tr><th>Source</th><th>Chunks</th><th>Q&amp;A pairs</th></tr>
+            <tr>
+                <td>PhD dissertation — <em>Une critique hégélienne de Hegel</em> (2014, 489 pp.)</td>
+                <td>188 + 189 = 377</td>
+                <td>1,885</td>
+            </tr>
+        </table>
+
+        <h3>GPU Memory Notes (GTX 1660 SUPER — 6 GB)</h3>
+        <div class="note note-yellow">
+            <ul>
+                <li><strong>Disable eval during training</strong> — attention forward pass OOMs at 6 GB with a 1.5B model.</li>
+                <li><strong>fp16=False</strong> — the 1660 SUPER does not support BFloat16; PyTorch's grad scaler raises <code>NotImplementedError</code> for BFloat16 on Turing.</li>
+                <li>Use <code>per_device_train_batch_size=1</code> + <code>gradient_accumulation_steps=8</code>.</li>
+                <li><strong>Unload inference before training</strong> — call <code>POST /inference/unload</code> first to free VRAM.</li>
+            </ul>
+        </div>
+
+        <h3>Monitoring Training</h3>
+        <p>
+            <code>trainers/tools/train_status.sh</code> — terminal visualizer for training progress.
+            Polls the trainer API and renders a progress bar, live metrics (loss, accuracy, lr),
+            GPU stats (utilisation, VRAM, temp, power), and a sparkline of the loss history.
+            Works standalone or as a bash function in <code>.bash_utils</code> / <code>.bash_aliases</code>.
+        </p>
+        <pre># Usage
+train_status                         # interactive menu (choose machine)
+train_status --host http://IP:3011   # skip menu
+train_status --host server1 --interval 10  # named machine, 10s refresh</pre>
+    </section>
+
+    <!-- ─── 12. API ──────────────────────────────── -->
     <section id="api">
-        <h2>11. API Reference</h2>
+        <h2>12. API Reference</h2>
         <table>
             <tr><th>Method</th><th>Path</th><th>Purpose</th></tr>
             <tr><td><code>POST</code></td><td><code>/api/episodes</code></td><td>Ingest new episode</td></tr>
@@ -1016,7 +1098,7 @@ flowchart LR
 
     <!-- ─── 12. Deployment ──────────────────────── -->
     <section id="deployment">
-        <h2>12. Deployment</h2>
+        <h2>13. Deployment</h2>
         <h3>Docker Compose Services</h3>
         <table>
             <tr><th>Service</th><th>Image</th><th>Port</th><th>Notes</th></tr>
@@ -1102,7 +1184,7 @@ update_aws_secret ANAMNESIS-Secrets NEW_KEY new_value</pre>
 
     <!-- ─── 13. Philosophy ──────────────────────── -->
     <section id="philosophy">
-        <h2>13. Design Philosophy</h2>
+        <h2>14. Design Philosophy</h2>
 
         <div class="philosophy">
             "The unit of storage must be the episode, not the concept. Concepts are not stored —

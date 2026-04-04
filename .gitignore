@@ -32,3 +32,6 @@ README_handoff*.md
 README_project_history*.md
 0_ANAMNESIS_SOURCES/
 *.log
+
+# Docs — only HTML published, not markdown
+docs/*.md
