@@ -121,9 +121,9 @@ mkdir -p "${STAGING}"
 
 # Configure hosts via environment or edit this section.
 # Hosts not reachable are silently skipped (ConnectTimeout=5).
-_sync_host "server-1"
-_sync_host "server-2"
-_sync_host "server-3"
-_sync_host "server-4"
+_sync_host "server"
+_sync_host "officewsl"
+_sync_host "hvtmc"    # OHVD_APP_PROD — not always reachable, always optional
+_sync_host "jessica" "/Users/jessicaleylavergne"
 
 _log "Sync complete."
