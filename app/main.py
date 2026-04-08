@@ -17,9 +17,12 @@ from routes.files import router as files_router
 from routes.bash import router as bash_router
 from routes.embedding import router as embedding_router
 from routes.anamnesis_gpt import router as anamnesis_gpt_router
+from routes.feedback import router as feedback_router
+from routes.context_index import router as context_index_router
 from crawler import start_crawler, stop_crawler, load_crawler_config
 from jsonl_ingester import run_jsonl_ingestion, initialize_ingester, load_jsonl_source_roots
-from scheduler import start_jsonl_scheduler, stop_jsonl_scheduler
+from scheduler import start_jsonl_scheduler, stop_jsonl_scheduler, start_training_scheduler, stop_training_scheduler
+from training_pipeline import run_training_pipeline
 from models_registry import seed_models_registry
 
 # ─── Logging ─────────────────────────────────────────────────────
@@ -79,11 +82,15 @@ async def lifespan(app: FastAPI):
     logger.info("Starting JSONL scheduler...")
     start_jsonl_scheduler(run_jsonl_ingestion)
 
+    logger.info("Starting training pipeline scheduler...")
+    start_training_scheduler(run_training_pipeline)
+
     logger.info("Anamnesis ready.")
 
     yield
 
     # --- Shutdown ---
+    stop_training_scheduler()
     stop_jsonl_scheduler()
     stop_crawler()
 
@@ -130,6 +137,8 @@ app.include_router(files_router)
 app.include_router(bash_router)
 app.include_router(embedding_router)
 app.include_router(anamnesis_gpt_router)
+app.include_router(feedback_router)
+app.include_router(context_index_router)
 
 
 @app.get("/health")
