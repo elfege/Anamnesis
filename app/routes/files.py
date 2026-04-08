@@ -70,6 +70,12 @@ def _find_key() -> Optional[str]:
     for k in SSH_KEY_CANDIDATES:
         if os.path.exists(k):
             return k
+    # Fallback: any id_rsa_* or id_ed25519_* private key (skip .pub)
+    import glob
+    for pattern in ("/root/.ssh/id_ed25519_*", "/root/.ssh/id_rsa_*"):
+        for path in sorted(glob.glob(pattern)):
+            if not path.endswith(".pub"):
+                return path
     return None
 
 

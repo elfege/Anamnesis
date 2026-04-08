@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from config import (
     OLLAMA_URL,
+    OLLAMA_ENDPOINTS,
     OLLAMA_DEFAULT_MODEL,
     ANTHROPIC_API_KEY,
     CLAUDE_MODEL,
@@ -597,12 +598,47 @@ async def _stream_claude(
     yield f"data: {json.dumps({'done': True, 'session_id': session_id, 'backend': 'claude', 'cost': 'API (pay-per-token)'})}\n\n"
 
 
+# ─── Ollama endpoint discovery ─────────────────────────────────────
+
+async def _find_ollama_endpoint() -> tuple[str, str, bool] | None:
+    """Try each Ollama endpoint in priority order, return first reachable one."""
+    # If legacy OLLAMA_URL is explicitly set, use it directly (no fallback)
+    if OLLAMA_URL:
+        return (OLLAMA_URL, "custom", False)
+
+    for url, label, has_gpu in OLLAMA_ENDPOINTS:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{url}/api/tags")
+                if resp.status_code == 200:
+                    logger.info("Ollama endpoint selected: %s (%s)", label, url)
+                    return (url, label, has_gpu)
+        except Exception:
+            logger.debug("Ollama endpoint unreachable: %s (%s)", label, url)
+            continue
+    return None
+
+
 # ─── Ollama agentic streaming ──────────────────────────────────────
 
 async def _stream_ollama(
     system: str, messages: list[dict], model: str, session_id: str, user_msg: str
 ) -> AsyncIterator[str]:
-    url = f"{OLLAMA_URL}/api/chat"
+    endpoint = await _find_ollama_endpoint()
+    if not endpoint:
+        yield f"data: {json.dumps({'error': 'Cannot connect to any Ollama instance (tried office, server, dellserver)'})}\n\n"
+        return
+
+    base_url, label, has_gpu = endpoint
+    url = f"{base_url}/api/chat"
+
+    # Warn if falling back to CPU-only host
+    if not has_gpu:
+        yield f"data: {json.dumps({'token': f'⚠ Warning: using {label} (CPU-only) — responses will be very slow.\\n\\n'})}\n\n"
+
+    # Inform which backend is being used
+    yield f"data: {json.dumps({'ollama_endpoint': label})}\n\n"
+
     full_response: list[str] = []
     current_messages = [{"role": "system", "content": system}] + list(messages)
 
@@ -617,11 +653,11 @@ async def _stream_ollama(
             async with httpx.AsyncClient(timeout=120.0) as client:
                 resp = await client.post(url, json=payload)
                 if resp.status_code != 200:
-                    yield f"data: {json.dumps({'error': f'Ollama {resp.status_code}'})}\n\n"
+                    yield f"data: {json.dumps({'error': f'Ollama {resp.status_code} on {label}'})}\n\n"
                     return
                 data = resp.json()
         except httpx.ConnectError:
-            yield f"data: {json.dumps({'error': 'Cannot connect to Ollama'})}\n\n"
+            yield f"data: {json.dumps({'error': f'Lost connection to Ollama on {label}'})}\n\n"
             return
         except Exception as exc:
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
@@ -685,8 +721,8 @@ async def _stream_ollama(
     reply = "".join(full_response)
     _sessions[session_id].append({"role": "assistant", "content": reply})
     _trim(session_id)
-    await _store_episode(session_id, user_msg, reply, f"ollama:{model}")
-    yield f"data: {json.dumps({'done': True, 'session_id': session_id, 'backend': 'ollama', 'cost': '$0 (local)'})}\n\n"
+    await _store_episode(session_id, user_msg, reply, f"ollama:{model}@{label}")
+    yield f"data: {json.dumps({'done': True, 'session_id': session_id, 'backend': 'ollama', 'cost': f'$0 (local — {label})'})}\n\n"
 
 
 # ─── Claude CLI backend ($0 — subscription) ───────────────────────
@@ -755,11 +791,32 @@ async def _stream_claude_cli(
 
         if rc != 0:
             err = stderr.read().decode("utf-8", errors="replace")[:500]
-            yield f"data: {json.dumps({'error': f'CLI exit {rc}: {err}'})}\n\n"
+            if "command not found" in err.lower() or "no such file" in err.lower():
+                hint = (f"'claude' not found on '{CLAUDE_CLI_HOST}'.  "
+                        f"▸ Install: npm install -g @anthropic-ai/claude-code")
+            elif "permission denied" in err.lower():
+                hint = f"Permission denied running claude on '{CLAUDE_CLI_HOST}'.  ▸ Check user permissions and SSH key auth."
+            else:
+                hint = f"CLI exited with code {rc}: {err}"
+            yield f"data: {json.dumps({'error': hint})}\n\n"
             return
 
     except Exception as exc:
-        yield f"data: {json.dumps({'error': f'Claude CLI error: {exc}'})}\n\n"
+        exc_str = str(exc)
+        # Provide actionable guidance based on common failure modes
+        if "No SSH key found" in exc_str:
+            hint = (f"Claude CLI error: {exc_str}  ▸ The container cannot find SSH keys to reach the CLI host. "
+                    f"Ensure ~/.ssh is mounted in docker-compose.yml and contains id_ed25519 or id_rsa_* keys.")
+        elif "SSH connect failed" in exc_str or "Connection refused" in exc_str:
+            hint = (f"Claude CLI error: {exc_str}  ▸ Cannot SSH to '{CLAUDE_CLI_HOST}'. "
+                    f"Check that CLAUDE_CLI_HOST is set correctly in .env and the host is reachable from the container.")
+        elif "not found" in exc_str.lower() or "No such file" in exc_str:
+            hint = (f"Claude CLI error: {exc_str}  ▸ The 'claude' binary is not installed on '{CLAUDE_CLI_HOST}'. "
+                    f"Install it with: npm install -g @anthropic-ai/claude-code")
+        else:
+            hint = (f"Claude CLI error: {exc_str}  ▸ Check CLAUDE_CLI_HOST (current: '{CLAUDE_CLI_HOST}'), "
+                    f"SSH keys in /root/.ssh/, and that 'claude' is installed on the target host.")
+        yield f"data: {json.dumps({'error': hint})}\n\n"
         return
 
     reply = "".join(full_response)
@@ -804,15 +861,19 @@ async def chat_stream(req: ChatRequest):
 
 @router.get("/api/chat/models")
 async def list_ollama_models():
+    endpoint = await _find_ollama_endpoint()
+    if not endpoint:
+        return {"models": [], "default": OLLAMA_DEFAULT_MODEL,
+                "error": "No Ollama instance reachable"}
+    base_url, label, _ = endpoint
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.get(f"{OLLAMA_URL}/api/tags")
+            resp = await client.get(f"{base_url}/api/tags")
             if resp.status_code == 200:
                 return {"models": [m["name"] for m in resp.json().get("models", [])],
-                        "default": OLLAMA_DEFAULT_MODEL}
-            return {"models": [], "default": OLLAMA_DEFAULT_MODEL, "error": f"Ollama {resp.status_code}"}
-    except httpx.ConnectError:
-        return {"models": [], "default": OLLAMA_DEFAULT_MODEL, "error": "Cannot connect to Ollama"}
+                        "default": OLLAMA_DEFAULT_MODEL,
+                        "endpoint": label}
+            return {"models": [], "default": OLLAMA_DEFAULT_MODEL, "error": f"Ollama {resp.status_code} on {label}"}
     except Exception as exc:
         return {"models": [], "default": OLLAMA_DEFAULT_MODEL, "error": str(exc)}
 
