@@ -9,6 +9,20 @@ SCRIPT_DIR="${SCRIPT_R_PATH%${SCRIPT_NAME}}"
 
 cd "$SCRIPT_DIR" &>/dev/null || true
 
+# ── Debug mode ────────────────────────────────────────────────
+DEBUG=false
+for arg in "$@"; do
+	case "$arg" in
+		--debug|-d) DEBUG=true ;;
+	esac
+done
+
+dbg() { [[ "$DEBUG" == "true" ]] && echo -e "${YELLOW:-\033[0;33m}[DEBUG] $*${NC:-\033[0m}" || true; }
+
+if [[ "$DEBUG" == "true" ]]; then
+	echo -e "${YELLOW:-\033[0;33m}━━━ DEBUG MODE ━━━${NC:-\033[0m}"
+fi
+
 cleanup() {
 	local exit_code=$?
 
@@ -37,10 +51,18 @@ start_spinner "" "${CYAN:-}Initializing...${NC:-}"
 sleep 1
 
 start_spinner "" "${CYAN:-}Stopping any existing Anamnesis containers...${NC:-}"
-docker compose down &>/dev/null || {
-	echo -e "${RED:-}Failed to stop existing containers. Check: docker compose down${NC:-}"
-	exit 1
-}
+if [[ "$DEBUG" == "true" ]]; then
+	dbg "docker compose down"
+	docker compose down || {
+		echo -e "${RED:-}Failed to stop existing containers. Check: docker compose down${NC:-}"
+		exit 1
+	}
+else
+	docker compose down &>/dev/null || {
+		echo -e "${RED:-}Failed to stop existing containers. Check: docker compose down${NC:-}"
+		exit 1
+	}
+fi
 sleep 1
 
 # ── Wait for internet / AWS connectivity (post-power-loss guard) ─────────────
@@ -65,18 +87,29 @@ start_spinner "" "[$(date '+%H:%M:%S')] Internet/AWS connectivity confirmed"
 # ── Ollama check ─────────────────────────────────────────────────
 if ! command -v ollama &>/dev/null; then
 	start_spinner "" "${CYAN:-}Ollama not found — running install script...${NC:-}"
-	bash "$SCRIPT_DIR/install_ollama.sh" &>/dev/null || {
-		echo -e "${RED:-}Failed to install Ollama. Check install_ollama.sh${NC:-}"
-		exit 1
-	}
+	if [[ "$DEBUG" == "true" ]]; then
+		dbg "install_ollama.sh"
+		bash "$SCRIPT_DIR/install_ollama.sh" || {
+			echo -e "${RED:-}Failed to install Ollama. Check install_ollama.sh${NC:-}"
+			exit 1
+		}
+	else
+		bash "$SCRIPT_DIR/install_ollama.sh" &>/dev/null || {
+			echo -e "${RED:-}Failed to install Ollama. Check install_ollama.sh${NC:-}"
+			exit 1
+		}
+	fi
 elif ! systemctl is-active --quiet ollama 2>/dev/null; then
 	start_spinner "" "${CYAN:-}Ollama installed but not running — starting service...${NC:-}"
+	dbg "systemctl start ollama"
 	sudo systemctl start ollama &>/dev/null || {
 		echo -e "${RED:-}Failed to start Ollama service. Check: sudo systemctl status ollama${NC:-}"
 		exit 1
 	}
 	sleep 2
 fi
+dbg "Ollama version: $(ollama --version 2>/dev/null)"
+dbg "Ollama models: $(ollama list 2>/dev/null | tail -n +2 | awk '{print $1}' | tr '\n' ', ')"
 start_spinner "" "${CYAN:-}Ollama ready: http://localhost:11434${NC:-}"
 # ─────────────────────────────────────────────────────────────────
 
@@ -85,12 +118,29 @@ if command -v aws &>/dev/null && [[ -z "${SKIP_AWS_PULL:-}" ]]; then
 	start_spinner "" "${CYAN:-}Pulling secrets from AWS${NC:-}"
 
 	# Deployment config → .env (docker-compose reads this)
-	"$SCRIPT_DIR/pull_env.sh" 1 &>/dev/null || {
-		start_spinner "" "${YELLOW:-}Could not pull ANAMNESIS-Secrets — using existing .env${NC:-}"
-	}
+	if [[ "$DEBUG" == "true" ]]; then
+		dbg "pull_env.sh 1"
+		"$SCRIPT_DIR/pull_env.sh" 1 || {
+			echo -e "${YELLOW:-}Could not pull ANAMNESIS-Secrets — using existing .env${NC:-}"
+			sleep 3
+		}
+	else
+		"$SCRIPT_DIR/pull_env.sh" 1 &>/dev/null || {
+			stop_spinner
+			echo -e "${YELLOW:-}⚠ Could not pull ANAMNESIS-Secrets — using existing .env${NC:-}"
+			sleep 2
+		}
+	fi
 
 	# Anthropic API key (from personal secrets)
-	pull_aws_secrets ELFEGE-secrets 1 &>/dev/null && export ANTHROPIC_API_KEY || true
+	if [[ "$DEBUG" == "true" ]]; then
+		dbg "Pulling ELFEGE-secrets for ANTHROPIC_API_KEY"
+		pull_aws_secrets ELFEGE-secrets 1 && export ANTHROPIC_API_KEY || {
+			dbg "Failed to pull ELFEGE-secrets"
+		}
+	else
+		pull_aws_secrets ELFEGE-secrets 1 &>/dev/null && export ANTHROPIC_API_KEY || true
+	fi
 else
 	start_spinner "" "${CYAN:-}Skipping AWS pull — using existing .env${NC:-}"
 fi
@@ -99,6 +149,29 @@ fi
 if [[ ! -f "$SCRIPT_DIR/.env" ]]; then
 	echo -e "${RED:-}No .env found. Copy .env.example → .env and fill in your values.${NC:-}"
 	exit 1
+fi
+# ─────────────────────────────────────────────────────────────────
+
+# ── Ensure SSH config has host.docker.internal entry ──────────────
+# The container uses host.docker.internal to SSH back to the host.
+# paramiko reads ~/.ssh/config to find the right IdentityFile, so we
+# need a matching Host entry.
+_SSH_CFG="${SSH_DIR:-$HOME/.ssh}/config"
+if [[ -f "$_SSH_CFG" ]] && ! grep -qE '^Host\b.*\bhost\.docker\.internal\b' "$_SSH_CFG"; then
+	# Find the IdentityFile from the dellserver entry (same machine)
+	_ID_FILE=$(awk '/^Host[[:space:]]+dellserver[[:space:]]*$/{found=1;next} found && /^Host[[:space:]]/{exit} found && /IdentityFile/{print $2;exit}' "$_SSH_CFG")
+	_ID_FILE="${_ID_FILE:-~/.ssh/id_rsa_server_home_elfege}"
+	_SSH_USER_VAL="${SSH_USER:-elfege}"
+	start_spinner "" "${CYAN:-}Adding host.docker.internal to SSH config...${NC:-}"
+	cat >> "$_SSH_CFG" <<-EOF
+
+	Host host.docker.internal
+	   HostName host.docker.internal
+	   User $_SSH_USER_VAL
+	   IdentityFile $_ID_FILE
+	   StrictHostKeyChecking no
+	EOF
+	dbg "Added host.docker.internal entry to $_SSH_CFG"
 fi
 # ─────────────────────────────────────────────────────────────────
 
@@ -115,10 +188,21 @@ fi
 # ─────────────────────────────────────────────────────────────────
 
 start_spinner "" "${CYAN:-}Composing services...${NC:-}"
-docker compose up -d &>/dev/null || {
-	echo -e "${RED:-}Failed to start Anamnesis containers. Check: docker compose up -d${NC:-}"
-	exit 1
-}
+if [[ "$DEBUG" == "true" ]]; then
+	stop_spinner
+	dbg "docker compose up -d --force-recreate"
+	dbg ".env contents:"
+	grep -v '^#' "$SCRIPT_DIR/.env" | grep -v '^$' | sed 's/^/  /'
+	docker compose up -d --force-recreate || {
+		echo -e "${RED:-}Failed to start Anamnesis containers. Check: docker compose up -d${NC:-}"
+		exit 1
+	}
+else
+	docker compose up -d &>/dev/null || {
+		echo -e "${RED:-}Failed to start Anamnesis containers. Check: docker compose up -d${NC:-}"
+		exit 1
+	}
+fi
 stop_spinner
 
 # ── Wait for MongoDB to be healthy first (RS init can take 2-3 min fresh) ──
