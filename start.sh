@@ -159,8 +159,10 @@ fi
 _SSH_CFG="${SSH_DIR:-$HOME/.ssh}/config"
 if [[ -f "$_SSH_CFG" ]] && ! grep -qE '^Host\b.*\bhost\.docker\.internal\b' "$_SSH_CFG"; then
 	# Find the IdentityFile from the dellserver entry (same machine)
-	_ID_FILE=$(awk '/^Host[[:space:]]+dellserver[[:space:]]*$/{found=1;next} found && /^Host[[:space:]]/{exit} found && /IdentityFile/{print $2;exit}' "$_SSH_CFG")
-	_ID_FILE="${_ID_FILE:-~/.ssh/id_rsa_server_home_elfege}"
+	# Try to find IdentityFile from the SSH config block matching SSH_HOST_DELLSERVER (or "dellserver")
+	_LOOKUP_HOST="${SSH_HOST_DELLSERVER:-dellserver}"
+	_ID_FILE=$(awk -v host="$_LOOKUP_HOST" '$1=="Host" && $2==host{found=1;next} found && /^Host[[:space:]]/{exit} found && /IdentityFile/{print $2;exit}' "$_SSH_CFG")
+	_ID_FILE="${_ID_FILE:-~/.ssh/id_rsa}"
 	_SSH_USER_VAL="${SSH_USER:-elfege}"
 	start_spinner "" "${CYAN:-}Adding host.docker.internal to SSH config...${NC:-}"
 	cat >> "$_SSH_CFG" <<-EOF

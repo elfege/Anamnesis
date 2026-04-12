@@ -18,9 +18,14 @@
 set -euo pipefail
 
 # ── Defaults & known machines ─────────────────────────────────────
+# Read from env vars (TRAINER_URL_SERVER1, TRAINER_URL_SERVER2) or parent .env
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [[ -f "$_SCRIPT_DIR/.env" ]]; then
+	set -a; . "$_SCRIPT_DIR/.env" 2>/dev/null; set +a
+fi
 declare -A MACHINES=(
-	[server]="http://192.168.10.15:3011"
-	[office]="http://192.168.10.110:3011"
+	[server]="${TRAINER_URL_SERVER2:-http://localhost:3011}"
+	[office]="${TRAINER_URL_SERVER1:-http://localhost:3011}"
 )
 
 URL=""

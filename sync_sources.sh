@@ -119,11 +119,16 @@ _sync_host() {
 # ── Main ─────────────────────────────────────────────────────────
 mkdir -p "${STAGING}"
 
-# Configure hosts via environment or edit this section.
+# Load .env for SSH host aliases (SSH_HOST_SERVER, SSH_HOST_OFFICE, etc.)
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+	set -a; . "$SCRIPT_DIR/.env" 2>/dev/null; set +a
+fi
+
+# Configure hosts via .env SSH_HOST_* vars. Defaults to generic aliases.
 # Hosts not reachable are silently skipped (ConnectTimeout=5).
-_sync_host "server"
-_sync_host "officewsl"
-_sync_host "hvtmc"    # OHVD_APP_PROD — not always reachable, always optional
-_sync_host "jessica" "/Users/jessicaleylavergne"
+_sync_host "${SSH_HOST_SERVER:-server-1}"
+_sync_host "${SSH_HOST_OFFICE:-server-2}"
+_sync_host "${SSH_HOST_DELLSERVER:-server-3}"  # optional — not always reachable
+_sync_host "${SYNC_HOST_4:-server-4}" "${SYNC_HOME_4:-$REMOTE_HOME}"  # optional extra host
 
 _log "Sync complete."
