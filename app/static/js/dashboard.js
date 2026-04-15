@@ -253,9 +253,8 @@ $(function () {
     function _collect_table_dict(tbody_id) {
         var result = {};
         $("#" + tbody_id + " tr").each(function () {
-            var inputs = $(this).find("input.config-input");
-            var key = inputs.eq(0).val().trim();
-            var val = inputs.eq(1).val().trim();
+            var key = $(this).find('[data-field="machine"]').val().trim();
+            var val = $(this).find('[data-field="path"]').val().trim();
             if (key && val) result[key] = val;
         });
         return result;
@@ -390,24 +389,52 @@ $(function () {
 
 
     // ── JSONL Source Roots ──
-    function load_jsonl_roots() {
-        $.getJSON("/api/crawler/config/jsonl-roots", function (cfg) {
-            var tbody = $("#jsonl-roots-body").empty();
-            var roots = cfg.roots || {};
-            Object.keys(roots).forEach(function (machine) {
-                tbody.append(_editable_row_html([
-                    {name: "machine", value: machine, placeholder: "machine-name"},
-                    {name: "path", value: roots[machine], placeholder: "/sources/machine/.claude/projects"},
-                ]));
-            });
-        });
+    function _jsonl_root_row(machine, path) {
+        return '<tr>' +
+            '<td>' + _mount_select(machine) + '</td>' +
+            '<td><input type="text" class="config-input" data-field="path" value="' + (path || "").replace(/"/g, "&quot;") + '" readonly style="color:var(--text-secondary)"></td>' +
+            '<td><button class="btn-small btn-danger-outline btn-remove-row" title="Remove">✕</button></td>' +
+            '</tr>';
     }
 
+    function load_jsonl_roots() {
+        // Ensure mounts are loaded first (may already be cached from crawler tab)
+        var proceed = function () {
+            $.getJSON("/api/crawler/config/jsonl-roots", function (cfg) {
+                var tbody = $("#jsonl-roots-body").empty();
+                var roots = cfg.roots || {};
+                Object.keys(roots).forEach(function (machine) {
+                    tbody.append(_jsonl_root_row(machine, roots[machine]));
+                });
+            });
+        };
+        if (_availableMounts.length) {
+            proceed();
+        } else {
+            $.getJSON("/api/crawler/available-mounts", function (mountData) {
+                _availableMounts = mountData.mounts || [];
+                proceed();
+            });
+        }
+    }
+
+    // Auto-fill path when mount is selected (append .claude/projects)
+    $("#jsonl-roots-table").on("change", ".mount-select", function () {
+        var name = $(this).val();
+        var mount = _availableMounts.find(function (m) { return m.name === name; });
+        var pathInput = $(this).closest("tr").find('[data-field="path"]');
+        pathInput.val(mount ? mount.path + "/.claude/projects" : "");
+    });
+
     $("#btn-add-jsonl-root").on("click", function () {
-        $("#jsonl-roots-body").append(_editable_row_html([
-            {name: "machine", value: "", placeholder: "machine-name"},
-            {name: "path", value: "", placeholder: "/sources/machine/.claude/projects"},
-        ]));
+        if (!_availableMounts.length) {
+            $.getJSON("/api/crawler/available-mounts", function (mountData) {
+                _availableMounts = mountData.mounts || [];
+                $("#jsonl-roots-body").append(_jsonl_root_row("", ""));
+            });
+        } else {
+            $("#jsonl-roots-body").append(_jsonl_root_row("", ""));
+        }
     });
 
     $("#jsonl-roots-table").on("click", ".btn-remove-row", function () {

@@ -58,15 +58,16 @@ services:
       - ./app:/app
       - model_cache:/root/.cache/torch/sentence_transformers
       # ── Machine roots (read-only) ─────────────────────────────
-      # Customize via .env: SOURCE_0 through SOURCE_4 (host paths)
-      # and SOURCE_0_NAME through SOURCE_4_NAME (container mount names).
+      # Customize via .env: SOURCE_0 through SOURCE_5 (host paths)
+      # and SOURCE_0_NAME through SOURCE_5_NAME (container mount names).
       # source-0: local $HOME (direct mount — this machine)
       - ${SOURCE_0:-${LOCAL_HOME:-/home/user}}:/sources/${SOURCE_0_NAME:-source-0}:ro
-      # source-1..4: remote machines staged via sync_sources.sh
+      # source-1..5: remote machines staged via sync_sources.sh
       - ${SOURCE_1:-${SOURCES_DIR:-./sources}/source-1}:/sources/${SOURCE_1_NAME:-source-1}:ro
       - ${SOURCE_2:-${SOURCES_DIR:-./sources}/source-2}:/sources/${SOURCE_2_NAME:-source-2}:ro
       - ${SOURCE_3:-${SOURCES_DIR:-./sources}/source-3}:/sources/${SOURCE_3_NAME:-source-3}:ro
       - ${SOURCE_4:-${SOURCES_DIR:-./sources}/source-4}:/sources/${SOURCE_4_NAME:-source-4}:ro
+      - ${SOURCE_5:-${SOURCES_DIR:-./sources}/source-5}:/sources/${SOURCE_5_NAME:-source-5}:ro
       # ── Other source directories ──────────────────────────────
       - ${TEACHINGS_DIR:-./sources/teachings}:/sources/teachings:ro
       - ${DOCUMENTS_DIR:-./sources/documents}:/sources/documents:ro
