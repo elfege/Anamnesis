@@ -13,7 +13,7 @@ from jsonl_ingester import JSONL_SOURCE_ROOTS
 from database import get_dashboard_stats
 from embedding import get_active_model_info
 from jsonl_ingester import get_ingester_status
-from config import OLLAMA_URL, OLLAMA_DEFAULT_MODEL
+from config import OLLAMA_URL, OLLAMA_ENDPOINTS, OLLAMA_DEFAULT_MODEL
 
 _banner_cache = {"text": None, "at": 0}
 _BANNER_TTL = 60  # seconds
@@ -43,7 +43,7 @@ async def dashboard(request: Request):
         for s in SOURCES
     ]
     sources.append({"name": "teachings", "path": TEACHINGS_DIR + "/", "description": "Teaching session files (directory)"})
-    sources.append({"name": "documents", "path": DOCUMENTS_DIR + "/", "description": "OneDrive .docx files"})
+    sources.append({"name": "documents", "path": DOCUMENTS_DIR + "/", "description": "OneDrive documents (.docx, .pdf, .odt, .pages, .md, .txt, .rtf)"})
     for machine_name, machine_root in MACHINE_ROOTS.items():
         sources.append({
             "name": f"{machine_name} projects + scripts",
@@ -109,25 +109,28 @@ async def status_summary():
     )
 
     text = None
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            r = await client.post(
-                f"{OLLAMA_URL}/api/chat",
-                json={
-                    "model": OLLAMA_DEFAULT_MODEL,
-                    "stream": False,
-                    "options": {"num_predict": 40},
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-            )
-            r.raise_for_status()
-            text = r.json().get("message", {}).get("content", "").strip()
-            # Trim to first sentence if model over-generates
-            if "." in text:
-                text = text.split(".")[0]
-            text = text.strip('" \n')
-    except Exception:
-        pass
+    # Try Ollama endpoints in fallback order
+    ollama_urls = [OLLAMA_URL] if OLLAMA_URL else [ep[0] for ep in OLLAMA_ENDPOINTS]
+    for ollama_url in ollama_urls:
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                r = await client.post(
+                    f"{ollama_url}/api/chat",
+                    json={
+                        "model": OLLAMA_DEFAULT_MODEL,
+                        "stream": False,
+                        "options": {"num_predict": 40},
+                        "messages": [{"role": "user", "content": prompt}],
+                    },
+                )
+                r.raise_for_status()
+                text = r.json().get("message", {}).get("content", "").strip()
+                if "." in text:
+                    text = text.split(".")[0]
+                text = text.strip('" \n')
+                break
+        except Exception:
+            continue
 
     if not text:
         # Plain fallback

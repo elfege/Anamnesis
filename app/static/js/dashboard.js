@@ -116,12 +116,14 @@ $(function () {
     });
 
     // ─── Crawler Controls ─────────────────────────────────────────
+    var _crawlerPollTimer = null;
+
     function load_crawler_status() {
         $.getJSON("/api/crawler/status", function (status) {
             var html =
                 '<div class="kpi-grid">' +
                     '<div class="kpi-card">' +
-                        '<span class="kpi-value">' + (status.running ? "RUNNING" : "IDLE") + '</span>' +
+                        '<span class="kpi-value" style="color:' + (status.running ? "var(--success)" : "var(--text-primary)") + '">' + (status.running ? "RUNNING" : "IDLE") + '</span>' +
                         '<span class="kpi-label">Status</span>' +
                     '</div>' +
                     '<div class="kpi-card">' +
@@ -137,8 +139,11 @@ $(function () {
                         '<span class="kpi-label">Last Run Duration</span>' +
                     '</div>' +
                 '</div>' +
-                '<p><strong>Last run:</strong> ' + (status.last_run || "never") + '</p>' +
-                '<p><strong>Interval:</strong> ' + status.interval_seconds + 's</p>';
+                '<p><strong>Last run:</strong> ' + (status.last_run || "never") + '</p>';
+
+            if (status.running && status.current_activity) {
+                html += '<p class="crawler-activity"><span class="activity-dot"></span> ' + escape_html(status.current_activity) + '</p>';
+            }
 
             if (status.errors && status.errors.length) {
                 html += '<h4>Errors (last run)</h4><ul>';
@@ -149,8 +154,31 @@ $(function () {
             }
 
             $("#crawler-status").html(html);
+
+            // Auto-poll every 2s while running, also refresh overview total
+            if (status.running && !_crawlerPollTimer) {
+                _crawlerPollTimer = setInterval(function () {
+                    load_crawler_status();
+                    _refresh_overview_total();
+                }, 2000);
+            } else if (!status.running && _crawlerPollTimer) {
+                clearInterval(_crawlerPollTimer);
+                _crawlerPollTimer = null;
+                _refresh_overview_total();
+            }
         }).fail(function () {
             $("#crawler-status").html('<p class="empty-state">Failed to load crawler status.</p>');
+        });
+    }
+
+    function _refresh_overview_total() {
+        $.getJSON("/api/dashboard/stats", function (stats) {
+            $(".kpi-card .kpi-value").each(function () {
+                var $label = $(this).siblings(".kpi-label");
+                if ($label.text() === "Total Episodes") {
+                    $(this).text(stats.total_episodes || 0);
+                }
+            });
         });
     }
 
@@ -239,24 +267,48 @@ $(function () {
     }
 
     // ── Machine Roots ──
+    var _availableMounts = []; // populated from /api/crawler/available-mounts
+
+    function _mount_select(selectedName) {
+        var opts = '<option value="">-- select mount --</option>';
+        _availableMounts.forEach(function (m) {
+            var sel = (m.name === selectedName) ? " selected" : "";
+            opts += '<option value="' + m.name + '"' + sel + '>' + m.name + ' (' + m.path + ')</option>';
+        });
+        return '<select class="config-input mount-select" data-field="machine">' + opts + '</select>';
+    }
+
+    function _machine_root_row(machine, path) {
+        return '<tr>' +
+            '<td>' + _mount_select(machine) + '</td>' +
+            '<td><input type="text" class="config-input" data-field="path" value="' + (path || "").replace(/"/g, "&quot;") + '" readonly style="color:var(--text-secondary)"></td>' +
+            '<td><button class="btn-small btn-danger-outline btn-remove-row" title="Remove">✕</button></td>' +
+            '</tr>';
+    }
+
     function load_machine_roots() {
-        $.getJSON("/api/crawler/config", function (cfg) {
-            var tbody = $("#machine-roots-body").empty();
-            var roots = cfg.machine_roots || {};
-            Object.keys(roots).forEach(function (machine) {
-                tbody.append(_editable_row_html([
-                    {name: "machine", value: machine, placeholder: "machine-name"},
-                    {name: "path", value: roots[machine], placeholder: "/sources/machine"},
-                ]));
+        $.getJSON("/api/crawler/available-mounts", function (mountData) {
+            _availableMounts = mountData.mounts || [];
+            $.getJSON("/api/crawler/config", function (cfg) {
+                var tbody = $("#machine-roots-body").empty();
+                var roots = cfg.machine_roots || {};
+                Object.keys(roots).forEach(function (machine) {
+                    tbody.append(_machine_root_row(machine, roots[machine]));
+                });
             });
         });
     }
 
+    // Auto-fill path when mount is selected
+    $("#machine-roots-table").on("change", ".mount-select", function () {
+        var name = $(this).val();
+        var mount = _availableMounts.find(function (m) { return m.name === name; });
+        var pathInput = $(this).closest("tr").find('[data-field="path"]');
+        pathInput.val(mount ? mount.path : "");
+    });
+
     $("#btn-add-machine-root").on("click", function () {
-        $("#machine-roots-body").append(_editable_row_html([
-            {name: "machine", value: "", placeholder: "machine-name"},
-            {name: "path", value: "", placeholder: "/sources/machine"},
-        ]));
+        $("#machine-roots-body").append(_machine_root_row("", ""));
     });
 
     $("#machine-roots-table").on("click", ".btn-remove-row", function () {
@@ -264,7 +316,12 @@ $(function () {
     });
 
     $("#btn-save-machine-roots").on("click", function () {
-        var roots = _collect_table_dict("machine-roots-body");
+        var roots = {};
+        $("#machine-roots-body tr").each(function () {
+            var key = $(this).find('[data-field="machine"]').val().trim();
+            var val = $(this).find('[data-field="path"]').val().trim();
+            if (key && val) roots[key] = val;
+        });
         $.ajax({
             url: "/api/crawler/config/machine-roots",
             method: "PUT",
@@ -737,7 +794,43 @@ $(function () {
         claude_timer_interval: null,
         balance_poll_interval: null,
         streaming: false,
+        abort_controller: null,
     };
+
+    // ── Feedback helpers ─────────────────────────────────────────────
+    var _last_user_msg = "";
+    var _last_accumulated = "";
+    var _last_stream_id = "";
+
+    function add_chat_feedback($msg, user_msg, assistant_msg) {
+        var $fb = $('<div class="chat-feedback">' +
+            '<button class="fb-up" title="Good response">&#x1F44D;</button>' +
+            '<button class="fb-down" title="Bad response">&#x1F44E;</button>' +
+            '</div>');
+        $msg.append($fb);
+        $fb.find(".fb-up").on("click", function () { send_chat_feedback($(this), $fb, user_msg, assistant_msg, 1); });
+        $fb.find(".fb-down").on("click", function () { send_chat_feedback($(this), $fb, user_msg, assistant_msg, -1); });
+    }
+
+    function send_chat_feedback($btn, $fb, user_msg, assistant_msg, rating) {
+        $.ajax({
+            url: "/api/feedback",
+            method: "POST",
+            contentType: "application/json",
+            data: JSON.stringify({
+                session_id: chat_state.session_id || "",
+                user_message: user_msg,
+                assistant_message: assistant_msg,
+                rating: rating,
+                backend: chat_state.backend,
+                model: chat_state.model || "",
+            }),
+            success: function () {
+                $fb.find("button").removeClass("voted-up voted-down");
+                $btn.addClass(rating === 1 ? "voted-up" : "voted-down");
+            },
+        });
+    }
 
     // Load Ollama models when Chat tab opens
     $(".tab[data-tab='chat']").on("click", function () {
@@ -817,21 +910,29 @@ $(function () {
     }
 
     // ── AnamnesisGPT — machine-gated toggle ────────────────────────
-    // Check availability on page load
-    $.getJSON("/api/anamnesis-gpt/status", function (data) {
-        chat_state.anamnesis_available = data.available;
-        chat_state.anamnesis_unavailable_msg = data.message || "";
-        var btn = $("#btn-anamnesis-toggle");
-        btn.removeClass("btn-anamnesis-checking");
-        if (data.available) {
-            btn.prop("disabled", false);
-        } else {
-            btn.addClass("btn-anamnesis-unavailable");
-        }
-    }).fail(function () {
-        $("#btn-anamnesis-toggle").removeClass("btn-anamnesis-checking")
-            .addClass("btn-anamnesis-unavailable");
-    });
+    // Check availability on page load (and poll during training)
+    function check_anamnesis_status() {
+        $.getJSON("/api/anamnesis-gpt/status", function (data) {
+            chat_state.anamnesis_available = data.available;
+            chat_state.anamnesis_unavailable_msg = data.message || "";
+            var btn = $("#btn-anamnesis-toggle");
+            btn.removeClass("btn-anamnesis-checking");
+            if (data.available) {
+                btn.prop("disabled", false).removeClass("btn-anamnesis-unavailable btn-anamnesis-training");
+            } else if (data.training) {
+                btn.addClass("btn-anamnesis-training").removeClass("btn-anamnesis-unavailable");
+                btn.text("Training...");
+                // Poll every 30s until training completes
+                setTimeout(check_anamnesis_status, 30000);
+            } else {
+                btn.addClass("btn-anamnesis-unavailable");
+            }
+        }).fail(function () {
+            $("#btn-anamnesis-toggle").removeClass("btn-anamnesis-checking")
+                .addClass("btn-anamnesis-unavailable");
+        });
+    }
+    check_anamnesis_status();
 
     $("#btn-anamnesis-toggle").on("click", function () {
         if (!chat_state.anamnesis_available) {
@@ -1013,14 +1114,35 @@ $(function () {
         $m.scrollTop($m[0].scrollHeight);
     }
 
-    // ── Send ──────────────────────────────────────────────────────
-    $("#btn-chat-send").on("click", do_send);
+    // ── Send / Stop ────────────────────────────────────────────────
+    function set_chat_streaming_ui(on) {
+        var $btn = $("#btn-chat-send");
+        if (on) {
+            $btn.text("Stop").addClass("stopping").prop("disabled", false);
+            $("#chat-input").prop("disabled", true);
+        } else {
+            $btn.text("Send").removeClass("stopping").prop("disabled", false);
+            $("#chat-input").prop("disabled", false).focus();
+        }
+    }
+
+    function do_stop() {
+        if (chat_state.abort_controller) {
+            chat_state.abort_controller.abort();
+            chat_state.abort_controller = null;
+        }
+    }
+
+    $("#btn-chat-send").on("click", function () {
+        if (chat_state.streaming) { do_stop(); } else { do_send(); }
+    });
 
     $("#chat-input").on("keydown", function (e) {
         if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             do_send();
         }
+        if (e.key === "Escape" && chat_state.streaming) { do_stop(); }
     });
 
     function do_send() {
@@ -1031,9 +1153,10 @@ $(function () {
 
         if (!chat_state.session_id) new_chat_session();
 
-        $("#chat-input").val("").prop("disabled", true);
-        $("#btn-chat-send").prop("disabled", true);
+        $("#chat-input").val("");
         chat_state.streaming = true;
+        chat_state.abort_controller = new AbortController();
+        set_chat_streaming_ui(true);
 
         append_message("user", msg);
 
@@ -1063,6 +1186,7 @@ $(function () {
         fetch("/api/chat/stream", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
+            signal: chat_state.abort_controller.signal,
             body: payload,
         }).then(function (resp) {
             if (!resp.ok) {
@@ -1125,8 +1249,12 @@ $(function () {
 
                     read_chunk();
                 }).catch(function (err) {
-                    $("#" + stream_id + " .chat-msg-content")
-                        .html('<span style="color:var(--danger)">Stream error: ' + escape_html(err.message) + "</span>");
+                    if (err.name === "AbortError") {
+                        $("#" + stream_id + " .chat-msg-content").text(accumulated || "(stopped)");
+                    } else {
+                        $("#" + stream_id + " .chat-msg-content")
+                            .html('<span style="color:var(--danger)">Stream error: ' + escape_html(err.message) + "</span>");
+                    }
                     finish_streaming();
                 });
             }
@@ -1134,16 +1262,30 @@ $(function () {
             read_chunk();
 
         }).catch(function (err) {
-            $("#" + stream_id + " .chat-msg-content")
-                .html('<span style="color:var(--danger)">Error: ' + escape_html(err.message) + "</span>");
+            if (err.name === "AbortError") {
+                $("#" + stream_id + " .chat-msg-content").text("(stopped)");
+            } else {
+                $("#" + stream_id + " .chat-msg-content")
+                    .html('<span style="color:var(--danger)">Error: ' + escape_html(err.message) + "</span>");
+            }
             finish_streaming();
         });
     }
 
     function finish_streaming() {
         chat_state.streaming = false;
-        $("#chat-input").prop("disabled", false).focus();
-        $("#btn-chat-send").prop("disabled", false);
+        chat_state.abort_controller = null;
+        set_chat_streaming_ui(false);
+        // Add feedback buttons to the last assistant message
+        var $last_asst = $("#chat-messages .chat-msg-assistant:last");
+        if ($last_asst.length && !$last_asst.find(".chat-feedback").length) {
+            var assistant_text = $last_asst.find(".chat-msg-content").text().trim();
+            // Find the user message just before it
+            var user_text = $last_asst.prevAll(".chat-msg-user:first").find(".chat-msg-content").text().trim();
+            if (assistant_text && assistant_text !== "(stopped)") {
+                add_chat_feedback($last_asst, user_text, assistant_text);
+            }
+        }
         // Refresh sessions list so new/updated session appears
         load_chat_sessions();
     }
@@ -1562,9 +1704,10 @@ $(function () {
         if (!msg) return;
         if (!chat_state.session_id) new_chat_session();
 
-        $("#chat-input").val("").prop("disabled", true);
-        $("#btn-chat-send").prop("disabled", true);
+        $("#chat-input").val("");
         chat_state.streaming = true;
+        chat_state.abort_controller = new AbortController();
+        set_chat_streaming_ui(true);
 
         append_message("user", msg);
 
@@ -1609,6 +1752,7 @@ $(function () {
         fetch("/api/chat/stream", {
             method:  "POST",
             headers: {"Content-Type": "application/json"},
+            signal:  chat_state.abort_controller.signal,
             body:    payload,
         }).then(function (resp) {
             if (!resp.ok) {
@@ -1681,16 +1825,24 @@ $(function () {
 
                     read_chunk();
                 }).catch(function (err) {
-                    $("#" + stream_id + " .chat-msg-content")
-                        .html('<span style="color:var(--danger)">Stream error: ' + escape_html(err.message) + "</span>");
+                    if (err.name === "AbortError") {
+                        $("#" + stream_id + " .chat-msg-content").text(accumulated || "(stopped)");
+                    } else {
+                        $("#" + stream_id + " .chat-msg-content")
+                            .html('<span style="color:var(--danger)">Stream error: ' + escape_html(err.message) + "</span>");
+                    }
                     finish_streaming();
                 });
             }
             read_chunk();
 
         }).catch(function (err) {
-            $("#" + stream_id + " .chat-msg-content")
-                .html('<span style="color:var(--danger)">Error: ' + escape_html(err.message) + "</span>");
+            if (err.name === "AbortError") {
+                $("#" + stream_id + " .chat-msg-content").text("(stopped)");
+            } else {
+                $("#" + stream_id + " .chat-msg-content")
+                    .html('<span style="color:var(--danger)">Error: ' + escape_html(err.message) + "</span>");
+            }
             finish_streaming();
         });
     }
@@ -1707,6 +1859,7 @@ $(function () {
         fetch("/api/anamnesis-gpt/generate", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
+            signal: chat_state.abort_controller ? chat_state.abort_controller.signal : undefined,
             body: JSON.stringify({prompt: query, max_tokens: 512, temperature: 0.8, stream: true}),
         }).then(function (resp) {
             if (!resp.ok) {
@@ -1768,10 +1921,13 @@ $(function () {
         });
     }
 
-    // Re-bind send buttons to patched do_send
-    $("#btn-chat-send").off("click").on("click", do_send);
+    // Re-bind send buttons to patched do_send (with stop support)
+    $("#btn-chat-send").off("click").on("click", function () {
+        if (chat_state.streaming) { do_stop(); } else { do_send(); }
+    });
     $("#chat-input").off("keydown").on("keydown", function (e) {
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); do_send(); }
+        if (e.key === "Escape" && chat_state.streaming) { do_stop(); }
     });
 
     // ── Embedding Tab ─────────────────────────────────────────────
@@ -1970,34 +2126,62 @@ $(function () {
         poll_reembed_status();
     });
 
-    // ── Docx Tag Patterns ──
+    // ── Document Tag Patterns ──
     function load_docx_patterns() {
-        $.getJSON("/api/crawler/config/docx-tag-patterns", function (data) {
+        $.getJSON("/api/crawler/config/doc-tag-patterns", function (data) {
             var tbody = $("#docx-patterns-body").empty();
             (data.patterns || []).forEach(function (p) {
-                tbody.append(_docx_pattern_row(p.match, p.tag, p.field, p.regex));
+                tbody.append(_docx_pattern_row(p.match, p.tag, p.field, p.regex, p.ignorecase));
             });
         });
     }
 
-    function _docx_pattern_row(match, tag, field, regex) {
-        match = match || ""; tag = tag || ""; field = field || "filename"; regex = !!regex;
-        return $(
+    function _docx_pattern_row(match, tag, field, regex, ignorecase) {
+        match = match || ""; tag = tag || ""; field = field || "filename"; regex = !!regex; ignorecase = !!ignorecase;
+        var $row = $(
             '<tr>' +
-            '<td><input class="config-input" data-field="match" value="' + $('<span>').text(match).html() + '" placeholder="pattern"></td>' +
+            '<td><textarea class="config-input match-input" data-field="match" rows="1" placeholder="pattern">' + $('<span>').text(match).html() + '</textarea></td>' +
             '<td><input class="config-input" data-field="tag" value="' + $('<span>').text(tag).html() + '" placeholder="tag"></td>' +
             '<td><select class="config-input" data-field="field">' +
                 '<option value="filename"' + (field === "filename" ? " selected" : "") + '>filename</option>' +
                 '<option value="content"' + (field === "content" ? " selected" : "") + '>content</option>' +
             '</select></td>' +
             '<td style="text-align:center"><input type="checkbox" class="config-input" data-field="regex"' + (regex ? " checked" : "") + '></td>' +
+            '<td style="text-align:center" title="Case insensitive (checked = ignore case)"><input type="checkbox" class="config-input" data-field="ignorecase"' + (ignorecase ? " checked" : "") + '></td>' +
             '<td><button class="btn-remove-row btn-danger-sm">✕</button></td>' +
             '</tr>'
         );
+        // Live regex validation
+        var $match = $row.find('[data-field="match"]');
+        var $regexCb = $row.find('[data-field="regex"]');
+        function validateRegex() {
+            if (!$regexCb.is(":checked")) { $match.css("border-color", ""); $match.attr("title", ""); return; }
+            var pat = $match.val().trim();
+            if (!pat) { $match.css("border-color", ""); return; }
+            $.ajax({
+                url: "/api/crawler/validate-regex",
+                method: "POST",
+                contentType: "application/json",
+                data: JSON.stringify({pattern: pat}),
+                success: function (r) {
+                    if (r.valid) {
+                        $match.css("border-color", "var(--success)");
+                        $match.attr("title", "Valid regex");
+                    } else {
+                        $match.css("border-color", "var(--danger)");
+                        $match.attr("title", "Invalid regex: " + r.error);
+                    }
+                }
+            });
+        }
+        var _vt; $match.on("input", function () { clearTimeout(_vt); _vt = setTimeout(validateRegex, 400); });
+        $regexCb.on("change", validateRegex);
+        if (regex && match) setTimeout(validateRegex, 100);
+        return $row;
     }
 
     $("#btn-add-docx-pattern").on("click", function () {
-        $("#docx-patterns-body").append(_docx_pattern_row("", "", "filename", false));
+        $("#docx-patterns-body").append(_docx_pattern_row("", "", "filename", false, false));
     });
 
     $("#docx-patterns-table").on("click", ".btn-remove-row", function () {
@@ -2016,10 +2200,11 @@ $(function () {
                 tag:   tag,
                 field: row.find('[data-field="field"]').val(),
                 regex: row.find('[data-field="regex"]').is(":checked"),
+                ignorecase: row.find('[data-field="ignorecase"]').is(":checked"),
             });
         });
         $.ajax({
-            url: "/api/crawler/config/docx-tag-patterns",
+            url: "/api/crawler/config/doc-tag-patterns",
             method: "PUT",
             contentType: "application/json",
             data: JSON.stringify({patterns: patterns}),
@@ -2046,6 +2231,32 @@ $(function () {
             wrap.slideDown(250);
             toggle.addClass("open");
         }
+    });
+
+    // ─── Help (?) modals ────────────────────────────────────────────
+    var _help_map = {
+        "crawler-overview": "#help-tpl-crawler-overview",
+        "machine-roots":    "#help-tpl-machine-roots",
+        "named-sources":    "#help-tpl-named-sources",
+        "doc-patterns":     "#help-tpl-doc-patterns",
+    };
+
+    $(document).on("click", ".btn-help", function () {
+        var key = $(this).data("help");
+        var tpl = _help_map[key];
+        if (!tpl) return;
+        var html = $(tpl).html();
+        if (!html) return;
+        $("#help-modal-content").html(html);
+        $("#help-modal-overlay").fadeIn(150);
+    });
+
+    $("#btn-help-close, #help-modal-overlay").on("click", function (e) {
+        if (e.target === this) $("#help-modal-overlay").fadeOut(150);
+    });
+
+    $(document).on("keydown", function (e) {
+        if (e.key === "Escape") $("#help-modal-overlay").fadeOut(150);
     });
 
 });

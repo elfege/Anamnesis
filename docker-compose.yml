@@ -58,14 +58,15 @@ services:
       - ./app:/app
       - model_cache:/root/.cache/torch/sentence_transformers
       # ── Machine roots (read-only) ─────────────────────────────
-      # Customize these volume mounts for your deployment.
-      # SERVER-0: local $HOME (direct mount — this machine)
-      - ${LOCAL_HOME:-/home/user}:/sources/server-0:ro
-      # Additional servers: staged via sync_sources.sh (hourly cron)
-      - ${SOURCES_DIR:-./sources}/server-1:/sources/server-1:ro
-      - ${SOURCES_DIR:-./sources}/server-2:/sources/server-2:ro
-      - ${SOURCES_DIR:-./sources}/server-3:/sources/server-3:ro
-      - ${SOURCES_DIR:-./sources}/server-4:/sources/server-4:ro
+      # Customize via .env: SOURCE_0 through SOURCE_4 (host paths)
+      # and SOURCE_0_NAME through SOURCE_4_NAME (container mount names).
+      # source-0: local $HOME (direct mount — this machine)
+      - ${SOURCE_0:-${LOCAL_HOME:-/home/user}}:/sources/${SOURCE_0_NAME:-source-0}:ro
+      # source-1..4: remote machines staged via sync_sources.sh
+      - ${SOURCE_1:-${SOURCES_DIR:-./sources}/source-1}:/sources/${SOURCE_1_NAME:-source-1}:ro
+      - ${SOURCE_2:-${SOURCES_DIR:-./sources}/source-2}:/sources/${SOURCE_2_NAME:-source-2}:ro
+      - ${SOURCE_3:-${SOURCES_DIR:-./sources}/source-3}:/sources/${SOURCE_3_NAME:-source-3}:ro
+      - ${SOURCE_4:-${SOURCES_DIR:-./sources}/source-4}:/sources/${SOURCE_4_NAME:-source-4}:ro
       # ── Other source directories ──────────────────────────────
       - ${TEACHINGS_DIR:-./sources/teachings}:/sources/teachings:ro
       - ${DOCUMENTS_DIR:-./sources/documents}:/sources/documents:ro

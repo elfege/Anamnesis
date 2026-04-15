@@ -28,8 +28,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import zipfile
+
 from docx import Document as DocxDocument
 from docx.opc.exceptions import PackageNotFoundError
+from lxml import etree
 
 from database import get_episodes_collection, get_settings_collection
 from embedding import get_embedding
@@ -66,6 +69,15 @@ async def load_crawler_config():
     SOURCES = doc.get("sources", [])
     MACHINE_ROOTS = doc.get("machine_roots", {})
     logger.info(f"Crawler config loaded: {len(SOURCES)} sources, {len(MACHINE_ROOTS)} machine roots")
+
+    # Restore persisted stats (survive container restarts)
+    stats_doc = await coll.find_one({"_id": "crawler_stats"})
+    if stats_doc:
+        _crawler_state["total_episodes_ingested"] = stats_doc.get("total_episodes_ingested", 0)
+        _crawler_state["episodes_ingested_last_run"] = stats_doc.get("episodes_ingested_last_run", 0)
+        _crawler_state["last_run"] = stats_doc.get("last_run")
+        _crawler_state["last_run_duration_seconds"] = stats_doc.get("last_run_duration_seconds", 0)
+        logger.info(f"Crawler stats restored: {_crawler_state['total_episodes_ingested']} total ingested")
 
 
 async def save_crawler_config(sources: list = None, machine_roots: dict = None):
@@ -139,7 +151,7 @@ _crawler_state = {
     "episodes_ingested_last_run": 0,
     "total_episodes_ingested": 0,
     "errors": [],
-    "interval_seconds": 300,                                       # 5 minutes default
+    "current_activity": "",                                        # live one-liner for UI
 }
 
 _crawler_task: Optional[asyncio.Task] = None
@@ -148,6 +160,11 @@ _crawler_task: Optional[asyncio.Task] = None
 def get_crawler_status() -> dict:
     """Return current crawler state for the dashboard/API."""
     return {**_crawler_state}
+
+
+def _set_activity(msg: str):
+    """Update the live activity one-liner shown in the UI."""
+    _crawler_state["current_activity"] = msg
 
 
 # ─── Parsing ─────────────────────────────────────────────────────
@@ -237,15 +254,148 @@ def _parse_docx(filepath: str) -> str:
     return "\n".join(paragraphs)
 
 
-async def _categorize_docx(filename: str, content: str) -> list[str]:
-    """Infer tags for a docx file using patterns stored in MongoDB."""
-    from database import load_docx_tag_patterns
-    tags = ["document", "onedrive"]
+def _parse_pdf(filepath: str) -> str:
+    """Extract all text from a PDF file using pdfplumber."""
+    try:
+        import pdfplumber
+    except ImportError:
+        logger.warning("pdfplumber not installed — skipping PDF: %s", filepath)
+        return ""
+    try:
+        pages = []
+        with pdfplumber.open(filepath) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text()
+                if text:
+                    pages.append(text.strip())
+        return "\n\n".join(pages)
+    except Exception as e:
+        logger.warning(f"Failed to parse PDF {filepath}: {e}")
+        return ""
+
+
+def _parse_odt(filepath: str) -> str:
+    """Extract text from an OpenDocument (.odt) file using odfpy."""
+    try:
+        from odf.opendocument import load as odf_load
+        from odf.text import P as OdfP
+        from odf import teletype
+    except ImportError:
+        logger.warning("odfpy not installed — skipping ODT: %s", filepath)
+        return ""
+    try:
+        doc = odf_load(filepath)
+        paragraphs = []
+        for p in doc.getElementsByType(OdfP):
+            text = teletype.extractText(p).strip()
+            if text:
+                paragraphs.append(text)
+        return "\n".join(paragraphs)
+    except Exception as e:
+        logger.warning(f"Failed to parse ODT {filepath}: {e}")
+        return ""
+
+
+def _parse_pages(filepath: str) -> str:
+    """Extract text from Apple Pages (.pages) files.
+
+    Pages files are ZIP archives. Text is in Index/Document.iwa (protobuf) which
+    is hard to parse, but some Pages files also contain a preview PDF or an
+    Index/Document.xml fallback.  We try multiple strategies:
+      1. preview.pdf inside the archive (parsed via pdfplumber)
+      2. index.xml (older iWork format — XML with paragraphs)
+      3. buildVersionHistory.plist (has plain text fragments)
+    """
+    if not zipfile.is_zipfile(filepath):
+        logger.debug(f"Not a valid Pages archive: {filepath}")
+        return ""
+
+    try:
+        with zipfile.ZipFile(filepath) as zf:
+            names = zf.namelist()
+
+            # Strategy 1: embedded preview PDF
+            pdf_names = [n for n in names if n.lower().endswith(".pdf")]
+            if pdf_names:
+                import tempfile
+                with zf.open(pdf_names[0]) as pdf_entry:
+                    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=True) as tmp:
+                        tmp.write(pdf_entry.read())
+                        tmp.flush()
+                        text = _parse_pdf(tmp.name)
+                        if text and len(text) > 30:
+                            return text
+
+            # Strategy 2: index.xml (older iWork XML format)
+            xml_names = [n for n in names if n.lower().endswith(".xml")]
+            for xml_name in xml_names:
+                try:
+                    with zf.open(xml_name) as xf:
+                        tree = etree.parse(xf)
+                        texts = tree.xpath("//text()")
+                        joined = " ".join(t.strip() for t in texts if t.strip())
+                        if len(joined) > 30:
+                            return joined
+                except Exception:
+                    continue
+
+            # Strategy 3: brute-force — read all text-like content
+            text_fragments = []
+            for name in names:
+                if any(name.lower().endswith(ext) for ext in (".txt", ".strings")):
+                    try:
+                        text_fragments.append(zf.read(name).decode("utf-8", errors="replace"))
+                    except Exception:
+                        pass
+            if text_fragments:
+                combined = "\n".join(text_fragments)
+                if len(combined) > 30:
+                    return combined
+
+    except Exception as e:
+        logger.warning(f"Failed to parse Pages file {filepath}: {e}")
+    return ""
+
+
+def _parse_plain_text(filepath: str) -> str:
+    """Read a plain text / markdown file."""
+    try:
+        return Path(filepath).read_text(encoding="utf-8", errors="replace").strip()
+    except Exception as e:
+        logger.warning(f"Failed to read text file {filepath}: {e}")
+        return ""
+
+
+# Supported document extensions → parser function
+_DOC_PARSERS = {
+    ".docx":  _parse_docx,
+    ".pdf":   _parse_pdf,
+    ".odt":   _parse_odt,
+    ".pages": _parse_pages,
+    ".md":    _parse_plain_text,
+    ".txt":   _parse_plain_text,
+    ".rtf":   _parse_plain_text,   # plain-text extraction (formatting lost)
+}
+
+
+async def _categorize_document(filename: str, content: str) -> list[str]:
+    """Infer tags for a document file using patterns stored in MongoDB."""
+    from database import load_doc_tag_patterns
+    ext = os.path.splitext(filename)[1].lower()
+    format_tag = ext.lstrip(".")  # e.g. "pdf", "docx", "pages"
+    tags = ["document", "onedrive", format_tag]
     name_lower = filename.lower()
-    patterns = await load_docx_tag_patterns()
+    patterns = await load_doc_tag_patterns()
     for p in patterns:
         subject = name_lower if p.get("field", "filename") == "filename" else content.lower()
-        matched = re.search(p["match"], subject) if p.get("regex") else p["match"] in subject
+        try:
+            if p.get("regex"):
+                flags = re.IGNORECASE if p.get("ignorecase") else 0
+                matched = re.search(p["match"], subject, flags)
+            else:
+                matched = p["match"].lower() in subject if p.get("ignorecase") else p["match"] in subject
+        except re.error:
+            continue
         if matched and p["tag"] not in tags:
             tags.append(p["tag"])
     return tags
@@ -326,6 +476,7 @@ async def _ingest_section(
 
     # Generate embedding from the section content
     summary = section["content"]
+    _set_activity(f"Embedding: {section['title'][:80]}")
     try:
         embedding_vector = get_embedding(summary)
     except Exception as e:
@@ -348,6 +499,10 @@ async def _ingest_section(
 
     await collection.insert_one(document)
     await _mark_as_ingested(content_hash, episode_id, source["name"])
+
+    # Update live counters so the UI can poll mid-cycle
+    _crawler_state["episodes_ingested_last_run"] += 1
+    _crawler_state["total_episodes_ingested"] += 1
 
     logger.info(f"Ingested: {episode_id}")
     return True
@@ -440,7 +595,11 @@ async def _scan_teachings_dir() -> int:
 
 
 async def _scan_documents_dir() -> int:
-    """Scan the documents directory for .docx files. Each file = one episode."""
+    """Scan the documents directory for supported document files.
+
+    Supported formats: .docx, .pdf, .odt, .pages, .md, .txt, .rtf
+    Each file = one episode.
+    """
     if not os.path.isdir(DOCUMENTS_DIR):
         logger.debug(f"Documents dir not found (skipping): {DOCUMENTS_DIR}")
         return 0
@@ -449,13 +608,15 @@ async def _scan_documents_dir() -> int:
     skipped_empty = 0
     for root, _dirs, files in os.walk(DOCUMENTS_DIR):
         for filename in files:
-            if not filename.lower().endswith(".docx"):
+            ext = os.path.splitext(filename)[1].lower()
+            parser = _DOC_PARSERS.get(ext)
+            if parser is None:
                 continue
 
             filepath = os.path.join(root, filename)
 
-            # Extract text from docx
-            content = _parse_docx(filepath)
+            # Extract text using the appropriate parser
+            content = parser(filepath)
             if not content or len(content) < 30:
                 skipped_empty += 1
                 continue
@@ -464,11 +625,11 @@ async def _scan_documents_dir() -> int:
             if await _is_already_ingested(content_hash):
                 continue
 
-            # Build a summary: filename + first ~500 chars of content
-            doc_title = filename.replace(".docx", "")
+            # Build a summary: filename + content
+            doc_title = os.path.splitext(filename)[0]
             summary = f"[Document: {doc_title}]\n\n{content}"
 
-            tags = await _categorize_docx(filename, content)
+            tags = await _categorize_document(filename, content)
             source = {
                 "name": f"doc_{doc_title}",
                 "instance": "office",
@@ -487,7 +648,7 @@ async def _scan_documents_dir() -> int:
                 logger.error(f"Failed to ingest document {filepath}: {e}")
 
     if skipped_empty:
-        logger.debug(f"  documents: skipped {skipped_empty} empty/tiny docx files")
+        logger.debug(f"  documents: skipped {skipped_empty} empty/tiny files")
     return ingested_count
 
 
@@ -676,14 +837,17 @@ async def _scan_scripts_dir(machine_root: str, machine_name: str) -> int:
 async def run_crawl_cycle():
     """Execute one full crawl cycle across all sources."""
     _crawler_state["running"] = True
+    _crawler_state["episodes_ingested_last_run"] = 0
     start_time = datetime.now(timezone.utc)
     total_ingested = 0
     errors = []
 
     logger.info("Crawl cycle starting...")
+    _set_activity("Starting crawl cycle...")
 
     # Scan each defined source
     for source in SOURCES:
+        _set_activity(f"Scanning source: {source['name']}")
         try:
             count = await _scan_source(source)
             total_ingested += count
@@ -696,6 +860,7 @@ async def run_crawl_cycle():
 
     # Scan each machine's projects and scripts
     for machine_name, machine_root in MACHINE_ROOTS.items():
+        _set_activity(f"Scanning {machine_name} projects...")
         try:
             count = await _scan_projects_dir(machine_root, machine_name)
             total_ingested += count
@@ -706,6 +871,7 @@ async def run_crawl_cycle():
             logger.error(f"  {error_msg}")
             errors.append(error_msg)
 
+        _set_activity(f"Scanning {machine_name} scripts...")
         try:
             count = await _scan_scripts_dir(machine_root, machine_name)
             total_ingested += count
@@ -716,6 +882,7 @@ async def run_crawl_cycle():
             logger.error(f"  {error_msg}")
             errors.append(error_msg)
 
+        _set_activity(f"Deep scanning {machine_name} (0_* dirs)...")
         try:
             count = await _scan_deep_projects(machine_root, machine_name)
             total_ingested += count
@@ -725,6 +892,7 @@ async def run_crawl_cycle():
             errors.append(error_msg)
 
     # Scan teachings directory
+    _set_activity("Scanning teachings...")
     try:
         teaching_count = await _scan_teachings_dir()
         total_ingested += teaching_count
@@ -735,7 +903,8 @@ async def run_crawl_cycle():
         logger.error(f"  {error_msg}")
         errors.append(error_msg)
 
-    # Scan documents directory (.docx files)
+    # Scan documents directory
+    _set_activity("Scanning documents (.docx, .pdf, .odt, .pages, .md, .txt)...")
     try:
         doc_count = await _scan_documents_dir()
         total_ingested += doc_count
@@ -750,10 +919,24 @@ async def run_crawl_cycle():
 
     _crawler_state["last_run"] = start_time.isoformat()
     _crawler_state["last_run_duration_seconds"] = round(duration, 2)
-    _crawler_state["episodes_ingested_last_run"] = total_ingested
-    _crawler_state["total_episodes_ingested"] += total_ingested
+    # episodes_ingested_last_run and total_episodes_ingested already
+    # incremented live inside _ingest_section()
     _crawler_state["errors"] = errors
     _crawler_state["running"] = False
+    _set_activity("")
+
+    # Persist stats to MongoDB (survives container restarts)
+    coll = get_settings_collection()
+    await coll.update_one(
+        {"_id": "crawler_stats"},
+        {"$set": {
+            "total_episodes_ingested": _crawler_state["total_episodes_ingested"],
+            "episodes_ingested_last_run": _crawler_state["episodes_ingested_last_run"],
+            "last_run": _crawler_state["last_run"],
+            "last_run_duration_seconds": _crawler_state["last_run_duration_seconds"],
+        }},
+        upsert=True,
+    )
 
     logger.info(
         f"Crawl cycle complete: {total_ingested} episodes ingested "
@@ -763,35 +946,6 @@ async def run_crawl_cycle():
     return total_ingested
 
 
-async def _crawler_loop():
-    """Background loop — runs crawl cycles on a schedule."""
-    # Wait a bit after startup to let everything settle
-    await asyncio.sleep(10)
-
-    while True:
-        try:
-            await run_crawl_cycle()
-        except Exception as e:
-            logger.error(f"Crawler loop error: {e}")
-            _crawler_state["errors"].append(str(e))
-            _crawler_state["running"] = False
-
-        await asyncio.sleep(_crawler_state["interval_seconds"])
-
-
-def start_crawler():
-    """Start the background crawler task. Called from main.py lifespan."""
-    global _crawler_task
-    _crawler_task = asyncio.create_task(_crawler_loop())
-    logger.info(
-        f"Crawler started (interval: {_crawler_state['interval_seconds']}s)"
-    )
-
-
-def stop_crawler():
-    """Stop the background crawler task."""
-    global _crawler_task
-    if _crawler_task and not _crawler_task.done():
-        _crawler_task.cancel()
-        logger.info("Crawler stopped.")
-    _crawler_task = None
+# start_crawler / stop_crawler removed — crawler is now driven by the
+# unified scheduler (scheduler.py) like JSONL and training.
+# Manual runs still work via POST /api/crawler/run.

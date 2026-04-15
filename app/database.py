@@ -70,6 +70,14 @@ def get_settings_collection():
     return _db["settings"]
 
 
+# ─── Chat feedback (thumbs up/down for training) ─────────────────
+
+def get_feedback_collection():
+    if _db is None:
+        raise RuntimeError("MongoDB not connected.")
+    return _db["chat_feedback"]
+
+
 # ─── Chat session persistence ────────────────────────────────────
 
 def get_chat_sessions_collection():
@@ -191,9 +199,10 @@ async def load_embedding_config() -> dict:
     return doc or {}
 
 
-# ─── Docx tag patterns ──────────────────────────────────────────
+# ─── Document tag patterns ───────────────────────────────────────
+# (Applies to all document types: .docx, .pdf, .odt, .pages, .md, .txt, .rtf)
 
-_DEFAULT_DOCX_PATTERNS = [
+_DEFAULT_DOC_PATTERNS = [
     {"match": r"^[a-z]+\.\d{4}\.docx$", "tag": "student-evaluation", "field": "filename", "regex": True},
     {"match": "agreement",               "tag": "legal",              "field": "filename", "regex": False},
     {"match": "authorization",           "tag": "legal",              "field": "filename", "regex": False},
@@ -204,28 +213,45 @@ _DEFAULT_DOCX_PATTERNS = [
 ]
 
 
-async def load_docx_tag_patterns() -> list[dict]:
-    """Load docx tag patterns from DB. Seeds defaults on first call."""
+async def load_doc_tag_patterns() -> list[dict]:
+    """Load document tag patterns from DB. Seeds defaults on first call.
+    Backward-compatible: reads from old 'docx_tag_patterns' key if present."""
     settings = get_settings_collection()
-    doc = await settings.find_one({"_id": "docx_tag_patterns"})
+    # Try new key first, fall back to old key
+    doc = await settings.find_one({"_id": "doc_tag_patterns"})
     if doc:
         return doc.get("patterns", [])
+    # Migrate from old key if it exists
+    old_doc = await settings.find_one({"_id": "docx_tag_patterns"})
+    if old_doc:
+        patterns = old_doc.get("patterns", [])
+        await settings.update_one(
+            {"_id": "doc_tag_patterns"},
+            {"$set": {"patterns": patterns}},
+            upsert=True,
+        )
+        return patterns
     # First call — seed defaults
     await settings.update_one(
-        {"_id": "docx_tag_patterns"},
-        {"$set": {"patterns": _DEFAULT_DOCX_PATTERNS}},
+        {"_id": "doc_tag_patterns"},
+        {"$set": {"patterns": _DEFAULT_DOC_PATTERNS}},
         upsert=True,
     )
-    return _DEFAULT_DOCX_PATTERNS
+    return _DEFAULT_DOC_PATTERNS
 
 
-async def save_docx_tag_patterns(patterns: list[dict]):
+async def save_doc_tag_patterns(patterns: list[dict]):
     settings = get_settings_collection()
     await settings.update_one(
-        {"_id": "docx_tag_patterns"},
+        {"_id": "doc_tag_patterns"},
         {"$set": {"patterns": patterns}},
         upsert=True,
     )
+
+
+# Backward-compat aliases
+load_docx_tag_patterns = load_doc_tag_patterns
+save_docx_tag_patterns = save_doc_tag_patterns
 
 
 # ─── Vector Index ────────────────────────────────────────────────

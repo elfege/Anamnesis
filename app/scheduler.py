@@ -35,10 +35,12 @@ SCHEDULE_PRESETS = {
 
 DEFAULT_CRAWLER_SCHEDULE = "every_30m"     # crawler is lightweight, 30m is fine
 DEFAULT_JSONL_SCHEDULE = "nightly"         # JSONL default: nightly at 5 AM when using free backend
+DEFAULT_TRAINING_SCHEDULE = "nightly"      # training pipeline: nightly at 4 AM
 
 # Background task handles
 _crawler_schedule_task: Optional[asyncio.Task] = None
 _jsonl_schedule_task: Optional[asyncio.Task] = None
+_training_schedule_task: Optional[asyncio.Task] = None
 
 
 async def get_schedule_settings() -> dict:
@@ -46,6 +48,7 @@ async def get_schedule_settings() -> dict:
     defaults = {
         "crawler_schedule": DEFAULT_CRAWLER_SCHEDULE,
         "jsonl_schedule": DEFAULT_JSONL_SCHEDULE,
+        "training_schedule": DEFAULT_TRAINING_SCHEDULE,
     }
     try:
         coll = get_settings_collection()
@@ -61,7 +64,7 @@ async def get_schedule_settings() -> dict:
 
 async def update_schedule_settings(updates: dict) -> dict:
     """Update schedule settings. Returns merged settings."""
-    valid_keys = {"crawler_schedule", "jsonl_schedule"}
+    valid_keys = {"crawler_schedule", "jsonl_schedule", "training_schedule"}
     filtered = {k: v for k, v in updates.items() if k in valid_keys}
 
     # Validate preset names
@@ -91,6 +94,14 @@ def _seconds_until_hour(target_hour: int) -> int:
     return int((target - now).total_seconds())
 
 
+# Nightly target hours per scheduler
+_NIGHTLY_HOURS = {
+    "jsonl": 5,      # 5 AM
+    "training": 4,   # 4 AM (finish before JSONL ingestion)
+    "crawler": 3,    # 3 AM (rarely nightly, but just in case)
+}
+
+
 async def _scheduled_loop(name: str, run_func, settings_key: str):
     """Generic scheduled loop. Loads interval from settings each cycle."""
     while True:
@@ -104,9 +115,10 @@ async def _scheduled_loop(name: str, run_func, settings_key: str):
                 await asyncio.sleep(60)
                 continue
 
-            # For nightly preset, sleep until 5 AM instead of flat 24h
+            # For nightly preset, sleep until target hour
             if preset == "nightly":
-                wait = _seconds_until_hour(5)
+                target_hour = _NIGHTLY_HOURS.get(name, 5)
+                wait = _seconds_until_hour(target_hour)
                 logger.info(f"Scheduler [{name}]: nightly mode, next run in {wait // 3600}h {(wait % 3600) // 60}m")
                 await asyncio.sleep(wait)
             else:
@@ -130,6 +142,25 @@ async def _scheduled_loop(name: str, run_func, settings_key: str):
             await asyncio.sleep(30)  # back off on error
 
 
+def start_crawler_scheduler(run_func):
+    """Start the crawler scheduler background task."""
+    global _crawler_schedule_task
+    if _crawler_schedule_task and not _crawler_schedule_task.done():
+        _crawler_schedule_task.cancel()
+    _crawler_schedule_task = asyncio.create_task(
+        _scheduled_loop("crawler", run_func, "crawler_schedule")
+    )
+    logger.info("Crawler scheduler started")
+
+
+def stop_crawler_scheduler():
+    """Stop the crawler scheduler."""
+    global _crawler_schedule_task
+    if _crawler_schedule_task and not _crawler_schedule_task.done():
+        _crawler_schedule_task.cancel()
+    _crawler_schedule_task = None
+
+
 def start_jsonl_scheduler(run_func):
     """Start the JSONL ingestion scheduler background task."""
     global _jsonl_schedule_task
@@ -147,3 +178,22 @@ def stop_jsonl_scheduler():
     if _jsonl_schedule_task and not _jsonl_schedule_task.done():
         _jsonl_schedule_task.cancel()
     _jsonl_schedule_task = None
+
+
+def start_training_scheduler(run_func):
+    """Start the training pipeline scheduler (nightly at 4 AM)."""
+    global _training_schedule_task
+    if _training_schedule_task and not _training_schedule_task.done():
+        _training_schedule_task.cancel()
+    _training_schedule_task = asyncio.create_task(
+        _scheduled_loop("training", run_func, "training_schedule")
+    )
+    logger.info("Training pipeline scheduler started")
+
+
+def stop_training_scheduler():
+    """Stop the training pipeline scheduler."""
+    global _training_schedule_task
+    if _training_schedule_task and not _training_schedule_task.done():
+        _training_schedule_task.cancel()
+    _training_schedule_task = None

@@ -19,9 +19,13 @@ from routes.embedding import router as embedding_router
 from routes.anamnesis_gpt import router as anamnesis_gpt_router
 from routes.feedback import router as feedback_router
 from routes.context_index import router as context_index_router
-from crawler import start_crawler, stop_crawler, load_crawler_config
+from crawler import load_crawler_config, run_crawl_cycle
 from jsonl_ingester import run_jsonl_ingestion, initialize_ingester, load_jsonl_source_roots
-from scheduler import start_jsonl_scheduler, stop_jsonl_scheduler, start_training_scheduler, stop_training_scheduler
+from scheduler import (
+    start_crawler_scheduler, stop_crawler_scheduler,
+    start_jsonl_scheduler, stop_jsonl_scheduler,
+    start_training_scheduler, stop_training_scheduler,
+)
 from training_pipeline import run_training_pipeline
 from models_registry import seed_models_registry
 
@@ -76,8 +80,8 @@ async def lifespan(app: FastAPI):
     logger.info("Checking for reembed checkpoint...")
     await reembed_auto_resume()
 
-    logger.info("Starting crawler...")
-    start_crawler()
+    logger.info("Starting crawler scheduler...")
+    start_crawler_scheduler(run_crawl_cycle)
 
     logger.info("Starting JSONL scheduler...")
     start_jsonl_scheduler(run_jsonl_ingestion)
@@ -92,7 +96,7 @@ async def lifespan(app: FastAPI):
     # --- Shutdown ---
     stop_training_scheduler()
     stop_jsonl_scheduler()
-    stop_crawler()
+    stop_crawler_scheduler()
 
     # Save reembed checkpoint if running so it auto-resumes next start
     if _reembed_state.get("running") and _reembed_state.get("checkpoint_id"):

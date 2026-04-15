@@ -152,7 +152,7 @@
             <p class="empty-state">Loading crawler status...</p>
         </div>
 
-        <h3>Schedule</h3>
+        <h3>Schedule <button class="btn-help" data-help="crawler-overview" title="Help">?</button></h3>
         <div class="settings-panel">
             <div class="project-description" style="margin-bottom:12px">
                 <p><strong>What the Crawler does:</strong> Scans known files (CLAUDE.md, handoffs, project code, scripts, teachings) across all machines, hashes their content, and ingests new/changed sections as episodes. Uses local embeddings only — always free.</p>
@@ -175,7 +175,7 @@
             </div>
         </div>
 
-        <h3>Machine Roots</h3>
+        <h3>Machine Roots <button class="btn-help" data-help="machine-roots" title="Help">?</button></h3>
         <div class="settings-panel">
             <div class="project-description" style="margin-bottom:12px">
                 <p>Directories scanned for projects (by <code>docker-compose.yml</code> presence) and scripts (<code>0_SCRIPTS/</code>). Paths are as seen <em>inside the container</em> via volume mounts.</p>
@@ -192,7 +192,7 @@
             </div>
         </div>
 
-        <h3>Named Sources</h3>
+        <h3>Named Sources <button class="btn-help" data-help="named-sources" title="Help">?</button></h3>
         <div class="settings-panel">
             <div class="project-description" style="margin-bottom:12px">
                 <p>Specific files scanned by name (genesis, handoff, intercom, etc.). Each is ingested as markdown sections.</p>
@@ -208,13 +208,13 @@
             </div>
         </div>
 
-        <h3>Docx Tag Patterns</h3>
+        <h3>Document Tag Patterns <button class="btn-help" data-help="doc-patterns" title="Help">?</button></h3>
         <div class="settings-panel">
             <div class="project-description" style="margin-bottom:12px">
-                <p>Rules applied to <code>.docx</code> files during crawling to assign tags. Match against <code>filename</code> or <code>content</code>. Regex or plain substring.</p>
+                <p>Rules applied to documents (<code>.docx</code>, <code>.pdf</code>, <code>.odt</code>, <code>.pages</code>, <code>.md</code>, <code>.txt</code>, <code>.rtf</code>) during crawling to assign tags. Match against <code>filename</code> or <code>content</code>. Regex or plain substring.</p>
             </div>
             <table id="docx-patterns-table">
-                <thead><tr><th>Match</th><th>Tag</th><th>Field</th><th>Regex</th><th></th></tr></thead>
+                <thead><tr><th>Match</th><th>Tag</th><th>Field</th><th>Regex</th><th title="Case insensitive">Ci</th><th></th></tr></thead>
                 <tbody id="docx-patterns-body"></tbody>
             </table>
             <div class="settings-row" style="margin-top:8px">
@@ -234,6 +234,141 @@
             </tbody>
         </table>
     </section>
+
+    <!-- ─── Help modals ──────────────────────────────────────────── -->
+    <div id="help-modal-overlay" class="help-modal-overlay" style="display:none;">
+        <div class="help-modal-box">
+            <button class="btn-help-close" id="btn-help-close">&times;</button>
+            <div id="help-modal-content"></div>
+        </div>
+    </div>
+
+    <!-- Help content templates (hidden) -->
+    <script type="text/template" id="help-tpl-crawler-overview">
+        <h4>How the Crawler Works</h4>
+        <div class="help-section">
+            <div class="help-label">What it scans (5 categories)</div>
+            <ol>
+                <li><strong>Named Sources</strong> — specific files by exact path (e.g. <code>genesis.md</code>, <code>handoff.md</code>, <code>intercom.md</code>, user profile). Split into episodes by <code>###</code> markdown headers.</li>
+                <li><strong>Machine Roots</strong> — for each machine configured below, three sweeps run:
+                    <ul>
+                        <li><em>Projects</em>: any directory containing <code>docker-compose.yml</code> → ingests <code>CLAUDE.md</code>, <code>README.md</code>, <code>docker-compose.yml</code>, <code>*.sh</code>, <code>*.py</code> at the project root</li>
+                        <li><em>Scripts</em>: <code>0_SCRIPTS/</code> → all <code>.sh</code> files (your bash code-style authority)</li>
+                        <li><em>Deep scan</em>: all <code>0_*</code> directories recursively → <code>.py .sh .js .ts .ino .cpp .c .h .groovy .yml .java .go .rs .md</code> (files up to 64 KB)</li>
+                    </ul>
+                </li>
+                <li><strong>Teachings</strong> — <code>/sources/teachings/</code> (mounted from <code>~/0_TEACHINGS/</code>) — each <code>.md</code> file = one episode</li>
+                <li><strong>Documents</strong> — <code>/sources/documents/</code> (mounted from your OneDrive) — <code>.docx</code>, <code>.pdf</code>, <code>.odt</code>, <code>.pages</code>, <code>.md</code>, <code>.txt</code>, <code>.rtf</code> (see Document Tag Patterns below)</li>
+            </ol>
+        </div>
+        <div class="help-section">
+            <div class="help-label">Deduplication</div>
+            <p>Content is hashed (SHA-256). Already-ingested content is never re-ingested, even if the file is re-scanned. Only new or changed sections get new episodes.</p>
+        </div>
+        <div class="help-section">
+            <div class="help-label">Cost</div>
+            <p>Uses local embeddings only — always free, no API calls.</p>
+        </div>
+    </script>
+
+    <script type="text/template" id="help-tpl-machine-roots">
+        <h4>Machine Roots</h4>
+        <div class="help-section">
+            <div class="help-label">What "Machine" means</div>
+            <p>The <strong>Machine</strong> field is your <strong>SSH alias</strong> — the <code>Host</code> entry in <code>~/.ssh/config</code> on the machine running the Anamnesis container. The crawler uses this alias to:</p>
+            <ul>
+                <li>Label ingested episodes with a machine tag (e.g. tag <code>server</code>, <code>office</code>)</li>
+                <li><code>sync_sources.sh</code> (run hourly via cron) uses the alias to <code>rsync</code> files from that machine into the container volume mount</li>
+            </ul>
+        </div>
+        <div class="help-section">
+            <div class="help-label">Examples</div>
+            <table style="font-size:0.85em;border-collapse:collapse;width:100%">
+                <tr style="color:var(--text-secondary)"><th style="text-align:left;padding:3px 8px">Machine</th><th style="text-align:left;padding:3px 8px">Path (in container)</th><th style="text-align:left;padding:3px 8px">What it is</th></tr>
+                <tr><td style="padding:3px 8px"><code>office</code></td><td style="padding:3px 8px"><code>/sources/office</code></td><td style="padding:3px 8px">Local machine (this one) — no SSH needed, direct volume mount</td></tr>
+                <tr><td style="padding:3px 8px"><code>server</code></td><td style="padding:3px 8px"><code>/sources/server</code></td><td style="padding:3px 8px">Remote machine with SSH alias "server" in ~/.ssh/config</td></tr>
+                <tr><td style="padding:3px 8px"><code>dellserver</code></td><td style="padding:3px 8px"><code>/sources/dellserver</code></td><td style="padding:3px 8px">Remote machine with SSH alias "dellserver"</td></tr>
+                <tr><td style="padding:3px 8px"><code>jessica</code></td><td style="padding:3px 8px"><code>/sources/jessica</code></td><td style="padding:3px 8px">macOS machine — SSH alias "jessica" in ~/.ssh/config</td></tr>
+            </table>
+        </div>
+        <div class="help-section">
+            <div class="help-label">Path (in container)</div>
+            <p>This is where the machine's home directory is mounted <em>inside the Docker container</em>. It is always <code>/sources/&lt;machine-name&gt;</code>. The actual syncing (from remote → container host → container) is handled by <code>sync_sources.sh</code>, not configured here.</p>
+        </div>
+        <div class="help-section">
+            <div class="help-label">What gets scanned per machine</div>
+            <ul>
+                <li>Any project directory containing <code>docker-compose.yml</code> → key files at project root</li>
+                <li><code>0_SCRIPTS/</code> → all <code>.sh</code> files</li>
+                <li>All <code>0_*</code> directories → recursively, all code + markdown files up to 64 KB</li>
+            </ul>
+        </div>
+    </script>
+
+    <script type="text/template" id="help-tpl-named-sources">
+        <h4>Named Sources</h4>
+        <div class="help-section">
+            <div class="help-label">What they are</div>
+            <p>Specific files tracked by exact container path. These are files that are too important to rely on project-scanning — they're always checked every crawl cycle.</p>
+        </div>
+        <div class="help-section">
+            <div class="help-label">How content is ingested</div>
+            <p>Each file is split into sections by <code>###</code> markdown headers. Each section becomes one episode. The intercom file uses a special parser that splits by <code>### MSG-</code> headers instead.</p>
+        </div>
+        <div class="help-section">
+            <div class="help-label">Fields</div>
+            <ul>
+                <li><strong>Name</strong> — internal identifier, becomes a tag on episodes (e.g. <code>genesis</code>, <code>handoff</code>, <code>intercom</code>)</li>
+                <li><strong>Path</strong> — absolute path <em>inside the container</em> (e.g. <code>/sources/server/0_GENESIS_PROJECT/genesis.md</code>)</li>
+                <li><strong>Instance</strong> — which Claude instance owns this source (e.g. <code>office</code>, <code>office-genesis</code>)</li>
+                <li><strong>Project</strong> — project label for episodes (e.g. <code>0_GENESIS_PROJECT</code>)</li>
+                <li><strong>Description</strong> — human-readable note, shown in the All Active Sources table</li>
+            </ul>
+        </div>
+        <div class="help-section">
+            <div class="help-label">Example</div>
+            <p>Name: <code>genesis</code> | Path: <code>/sources/server/0_GENESIS_PROJECT/genesis.md</code> | Instance: <code>office-genesis</code> | Project: <code>0_GENESIS_PROJECT</code></p>
+        </div>
+    </script>
+
+    <script type="text/template" id="help-tpl-doc-patterns">
+        <h4>Document Tag Patterns</h4>
+        <div class="help-section">
+            <div class="help-label">Supported formats</div>
+            <table style="font-size:0.85em;border-collapse:collapse;width:100%">
+                <tr style="color:var(--text-secondary)"><th style="text-align:left;padding:3px 8px">Extension</th><th style="text-align:left;padding:3px 8px">Parser</th><th style="text-align:left;padding:3px 8px">Notes</th></tr>
+                <tr><td style="padding:3px 8px"><code>.docx</code></td><td style="padding:3px 8px">python-docx</td><td style="padding:3px 8px">Full text + tables</td></tr>
+                <tr><td style="padding:3px 8px"><code>.pdf</code></td><td style="padding:3px 8px">pdfplumber</td><td style="padding:3px 8px">All pages, text extraction</td></tr>
+                <tr><td style="padding:3px 8px"><code>.odt</code></td><td style="padding:3px 8px">odfpy</td><td style="padding:3px 8px">OpenDocument (LibreOffice)</td></tr>
+                <tr><td style="padding:3px 8px"><code>.pages</code></td><td style="padding:3px 8px">ZIP + lxml/pdfplumber</td><td style="padding:3px 8px">Apple Pages — tries embedded PDF, then XML fallback</td></tr>
+                <tr><td style="padding:3px 8px"><code>.md</code></td><td style="padding:3px 8px">plain text</td><td style="padding:3px 8px">Markdown files</td></tr>
+                <tr><td style="padding:3px 8px"><code>.txt</code></td><td style="padding:3px 8px">plain text</td><td style="padding:3px 8px">Plain text files</td></tr>
+                <tr><td style="padding:3px 8px"><code>.rtf</code></td><td style="padding:3px 8px">plain text</td><td style="padding:3px 8px">Rich Text (formatting lost, text extracted)</td></tr>
+            </table>
+        </div>
+        <div class="help-section">
+            <div class="help-label">How tag patterns work</div>
+            <p>These patterns run against <strong>all</strong> document types listed above. Every ingested document automatically gets the tags <code>document</code>, <code>onedrive</code>, and its format (e.g. <code>pdf</code>, <code>docx</code>, <code>pages</code>). These patterns add extra tags on top.</p>
+        </div>
+        <div class="help-section">
+            <div class="help-label">Fields</div>
+            <ul>
+                <li><strong>Match</strong> — the string or regex pattern to look for</li>
+                <li><strong>Tag</strong> — the tag to add when matched (e.g. <code>legal</code>, <code>school</code>, <code>portfolio</code>)</li>
+                <li><strong>Field</strong> — what to match against: <code>filename</code> (lowercased) or <code>content</code> (full extracted text)</li>
+                <li><strong>Regex</strong> — check this box if your Match is a regular expression; leave unchecked for plain substring match. A green/red border shows live validation.</li>
+                <li><strong>Ci</strong> (case insensitive) — when checked, matching ignores case (e.g. <code>elfege</code> matches <code>ELFEGE</code>, <code>Elfege</code>, etc.)</li>
+            </ul>
+        </div>
+        <div class="help-section">
+            <div class="help-label">Examples</div>
+            <ul>
+                <li>Match <code>agreement</code> | Tag <code>legal</code> | Field <code>filename</code> | Regex ☐ | Ci ☑ — tags any file with "agreement" in the name (case-insensitive)</li>
+                <li>Match <code>(contract|lease|landlord)</code> | Tag <code>legal</code> | Field <code>filename</code> | Regex ☑ | Ci ☑ — matches any of those words, any case</li>
+                <li>Match <code>FASNY</code> | Tag <code>school</code> | Field <code>content</code> | Regex ☐ | Ci ☐ — tags files whose text contains exact "FASNY"</li>
+            </ul>
+        </div>
+    </script>
 
     <!-- ─── JSONL Ingester Tab ────────────────────────────────── -->
     <section id="tab-jsonl" class="tab-content">

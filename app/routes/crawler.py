@@ -1,4 +1,6 @@
 import logging
+import os
+import re
 from typing import Optional
 
 from fastapi import APIRouter
@@ -9,7 +11,7 @@ from jsonl_ingester import (
     get_jsonl_source_roots_config,
     save_jsonl_source_roots,
 )
-from database import load_docx_tag_patterns, save_docx_tag_patterns
+from database import load_doc_tag_patterns, save_doc_tag_patterns
 
 logger = logging.getLogger("anamnesis.routes.crawler")
 
@@ -38,15 +40,33 @@ class JsonlSourceRootsUpdate(BaseModel):
     roots: dict[str, str]
 
 
-class DocxTagPattern(BaseModel):
+class DocTagPattern(BaseModel):
     match: str
     tag: str
     field: str = "filename"
     regex: bool = False
+    ignorecase: bool = False
 
 
-class DocxTagPatternsUpdate(BaseModel):
-    patterns: list[DocxTagPattern]
+class DocTagPatternsUpdate(BaseModel):
+    patterns: list[DocTagPattern]
+
+
+# ─── Available source mounts ─────────────────────────────────────
+
+@router.get("/available-mounts")
+async def list_available_mounts():
+    """List directories under /sources/ that exist inside the container."""
+    sources_root = "/sources"
+    mounts = []
+    try:
+        for entry in sorted(os.listdir(sources_root)):
+            full = os.path.join(sources_root, entry)
+            if os.path.isdir(full) and entry not in ("teachings", "documents"):
+                mounts.append({"name": entry, "path": full})
+    except FileNotFoundError:
+        pass
+    return {"mounts": mounts}
 
 
 # ─── Crawler status / trigger ────────────────────────────────────
@@ -111,16 +131,43 @@ async def update_jsonl_roots(body: JsonlSourceRootsUpdate):
     return {"status": "ok", "roots": body.roots}
 
 
-# ─── Docx tag patterns ───────────────────────────────────────────
+# ─── Document tag patterns ───────────────────────────────────────
 
-@router.get("/config/docx-tag-patterns")
-async def get_docx_tag_patterns():
-    patterns = await load_docx_tag_patterns()
+@router.get("/config/doc-tag-patterns")
+async def get_doc_tag_patterns():
+    patterns = await load_doc_tag_patterns()
     return {"patterns": patterns}
 
 
-@router.put("/config/docx-tag-patterns")
-async def update_docx_tag_patterns(body: DocxTagPatternsUpdate):
+@router.put("/config/doc-tag-patterns")
+async def update_doc_tag_patterns(body: DocTagPatternsUpdate):
     patterns = [p.model_dump() for p in body.patterns]
-    await save_docx_tag_patterns(patterns)
+    await save_doc_tag_patterns(patterns)
     return {"status": "ok", "patterns": patterns}
+
+
+# Backward-compat aliases (old endpoint paths still work)
+@router.get("/config/docx-tag-patterns")
+async def get_docx_tag_patterns_compat():
+    return await get_doc_tag_patterns()
+
+
+@router.put("/config/docx-tag-patterns")
+async def update_docx_tag_patterns_compat(body: DocTagPatternsUpdate):
+    return await update_doc_tag_patterns(body)
+
+
+# ─── Regex validation ───────────────────────────────────────────
+
+class RegexValidateRequest(BaseModel):
+    pattern: str
+
+
+@router.post("/validate-regex")
+async def validate_regex(body: RegexValidateRequest):
+    """Check if a regex pattern compiles. Returns {valid, error}."""
+    try:
+        re.compile(body.pattern)
+        return {"valid": True, "error": None}
+    except re.error as e:
+        return {"valid": False, "error": str(e)}
