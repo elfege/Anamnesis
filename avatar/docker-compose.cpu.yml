@@ -1,6 +1,4 @@
 # CPU-only — LLM + TTS, no animation (for testing/development)
-version: "3.8"
-
 services:
   avatar:
     build:
@@ -28,6 +26,8 @@ services:
 
       PERSONA_NAME: Belle
       LOG_LEVEL: DEBUG
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./app/static:/app/static
     restart: unless-stopped

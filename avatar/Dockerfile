@@ -8,11 +8,15 @@ ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 
 WORKDIR /app
 
-# System deps
+# System deps (cmake + build-essential needed for dlib)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     git \
     wget \
+    cmake \
+    build-essential \
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps (base — no torch yet for CPU/edge-tts-only mode)

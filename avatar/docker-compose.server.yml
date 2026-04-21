@@ -1,6 +1,4 @@
 # NVIDIA GTX 1660 SUPER (CUDA) — full pipeline with SadTalker animation
-version: "3.8"
-
 services:
   avatar:
     build:

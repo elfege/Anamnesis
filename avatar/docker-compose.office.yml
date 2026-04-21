@@ -1,6 +1,4 @@
 # AMD RX 6800 (ROCm) — full pipeline with SadTalker animation
-version: "3.8"
-
 services:
   avatar:
     build:
@@ -33,6 +31,8 @@ services:
 
       PERSONA_NAME: Belle
       LOG_LEVEL: INFO
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./app/static:/app/static
       - /tmp/SadTalker:/opt/SadTalker:ro
