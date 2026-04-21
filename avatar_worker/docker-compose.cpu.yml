@@ -1,0 +1,26 @@
+# CPU fallback — slow but works. Intended for dellserver when GPU workers are down.
+services:
+  avatar-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+    container_name: avatar-worker-cpu
+    ports:
+      - "3013:3013"
+    environment:
+      GPU_TYPE: cpu
+      MACHINE_NAME: ${MACHINE_NAME:-dellserver}
+      LOG_LEVEL: INFO
+      SADTALKER_DIR: /opt/SadTalker
+      SADTALKER_CHECKPOINT_DIR: /opt/SadTalker/checkpoints
+    volumes:
+      - ${SADTALKER_HOST_DIR:-/opt/SadTalker}:/opt/SadTalker:ro
+      - avatar_worker_hf_cache:/root/.cache/huggingface
+      - avatar_worker_torch_cache:/root/.cache/torch
+    restart: unless-stopped
+
+volumes:
+  avatar_worker_hf_cache:
+  avatar_worker_torch_cache:

@@ -1,0 +1,38 @@
+# AMD RX 6800 on office (ROCm). Uses ~/models/SadTalker (persistent).
+services:
+  avatar-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/rocm6.3
+    container_name: avatar-worker-office
+    ports:
+      - "3013:3013"
+    environment:
+      GPU_TYPE: rocm
+      MACHINE_NAME: office
+      HSA_OVERRIDE_GFX_VERSION: "10.3.0"
+      LOG_LEVEL: INFO
+      SADTALKER_DIR: /opt/SadTalker
+      SADTALKER_CHECKPOINT_DIR: /opt/SadTalker/checkpoints
+    volumes:
+      # SadTalker checkpoints — persistent location on host
+      - ${SADTALKER_HOST_DIR:-/home/elfege/models/SadTalker}:/opt/SadTalker:ro
+      # ROCm runtime
+      - /opt/rocm-6.3.3:/opt/rocm-6.3.3:ro
+      - /usr/bin/rocm-smi:/usr/bin/rocm-smi:ro
+      # Model caches — avoid re-downloading on rebuild
+      - avatar_worker_hf_cache:/root/.cache/huggingface
+      - avatar_worker_torch_cache:/root/.cache/torch
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - "44"
+      - "992"
+    restart: unless-stopped
+
+volumes:
+  avatar_worker_hf_cache:
+  avatar_worker_torch_cache:

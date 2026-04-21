@@ -1,0 +1,33 @@
+# NVIDIA GTX 1660 SUPER on server (CUDA).
+services:
+  avatar-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu121
+    container_name: avatar-worker-server
+    ports:
+      - "3013:3013"
+    environment:
+      GPU_TYPE: cuda
+      MACHINE_NAME: server
+      LOG_LEVEL: INFO
+      SADTALKER_DIR: /opt/SadTalker
+      SADTALKER_CHECKPOINT_DIR: /opt/SadTalker/checkpoints
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - ${SADTALKER_HOST_DIR:-/home/elfege/models/SadTalker}:/opt/SadTalker:ro
+      - avatar_worker_hf_cache:/root/.cache/huggingface
+      - avatar_worker_torch_cache:/root/.cache/torch
+    restart: unless-stopped
+
+volumes:
+  avatar_worker_hf_cache:
+  avatar_worker_torch_cache:
