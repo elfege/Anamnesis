@@ -28,14 +28,23 @@ D2_MODEL_PATH = os.environ.get("D2_MODEL_PATH", "")
 D2_CHECKPOINT = os.environ.get("D2_CHECKPOINT", "")
 
 # ─── TTS Backend ─────────────────────────────────────────────────
-# edge | xtts | fish
+# edge | xtts | fish — legacy default when no voice_id is passed
 TTS_BACKEND = os.environ.get("TTS_BACKEND", "edge")
-TTS_VOICE = os.environ.get("TTS_VOICE", "en-US-AnaNeural")  # Edge TTS voice
+TTS_VOICE = os.environ.get("TTS_VOICE", "en-US-AvaNeural")   # Edge TTS default
 TTS_RATE = os.environ.get("TTS_RATE", "+0%")                 # Speed adjustment
 
-# XTTS / Fish Speech (future)
-TTS_MODEL_URL = os.environ.get("TTS_MODEL_URL", "")
-TTS_SPEAKER_WAV = os.environ.get("TTS_SPEAKER_WAV", "")      # Voice cloning reference
+# Default voice_id used when the client doesn't specify one (namespaced form)
+DEFAULT_VOICE_ID = os.environ.get("DEFAULT_VOICE_ID", f"edge:{TTS_VOICE}")
+
+# Voice cloning (XTTS v2)
+XTTS_MODEL_NAME = os.environ.get("XTTS_MODEL_NAME", "tts_models/multilingual/multi-dataset/xtts_v2")
+XTTS_USE_DEEPSPEED = os.environ.get("XTTS_USE_DEEPSPEED", "false").lower() in ("true", "1", "yes")
+
+# Voice storage (cloned WAV samples + metadata)
+VOICES_DIR = os.environ.get("VOICES_DIR", "/app/voices")
+
+# Demucs (vocal separation for song → voice sample)
+DEMUCS_MODEL = os.environ.get("DEMUCS_MODEL", "htdemucs")   # htdemucs | htdemucs_ft | mdx_extra
 
 # ─── Animation Backend ──────────────────────────────────────────
 # sadtalker | liveportrait | none

@@ -15,14 +15,14 @@ services:
       MACHINE_NAME: office
       HSA_OVERRIDE_GFX_VERSION: "10.3.0"
 
-      # LLM — local Ollama on office
+      # LLM — office Ollama (GPU), llama3.2 is only 2GB, leaves room for SadTalker (~4GB)
       LLM_BACKEND: ollama
       OLLAMA_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: llama3.2
 
-      # TTS
+      # TTS — Ava = warm mature young woman (not Ana, the child voice)
       TTS_BACKEND: edge
-      TTS_VOICE: en-US-AnaNeural
+      TTS_VOICE: en-US-AvaNeural
 
       # Animation — SadTalker (audio-driven)
       ANIM_BACKEND: sadtalker
@@ -38,6 +38,11 @@ services:
       - /tmp/SadTalker:/opt/SadTalker:ro
       - /opt/rocm-6.3.3:/opt/rocm-6.3.3:ro
       - /usr/bin/rocm-smi:/usr/bin/rocm-smi:ro
+      # Persistent cloned voices — survives container rebuilds
+      - avatar_voices:/app/voices
+      # HF cache — avoids re-downloading XTTS (~1.8GB) and Demucs (~2.5GB)
+      - avatar_hf_cache:/root/.cache/huggingface
+      - avatar_torch_cache:/root/.cache/torch
     devices:
       - /dev/kfd
       - /dev/dri
@@ -45,3 +50,8 @@ services:
       - "44"
       - "992"
     restart: unless-stopped
+
+volumes:
+  avatar_voices:
+  avatar_hf_cache:
+  avatar_torch_cache:

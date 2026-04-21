@@ -1,11 +1,10 @@
-"""Edge TTS backend — uses Microsoft Edge's free TTS service.
+"""Edge TTS backend — Microsoft Edge's free TTS service.
 
-No GPU required, surprisingly high quality, many voices available.
-pip install edge-tts
+No GPU, surprisingly high quality, ~400 voices.
+`voice_spec` allows overriding the configured voice per request:
+    {"voice": "en-US-AvaNeural", "rate": "+0%"}
 """
-import io
 import logging
-import tempfile
 from typing import Optional
 
 import edge_tts
@@ -19,29 +18,23 @@ logger = logging.getLogger("avatar.tts.edge")
 class EdgeTTSBackend(TTSBackend):
 
     def __init__(self):
-        self._voice = config.TTS_VOICE
-        self._rate = config.TTS_RATE
+        self._default_voice = config.TTS_VOICE
+        self._default_rate = config.TTS_RATE
 
     @property
     def name(self) -> str:
-        return f"edge-tts/{self._voice}"
+        return f"edge-tts/{self._default_voice}"
 
     @property
     def sample_rate(self) -> int:
-        return 24000  # Edge TTS outputs 24kHz audio
+        return 24000
 
-    async def synthesize(self, text: str) -> bytes:
-        """Generate audio bytes from text."""
-        communicate = edge_tts.Communicate(text, self._voice, rate=self._rate)
-        audio_chunks = []
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_chunks.append(chunk["data"])
-        return b"".join(audio_chunks)
-
-    async def synthesize_to_file(self, text: str, output_path: str) -> str:
-        """Generate audio and save to file."""
-        communicate = edge_tts.Communicate(text, self._voice, rate=self._rate)
+    async def synthesize_to_file(
+        self, text: str, output_path: str, voice_spec: Optional[dict] = None
+    ) -> str:
+        voice = (voice_spec or {}).get("voice") or self._default_voice
+        rate = (voice_spec or {}).get("rate") or self._default_rate
+        communicate = edge_tts.Communicate(text, voice, rate=rate)
         await communicate.save(output_path)
-        logger.info(f"TTS audio saved to {output_path}")
+        logger.info(f"Edge TTS → {output_path} (voice={voice})")
         return output_path

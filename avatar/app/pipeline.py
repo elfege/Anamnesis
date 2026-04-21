@@ -19,6 +19,7 @@ import config
 import llm
 import tts
 import animation
+import voices
 
 logger = logging.getLogger("avatar.pipeline")
 
@@ -38,25 +39,26 @@ class AvatarPipeline:
 
     def __init__(self):
         self._llm = llm.get_backend(config.LLM_BACKEND)
-        self._tts = tts.get_backend(config.TTS_BACKEND)
         self._anim = animation.get_backend(config.ANIM_BACKEND)
         self._reference_image = config.ANIM_REFERENCE_IMAGE
+        self._voices = voices.get_registry()
         logger.info(
             f"Pipeline initialized: LLM={self._llm.name}, "
-            f"TTS={self._tts.name}, Animation={self._anim.name}"
+            f"Animation={self._anim.name}, default voice={config.DEFAULT_VOICE_ID}"
         )
 
     @property
     def backends(self) -> dict:
         return {
             "llm": self._llm.name,
-            "tts": self._tts.name,
+            "tts": f"default:{config.DEFAULT_VOICE_ID}",
             "animation": self._anim.name,
         }
 
     async def process(
         self,
         user_message: str,
+        voice_id: Optional[str] = None,
         on_token=None,
         on_audio=None,
         on_video=None,
@@ -97,14 +99,31 @@ class AvatarPipeline:
             result.error = "LLM returned empty response"
             return result
 
+        # ── Step 1.5: Unload Ollama model to free VRAM for animation ──
+        if config.LLM_BACKEND == "ollama" and config.ANIM_BACKEND != "none":
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=10) as client:
+                    await client.post(
+                        f"{config.OLLAMA_URL}/api/generate",
+                        json={"model": config.OLLAMA_MODEL, "keep_alive": 0},
+                    )
+                logger.info("Ollama model unloaded to free VRAM for animation")
+            except Exception as e:
+                logger.warning(f"Failed to unload Ollama model: {e}")
+
         # ── Step 2: TTS converts text to audio ──────────────────
         try:
             t_tts = time.monotonic()
             audio_dir = tempfile.mkdtemp(prefix="avatar_audio_")
             audio_path = os.path.join(audio_dir, "speech.mp3")
-            result.audio_path = await self._tts.synthesize_to_file(result.text, audio_path)
+            voice_spec = self._voices.resolve(voice_id)
+            result.audio_path = await tts.synthesize_with_voice(
+                voice_spec, result.text, audio_path
+            )
             result.timings["tts_ms"] = int((time.monotonic() - t_tts) * 1000)
-            logger.info(f"TTS done: {result.timings['tts_ms']}ms")
+            result.timings["voice_id"] = voice_id or config.DEFAULT_VOICE_ID
+            logger.info(f"TTS done: {result.timings['tts_ms']}ms (voice={voice_spec.get('backend')})")
 
             if on_audio:
                 await _maybe_await(on_audio, result.audio_path)

@@ -1,25 +1,33 @@
 """
-Avatar service — FastAPI app with WebSocket for real-time chat + animated persona.
+Avatar service — FastAPI app with WebSocket + voice management.
 
 Endpoints:
-  GET  /                  → Chat UI
-  GET  /health            → Service health + backend info
-  GET  /media/{path}      → Serve generated audio/video files
-  WS   /ws                → WebSocket: send message, receive streaming text + media URLs
-  POST /api/chat          → REST fallback: send message, get response + media
+  GET  /                           → Chat UI
+  GET  /health                     → Service health + backend info
+  GET  /media/{path}               → Serve generated audio/video files
+  WS   /ws                         → Chat WebSocket (streams tokens + audio + video)
+  POST /api/chat                   → REST fallback
+
+  GET  /api/voices                 → List available voices (edge presets + cloned)
+  POST /api/voices/upload          → Upload a sample (file|song|record). Multipart.
+  POST /api/voices/{slug}/preview  → Generate a short preview of the voice
+  DELETE /api/voices/{slug}        → Remove a cloned voice
 """
 import asyncio
 import json
 import logging
 import os
-import sys
+import tempfile
 from pathlib import Path
+from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import config
+import tts
+import voices
 from pipeline import AvatarPipeline
 
 # ─── Logging ─────────────────────────────────────────────────────
@@ -30,17 +38,15 @@ logging.basicConfig(
 logger = logging.getLogger("avatar")
 
 # ─── App ─────────────────────────────────────────────────────────
-app = FastAPI(title=f"Avatar — {config.PERSONA_NAME}", version="0.1.0")
+app = FastAPI(title=f"Avatar — {config.PERSONA_NAME}", version="0.2.0")
 
-# Serve static files (reference image, generated media)
 STATIC_DIR = Path(__file__).parent / "static"
 MEDIA_DIR = Path("/tmp/avatar_media")
 MEDIA_DIR.mkdir(exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# ─── Pipeline (lazy init) ───────────────────────────────────────
-_pipeline: AvatarPipeline | None = None
+_pipeline: Optional[AvatarPipeline] = None
 
 
 def _get_pipeline() -> AvatarPipeline:
@@ -50,7 +56,7 @@ def _get_pipeline() -> AvatarPipeline:
     return _pipeline
 
 
-# ─── Routes ──────────────────────────────────────────────────────
+# ─── Core routes ─────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -67,27 +73,24 @@ async def health():
         "machine": config.MACHINE_NAME,
         "gpu_type": config.GPU_TYPE,
         "backends": pipeline.backends,
+        "default_voice_id": config.DEFAULT_VOICE_ID,
     }
 
 
 @app.post("/api/chat")
 async def chat_rest(body: dict):
-    """REST endpoint — for clients that don't support WebSocket."""
     message = body.get("message", "").strip()
+    voice_id = body.get("voice_id")
     if not message:
         return JSONResponse({"error": "Empty message"}, status_code=400)
 
     pipeline = _get_pipeline()
-    result = await pipeline.process(message)
+    result = await pipeline.process(message, voice_id=voice_id)
 
-    response = {
-        "text": result.text,
-        "timings": result.timings,
-    }
+    response = {"text": result.text, "timings": result.timings}
     if result.error:
         response["error"] = result.error
     if result.audio_path:
-        # Copy to serveable location
         audio_name = f"audio_{id(result)}.mp3"
         _serve_file(result.audio_path, audio_name)
         response["audio_url"] = f"/media/{audio_name}"
@@ -95,21 +98,14 @@ async def chat_rest(body: dict):
         video_name = f"video_{id(result)}.mp4"
         _serve_file(result.video_path, video_name)
         response["video_url"] = f"/media/{video_name}"
-
     return response
 
 
 @app.websocket("/ws")
 async def websocket_chat(ws: WebSocket):
     """
-    WebSocket protocol:
-      Client sends: {"message": "hello"}
-      Server sends (streaming):
-        {"type": "token", "data": "Hello"}       — LLM tokens
-        {"type": "audio", "url": "/media/..."}    — TTS audio ready
-        {"type": "video", "url": "/media/..."}    — Animated video ready
-        {"type": "done", "timings": {...}}         — Pipeline complete
-        {"type": "error", "message": "..."}        — Error
+    Client → {"message": "hello", "voice_id": "edge:en-US-AvaNeural"}
+    Server → streaming {type: token|audio|video|done|error, ...}
     """
     await ws.accept()
     pipeline = _get_pipeline()
@@ -120,11 +116,11 @@ async def websocket_chat(ws: WebSocket):
             raw = await ws.receive_text()
             data = json.loads(raw)
             message = data.get("message", "").strip()
+            voice_id = data.get("voice_id")
             if not message:
                 await ws.send_json({"type": "error", "message": "Empty message"})
                 continue
 
-            # Stream tokens back in real-time
             async def on_token(token: str):
                 await ws.send_json({"type": "token", "data": token})
 
@@ -140,6 +136,7 @@ async def websocket_chat(ws: WebSocket):
 
             result = await pipeline.process(
                 message,
+                voice_id=voice_id,
                 on_token=on_token,
                 on_audio=on_audio,
                 on_video=on_video,
@@ -160,6 +157,130 @@ async def websocket_chat(ws: WebSocket):
             pass
 
 
+# ─── Voice management API ───────────────────────────────────────
+
+@app.get("/api/voices")
+async def list_voices():
+    reg = voices.get_registry()
+    return {
+        **reg.list_all(),
+        "default_voice_id": config.DEFAULT_VOICE_ID,
+    }
+
+
+@app.post("/api/voices/upload")
+async def upload_voice(
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    kind: str = Form("file"),           # "file" | "song" | "record"
+    language: str = Form("en"),
+    notes: Optional[str] = Form(None),
+):
+    """
+    Upload an audio sample and register it as a cloned voice.
+
+    kind=file    → treat as ready-to-use speech sample
+    kind=song    → run Demucs to isolate vocals, then register vocals.wav
+    kind=record  → browser-recorded WebM/Opus; converted to WAV
+    """
+    if kind not in ("file", "song", "record"):
+        raise HTTPException(status_code=400, detail=f"Invalid kind: {kind}")
+
+    reg = voices.get_registry()
+
+    # Save upload to a temp file (preserving extension so ffmpeg/demucs can sniff it)
+    suffix = Path(file.filename or "upload").suffix.lower() or ".bin"
+    tmpdir = Path(tempfile.mkdtemp(prefix="voice_upload_"))
+    upload_path = tmpdir / f"upload{suffix}"
+    with open(upload_path, "wb") as f:
+        f.write(await file.read())
+    logger.info(f"Voice upload: name={name}, kind={kind}, bytes={upload_path.stat().st_size}")
+
+    try:
+        # Decide what WAV to register
+        if kind == "song":
+            from audio.demucs_extract import extract_vocals
+            # Demucs wants a file it can decode — mp3/wav/flac all work
+            wav_to_register = await extract_vocals(str(upload_path), out_dir=str(tmpdir / "demucs"))
+        elif kind == "record":
+            # Browser typically sends webm/opus; convert to 24kHz mono WAV for XTTS
+            wav_to_register = str(tmpdir / "recorded.wav")
+            await asyncio.to_thread(_convert_to_wav, str(upload_path), wav_to_register)
+        else:  # file
+            # Accept WAV/MP3/FLAC; normalize to a clean mono 24kHz WAV for XTTS
+            wav_to_register = str(tmpdir / "normalized.wav")
+            await asyncio.to_thread(_convert_to_wav, str(upload_path), wav_to_register)
+
+        voice = reg.add(
+            name=name,
+            source_wav_path=wav_to_register,
+            source=kind,
+            language=language,
+            original_filename=file.filename,
+            notes=notes,
+        )
+        return {"ok": True, "voice": voice.to_public()}
+
+    except Exception as e:
+        logger.exception("Voice upload failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/voices/{slug}")
+async def delete_voice(slug: str):
+    reg = voices.get_registry()
+    ok = reg.delete(slug)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Voice not found")
+    return {"ok": True}
+
+
+@app.post("/api/voices/{slug}/preview")
+async def preview_voice(slug: str, body: dict):
+    text = (body or {}).get("text") or "Hello, I'm here. This is a short preview of my voice."
+    reg = voices.get_registry()
+    voice = reg.get_cloned(slug)
+    if voice is None:
+        raise HTTPException(status_code=404, detail="Voice not found")
+
+    out_dir = Path(tempfile.mkdtemp(prefix="voice_preview_"))
+    out_path = out_dir / "preview.mp3"
+    voice_spec = reg.resolve(voice.id)
+
+    try:
+        await tts.synthesize_with_voice(voice_spec, text, str(out_path))
+    except Exception as e:
+        logger.exception("Preview failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Serve via /media/
+    preview_name = f"preview_{slug}_{id(out_path):x}.mp3"
+    _serve_file(str(out_path), preview_name)
+    return {"audio_url": f"/media/{preview_name}"}
+
+
+@app.post("/api/preview-edge")
+async def preview_edge_voice(body: dict):
+    """Preview an edge-tts preset (no slug — the voice is encoded in voice_id)."""
+    text = body.get("text") or "Hello, this is a quick preview."
+    voice_id = body.get("voice_id")
+    if not voice_id or not voice_id.startswith("edge:"):
+        raise HTTPException(status_code=400, detail="voice_id must be an 'edge:*' id")
+
+    reg = voices.get_registry()
+    spec = reg.resolve(voice_id)
+
+    out_dir = Path(tempfile.mkdtemp(prefix="voice_preview_"))
+    out_path = out_dir / "preview.mp3"
+    try:
+        await tts.synthesize_with_voice(spec, text, str(out_path))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    preview_name = f"preview_edge_{hash(voice_id) & 0xFFFFFFFF:08x}.mp3"
+    _serve_file(str(out_path), preview_name)
+    return {"audio_url": f"/media/{preview_name}"}
+
+
 # ─── Media serving ───────────────────────────────────────────────
 
 @app.get("/media/{filename}")
@@ -172,11 +293,28 @@ async def serve_media(filename: str):
 
 
 def _serve_file(src: str, dest_name: str):
-    """Symlink a generated file into the media dir for serving."""
     dest = MEDIA_DIR / dest_name
     if dest.exists():
         dest.unlink()
     os.symlink(src, dest)
+
+
+# ─── Helpers ─────────────────────────────────────────────────────
+
+def _convert_to_wav(src: str, dst: str, sample_rate: int = 24000):
+    """Normalize arbitrary audio input to mono 24kHz WAV via ffmpeg."""
+    import subprocess
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", src,
+            "-ac", "1",                         # mono
+            "-ar", str(sample_rate),            # resample
+            "-acodec", "pcm_s16le",
+            dst,
+        ],
+        check=True,
+        capture_output=True,
+    )
 
 
 # ─── Entrypoint ──────────────────────────────────────────────────
