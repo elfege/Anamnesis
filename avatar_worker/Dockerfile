@@ -45,6 +45,7 @@ RUN pip install --no-cache-dir \
       facexlib \
       basicsr \
       safetensors \
+      "transformers<5" \
       coqui-tts \
       demucs \
       soundfile
