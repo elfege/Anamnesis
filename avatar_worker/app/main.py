@@ -49,11 +49,12 @@ async def xtts_synthesize(
 ):
     """Clone the voice in `speaker` and synthesize `text`. Returns WAV or MP3."""
     tmp = Path(tempfile.mkdtemp(prefix="xtts_"))
-    speaker_path = tmp / "speaker.wav"
+    speaker_path = tmp / "speaker_normalized.wav"
     out_wav = tmp / "out.wav"
 
     # Write speaker reference (may be WAV or anything ffmpeg can read → normalize)
-    raw = tmp / f"speaker{Path(speaker.filename or 'upload').suffix or '.bin'}"
+    suffix = Path(speaker.filename or "upload").suffix or ".bin"
+    raw = tmp / f"speaker_raw{suffix}"
     with open(raw, "wb") as f:
         f.write(await speaker.read())
     _to_wav(str(raw), str(speaker_path))
