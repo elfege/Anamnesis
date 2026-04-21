@@ -50,6 +50,12 @@ RUN pip install --no-cache-dir \
       demucs \
       soundfile
 
+# basicsr references torchvision.transforms.functional_tensor which was
+# removed in torchvision 0.17+. The module was renamed to `functional`.
+# Patch the import so SadTalker (which pulls in basicsr via gfpgan) works.
+RUN sed -i 's|from torchvision.transforms.functional_tensor import rgb_to_grayscale|from torchvision.transforms.functional import rgb_to_grayscale|' \
+    /usr/local/lib/python3.12/site-packages/basicsr/data/degradations.py
+
 # Accept Coqui TTS terms (XTTS v2)
 ENV COQUI_TOS_AGREED=1
 

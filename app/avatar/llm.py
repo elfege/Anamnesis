@@ -5,6 +5,7 @@ just persona-driven chat.
 """
 import json
 import logging
+import re
 from typing import AsyncIterator
 
 import httpx
@@ -28,6 +29,34 @@ async def _find_ollama_endpoint() -> tuple[str, str, bool] | None:
     return None
 
 
+_FRENCH_HINTS = re.compile(
+    r"\b(bonjour|salut|merci|comment|tu\s+vas|je\s+suis|qu['’]est|s['’]il|ça|c['’]est|t['’]aime|pourquoi|"
+    r"français|vois|parle|aime|fais|veux)\b|\b(ais|ait|ez|ont|ent)\b\s|é|è|ê|à|ç|û|ù|ô",
+    re.IGNORECASE,
+)
+_ENGLISH_HINTS = re.compile(
+    r"\b(hello|hi|hey|what|why|how|where|when|who|the|you|your|are|is|what's|don't|i'm|i\s+am|please|could|would|should)\b",
+    re.IGNORECASE,
+)
+
+def _detect_language(text: str) -> str:
+    """Cheap, good-enough language sniff. Returns 'fr' | 'en' | '' (unknown).
+
+    Llama3.2 ignores 'match user language' as a general rule, so we inject an
+    explicit 'Reply in X.' instruction per turn based on what we see.
+    """
+    t = text.strip()
+    if not t:
+        return ""
+    fr = len(_FRENCH_HINTS.findall(t))
+    en = len(_ENGLISH_HINTS.findall(t))
+    if fr > en:
+        return "fr"
+    if en > fr:
+        return "en"
+    return ""
+
+
 async def stream_reply(
     system: str,
     user_message: str,
@@ -43,11 +72,17 @@ async def stream_reply(
     base, label, has_gpu = endpoint
     yield ("endpoint", label)
 
+    lang = _detect_language(user_message)
+    lang_instruction = {
+        "en": "\n\nReply in English. Do not use French.",
+        "fr": "\n\nRéponds en français. Don't use English.",
+    }.get(lang, "")
+
     payload = {
         "model": model,
         "stream": True,
         "messages": [
-            {"role": "system", "content": system},
+            {"role": "system", "content": system + lang_instruction},
             {"role": "user", "content": user_message},
         ],
     }
