@@ -353,9 +353,12 @@ async def _reconcile_orphans():
 
 
 async def initialize_ingester():
-    """Called during app startup. Loads persisted state and reconciles orphans."""
+    """Called during app startup. Loads persisted state; reconciles orphans in background."""
     await _load_persisted_state()
-    await _reconcile_orphans()
+    # Orphan reconciliation scans every jsonl_* episode (31k+) — it can take
+    # many minutes. Don't block startup on it.
+    import asyncio as _aio
+    _aio.create_task(_reconcile_orphans())
 
 
 def get_ingester_status() -> dict:
