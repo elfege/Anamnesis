@@ -53,6 +53,17 @@ services:
       TRAINER_URLS: "${TRAINER_URLS:-}"
       TRAINER_LABEL_SERVER1: "${TRAINER_LABEL_SERVER1:-SERVER-1 · ROCm}"
       TRAINER_LABEL_SERVER2: "${TRAINER_LABEL_SERVER2:-SERVER-2 · CUDA}"
+      # ── Avatar ─────────────────────────────────────────────
+      AVATAR_WORKER_URL_1: "${AVATAR_WORKER_URL_1:-http://192.168.10.110:3013}"
+      AVATAR_WORKER_LABEL_1: "${AVATAR_WORKER_LABEL_1:-office · RX 6800 ROCm}"
+      AVATAR_WORKER_URL_2: "${AVATAR_WORKER_URL_2:-}"
+      AVATAR_WORKER_LABEL_2: "${AVATAR_WORKER_LABEL_2:-}"
+      AVATAR_WORKER_URL_3: "${AVATAR_WORKER_URL_3:-}"
+      AVATAR_WORKER_LABEL_3: "${AVATAR_WORKER_LABEL_3:-}"
+      AVATAR_EDGE_VOICE: "${AVATAR_EDGE_VOICE:-en-US-AvaNeural}"
+      AVATAR_PERSONA_NAME: "${AVATAR_PERSONA_NAME:-Belle}"
+      AVATAR_ANIMATE_DEFAULT: "${AVATAR_ANIMATE_DEFAULT:-auto}"
+      VOICES_DIR: "/app/voices"
     volumes:
       - /etc/machine-id:/etc/host-machine-id:ro
       - ./app:/app
@@ -73,6 +84,8 @@ services:
       - ${DOCUMENTS_DIR:-./sources/documents}:/sources/documents:ro
       # ── SSH keys (read-only — enables SSH browsing to other machines) ──
       - ${SSH_DIR:-~/.ssh}:/root/.ssh:ro
+      # ── Avatar: cloned voice WAVs (persistent) ────────────────
+      - anamnesis_voices:/app/voices
     depends_on:
       anamnesis-mongo:
         condition: service_healthy
@@ -83,6 +96,7 @@ volumes:
   mongo_data:
   mongo_configdb:
   model_cache:
+  anamnesis_voices:
 
 networks:
   anamnesis-net:

@@ -56,3 +56,46 @@ CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
 # Path to claude binary on the host — accessed via SSH from inside the container
 CLAUDE_CLI_HOST = os.environ.get("CLAUDE_CLI_HOST", "localhost")
 CLAUDE_CLI_PATH = os.environ.get("CLAUDE_CLI_PATH", "claude")
+
+# ─── Avatar ─────────────────────────────────────────────────────
+# Avatar GPU worker endpoints — tries in order, uses first reachable.
+# Mirrors OLLAMA_URL_N fallback pattern.
+def _build_avatar_worker_endpoints():
+    endpoints = []
+    for i in range(1, 10):
+        url = os.environ.get(f"AVATAR_WORKER_URL_{i}")
+        if not url:
+            break
+        label = os.environ.get(f"AVATAR_WORKER_LABEL_{i}", f"avatar-worker-{i}")
+        endpoints.append((url, label))
+    return endpoints
+
+AVATAR_WORKER_ENDPOINTS = _build_avatar_worker_endpoints()
+
+# Voice storage (cloned WAV samples + metadata sidecar JSON)
+VOICES_DIR = os.environ.get("VOICES_DIR", "/app/voices")
+
+# Default voice ID (used when no voice is specified per-request)
+AVATAR_EDGE_VOICE = os.environ.get("AVATAR_EDGE_VOICE", "en-US-AvaNeural")
+AVATAR_EDGE_RATE = os.environ.get("AVATAR_EDGE_RATE", "+0%")
+DEFAULT_VOICE_ID = os.environ.get("DEFAULT_VOICE_ID", f"edge:{AVATAR_EDGE_VOICE}")
+
+# Reference image for lip-sync animation (mounted into container)
+AVATAR_REFERENCE_IMAGE = os.environ.get("AVATAR_REFERENCE_IMAGE", "/app/static/img/belle_reference.png")
+
+# Animation on by default if a worker is configured and a reference image exists
+_auto_animate = bool(AVATAR_WORKER_ENDPOINTS) and os.path.exists(AVATAR_REFERENCE_IMAGE)
+AVATAR_ANIMATE_DEFAULT = os.environ.get("AVATAR_ANIMATE_DEFAULT", "auto").lower()
+if AVATAR_ANIMATE_DEFAULT == "auto":
+    AVATAR_ANIMATE_DEFAULT = _auto_animate
+else:
+    AVATAR_ANIMATE_DEFAULT = AVATAR_ANIMATE_DEFAULT in ("true", "1", "yes")
+
+# Persona (overridable via env)
+AVATAR_PERSONA_NAME = os.environ.get("AVATAR_PERSONA_NAME", "Belle")
+AVATAR_PERSONA_SYSTEM_PROMPT = os.environ.get(
+    "AVATAR_PERSONA_SYSTEM_PROMPT",
+    "You are Belle, a thoughtful and curious conversational partner. "
+    "You speak naturally, with warmth and intelligence. "
+    "Keep responses concise — 1-3 sentences — since they will be spoken aloud.",
+)
