@@ -289,6 +289,29 @@
             color: var(--text-dim);
         }
 
+        /* Feedback buttons */
+        .msg-feedback {
+            display: flex;
+            gap: 6px;
+            margin-top: 4px;
+            opacity: 0;
+            transition: opacity 0.15s;
+        }
+        .msg:hover .msg-feedback { opacity: 1; }
+        .msg-feedback button {
+            background: none;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 2px 8px;
+            font-size: 0.75em;
+            cursor: pointer;
+            color: var(--text-dim);
+        }
+        .msg-feedback button:hover { border-color: var(--accent); color: var(--text); }
+        .msg-feedback button.voted-up { border-color: var(--success); color: var(--success); opacity: 1; }
+        .msg-feedback button.voted-down { border-color: var(--danger); color: var(--danger); opacity: 1; }
+        .msg-feedback .voted-up, .msg-feedback .voted-down { pointer-events: none; }
+
         /* Input row */
         .input-row {
             display: flex;
@@ -326,6 +349,8 @@
 
         .btn-send:hover { background: var(--accent); color: #000; }
         .btn-send:disabled { opacity: 0.4; cursor: default; }
+        .btn-send.stopping { background: var(--danger); border-color: var(--danger); color: #fff; opacity: 1; }
+        .btn-send.stopping:hover { background: #ff6e67; }
 
         .cost-badge { font-size: 0.7em; color: var(--text-dim); font-style: italic; margin-top: 3px; }
 
@@ -393,6 +418,7 @@ $(function () {
         streaming: false,
         claude_enabled: false,
         cli_enabled: false,
+        abort_controller: null,
     };
 
     // ── Helpers ────────────────────────────────────────────────────
@@ -424,6 +450,36 @@ $(function () {
     function system_msg(text) {
         $("#sc-messages").append('<div class="msg system"><div class="msg-bubble">' + esc(text) + '</div></div>');
         scroll_bottom();
+    }
+
+    function add_feedback_buttons($msg, user_msg, assistant_msg) {
+        var $fb = $('<div class="msg-feedback">' +
+            '<button class="fb-up" title="Good response">&#x1F44D;</button>' +
+            '<button class="fb-down" title="Bad response">&#x1F44E;</button>' +
+            '</div>');
+        $msg.append($fb);
+        $fb.find(".fb-up").on("click", function () { send_feedback($(this), $fb, user_msg, assistant_msg, 1); });
+        $fb.find(".fb-down").on("click", function () { send_feedback($(this), $fb, user_msg, assistant_msg, -1); });
+    }
+
+    function send_feedback($btn, $fb, user_msg, assistant_msg, rating) {
+        $.ajax({
+            url: "/api/feedback",
+            method: "POST",
+            contentType: "application/json",
+            data: JSON.stringify({
+                session_id: state.session_id || "",
+                user_message: user_msg,
+                assistant_message: assistant_msg,
+                rating: rating,
+                backend: state.backend,
+                model: state.model || "",
+            }),
+            success: function () {
+                $fb.find("button").removeClass("voted-up voted-down");
+                $btn.addClass(rating === 1 ? "voted-up" : "voted-down");
+            },
+        });
     }
 
     // ── Models ─────────────────────────────────────────────────────
@@ -570,16 +626,35 @@ $(function () {
         system_msg("Cleared.");
     });
 
-    // ── Send ───────────────────────────────────────────────────────
+    // ── Send / Stop ─────────────────────────────────────────────────
+    function set_streaming_ui(on) {
+        var $btn = $("#sc-btn-send");
+        if (on) {
+            $btn.text("Stop").addClass("stopping").prop("disabled", false);
+            $("#sc-input").prop("disabled", true);
+        } else {
+            $btn.text("Send").removeClass("stopping").prop("disabled", false);
+            $("#sc-input").prop("disabled", false).focus();
+        }
+    }
+
+    function do_stop() {
+        if (state.abort_controller) {
+            state.abort_controller.abort();
+            state.abort_controller = null;
+        }
+    }
+
     function do_send() {
         if (state.streaming) return;
         var msg = $("#sc-input").val().trim();
         if (!msg) return;
         if (!state.session_id) new_session();
 
-        $("#sc-input").val("").prop("disabled", true);
-        $("#sc-btn-send").prop("disabled", true);
+        $("#sc-input").val("");
         state.streaming = true;
+        state.abort_controller = new AbortController();
+        set_streaming_ui(true);
 
         append_msg("user", msg);
 
@@ -589,6 +664,7 @@ $(function () {
         fetch("/api/chat/stream", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
+            signal: state.abort_controller.signal,
             body: JSON.stringify({
                 message: msg,
                 backend: state.backend,
@@ -633,22 +709,41 @@ $(function () {
                         } catch (e) {}
                     });
                     read_chunk();
-                }).catch(function () { finish(); });
+                }).catch(function (err) {
+                    if (err.name === "AbortError") {
+                        $("#" + stream_id + " .msg-bubble").text(accumulated || "(stopped)");
+                    }
+                    finish();
+                });
             }
             read_chunk();
-        }).catch(function (e) { system_msg("Error: " + e.message); finish(); });
+        }).catch(function (e) {
+            if (e.name === "AbortError") {
+                $("#" + stream_id + " .msg-bubble").text("(stopped)");
+            } else {
+                system_msg("Error: " + e.message);
+            }
+            finish();
+        });
 
         function finish() {
             state.streaming = false;
-            $("#sc-input").prop("disabled", false).focus();
-            $("#sc-btn-send").prop("disabled", false);
+            state.abort_controller = null;
+            set_streaming_ui(false);
+            // Add feedback buttons if there's a response
+            if (accumulated) {
+                add_feedback_buttons($("#" + stream_id), msg, accumulated);
+            }
             load_sessions();
         }
     }
 
-    $("#sc-btn-send").on("click", do_send);
+    $("#sc-btn-send").on("click", function () {
+        if (state.streaming) { do_stop(); } else { do_send(); }
+    });
     $("#sc-input").on("keydown", function (e) {
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); do_send(); }
+        if (e.key === "Escape" && state.streaming) { do_stop(); }
     });
 
     // ── Init ───────────────────────────────────────────────────────

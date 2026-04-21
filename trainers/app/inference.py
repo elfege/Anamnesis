@@ -106,17 +106,27 @@ def load_model() -> bool:
             logger.info(f"Loading base model: {BASE_MODEL}")
             device = _get_device()
 
-            bnb_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=torch.float16,
-            )
+            # BitsAndBytes 4-bit only works on CUDA (NVIDIA).
+            # On ROCm (AMD) it silently falls back to CPU dequant → ~0.07 tok/s.
+            # Qwen2.5-1.5B in fp16 is ~3GB — fits easily in 16GB VRAM without quantization.
+            load_kwargs = {
+                "device_map": "auto",
+                "torch_dtype": torch.float16,
+            }
+            if config.GPU_TYPE != "rocm":
+                bnb_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_compute_dtype=torch.float16,
+                )
+                load_kwargs["quantization_config"] = bnb_config
+                logger.info("Using 4-bit BitsAndBytes quantization (CUDA)")
+            else:
+                logger.info("ROCm detected — loading in fp16 (no BitsAndBytes)")
 
             base = AutoModelForCausalLM.from_pretrained(
                 BASE_MODEL,
-                quantization_config=bnb_config,
-                device_map="auto",
-                torch_dtype=torch.float16,
+                **load_kwargs,
             )
 
             logger.info(f"Loading adapter from: {ADAPTER_DIR}")

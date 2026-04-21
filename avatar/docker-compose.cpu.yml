@@ -1,0 +1,33 @@
+# CPU-only — LLM + TTS, no animation (for testing/development)
+version: "3.8"
+
+services:
+  avatar:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_TORCH: "false"
+        INSTALL_LIVEPORTRAIT: "false"
+    container_name: avatar-cpu
+    ports:
+      - "3012:3012"
+    environment:
+      GPU_TYPE: cpu
+      MACHINE_NAME: dev
+
+      # LLM
+      LLM_BACKEND: ollama
+      OLLAMA_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: llama3.2
+
+      # TTS only — no animation
+      TTS_BACKEND: edge
+      TTS_VOICE: en-US-AnaNeural
+      ANIM_BACKEND: none
+
+      PERSONA_NAME: Aria
+      LOG_LEVEL: DEBUG
+    volumes:
+      - ./app/static:/app/static
+    restart: unless-stopped

@@ -1,0 +1,16 @@
+[Unit]
+Description=Anamnesis Trainer (GPU inference + training)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/elfege/0_GENESIS_PROJECT/0_ANAMNESIS/trainers
+ExecStart=/home/elfege/0_GENESIS_PROJECT/0_ANAMNESIS/trainers/start.sh
+ExecStop=/home/elfege/0_GENESIS_PROJECT/0_ANAMNESIS/trainers/stop.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

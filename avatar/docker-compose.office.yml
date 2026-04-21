@@ -1,0 +1,50 @@
+# AMD RX 6800 (ROCm) — full pipeline with LivePortrait animation
+version: "3.8"
+
+services:
+  avatar:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/rocm6.3
+        INSTALL_TORCH: "true"
+        INSTALL_LIVEPORTRAIT: "true"
+    container_name: avatar-office
+    ports:
+      - "3012:3012"
+    environment:
+      GPU_TYPE: rocm
+      MACHINE_NAME: office
+      HSA_OVERRIDE_GFX_VERSION: "10.3.0"
+
+      # LLM — local Ollama on office
+      LLM_BACKEND: ollama
+      OLLAMA_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: llama3.2
+
+      # TTS
+      TTS_BACKEND: edge
+      TTS_VOICE: en-US-AnaNeural
+
+      # Animation — full LivePortrait
+      ANIM_BACKEND: liveportrait
+      LIVEPORTRAIT_CHECKPOINT_DIR: /models/liveportrait
+
+      PERSONA_NAME: Aria
+      LOG_LEVEL: INFO
+    volumes:
+      - ./app/static:/app/static
+      - liveportrait-models:/models/liveportrait
+      - /opt/rocm-6.3.3:/opt/rocm-6.3.3:ro
+      - /usr/bin/rocm-smi:/usr/bin/rocm-smi:ro
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - "44"
+      - "992"
+    restart: unless-stopped
+
+volumes:
+  liveportrait-models:

@@ -1,0 +1,50 @@
+# NVIDIA GTX 1660 SUPER (CUDA) — full pipeline with LivePortrait animation
+version: "3.8"
+
+services:
+  avatar:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu121
+        INSTALL_TORCH: "true"
+        INSTALL_LIVEPORTRAIT: "true"
+    container_name: avatar-server
+    ports:
+      - "3012:3012"
+    environment:
+      GPU_TYPE: cuda
+      MACHINE_NAME: server
+
+      # LLM — use Ollama on dellserver or office
+      LLM_BACKEND: ollama
+      OLLAMA_URL: http://192.168.10.20:11434
+      OLLAMA_MODEL: llama3.2
+
+      # TTS
+      TTS_BACKEND: edge
+      TTS_VOICE: en-US-AnaNeural
+
+      # Animation — full LivePortrait
+      ANIM_BACKEND: liveportrait
+      LIVEPORTRAIT_CHECKPOINT_DIR: /models/liveportrait
+
+      # Persona
+      PERSONA_NAME: Aria
+
+      LOG_LEVEL: INFO
+    volumes:
+      - ./app/static:/app/static
+      - liveportrait-models:/models/liveportrait
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  liveportrait-models:

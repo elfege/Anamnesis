@@ -44,19 +44,46 @@ def is_authorized() -> bool:
 async def gpt_status():
     """Check whether AnamnesisGPT is available on this machine."""
     authorized = is_authorized()
-    if authorized:
+    if not authorized:
         return {
-            "available": True,
-            "message": "AnamnesisGPT is available.",
-            "endpoints": GPU_ENDPOINTS,
+            "available": False,
+            "training": False,
+            "message": (
+                "AnamnesisGPT is only available on the authorized host. "
+                "Custom training on your own data is coming soon — "
+                "you'll be able to build and chat with your own model."
+            ),
         }
+
+    # Check if any trainer is currently running a training job
+    training_active = False
+    training_progress = None
+    for endpoint in GPU_ENDPOINTS:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get(f"{endpoint}/status")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("running"):
+                        training_active = True
+                        training_progress = data.get("progress")
+                        break
+        except Exception:
+            continue
+
+    if training_active:
+        return {
+            "available": False,
+            "training": True,
+            "message": "AnamnesisGPT is currently training on new data. Chat will resume when training completes.",
+            "progress": training_progress,
+        }
+
     return {
-        "available": False,
-        "message": (
-            "AnamnesisGPT is only available on the authorized host. "
-            "Custom training on your own data is coming soon — "
-            "you'll be able to build and chat with your own model."
-        ),
+        "available": True,
+        "training": False,
+        "message": "AnamnesisGPT is available.",
+        "endpoints": GPU_ENDPOINTS,
     }
 
 

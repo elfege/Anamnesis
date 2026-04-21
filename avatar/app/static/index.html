@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aria — Avatar Chat</title>
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: #14141f;
+      --surface2: #1e1e2e;
+      --border: #2a2a3e;
+      --text: #e0e0f0;
+      --text-dim: #888899;
+      --accent: #7c6ff5;
+      --accent-glow: rgba(124, 111, 245, 0.3);
+      --user-bg: #1a1a3a;
+      --ai-bg: #0f1f1a;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', -apple-system, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* ── Avatar Panel (left) ── */
+    .avatar-panel {
+      width: 400px;
+      min-width: 400px;
+      background: var(--surface);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      border-right: 1px solid var(--border);
+      position: relative;
+    }
+
+    .avatar-container {
+      width: 100%;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .avatar-container img,
+    .avatar-container video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .avatar-name {
+      padding: 12px;
+      text-align: center;
+      font-size: 14px;
+      color: var(--text-dim);
+      border-top: 1px solid var(--border);
+      width: 100%;
+    }
+
+    .avatar-name span {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #444;
+      margin-right: 6px;
+      vertical-align: middle;
+      transition: background 0.3s;
+    }
+
+    .status-dot.thinking { background: #f5a623; animation: pulse 1s infinite; }
+    .status-dot.speaking { background: #4caf50; animation: pulse 0.5s infinite; }
+    .status-dot.ready { background: #4caf50; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* ── Chat Panel (right) ── */
+    .chat-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+    }
+
+    .chat-header {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .chat-header h1 {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .backend-info {
+      font-size: 12px;
+      color: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .message {
+      max-width: 75%;
+      padding: 12px 16px;
+      border-radius: 12px;
+      line-height: 1.5;
+      font-size: 15px;
+      animation: fadeIn 0.2s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .message.user {
+      align-self: flex-end;
+      background: var(--user-bg);
+      border: 1px solid var(--border);
+    }
+
+    .message.assistant {
+      align-self: flex-start;
+      background: var(--ai-bg);
+      border: 1px solid rgba(76, 175, 80, 0.15);
+    }
+
+    .message.assistant .timing {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* ── Input ── */
+    .input-bar {
+      padding: 16px 24px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 12px;
+    }
+
+    .input-bar input {
+      flex: 1;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      color: var(--text);
+      font-size: 15px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .input-bar input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-glow);
+    }
+
+    .input-bar input::placeholder { color: var(--text-dim); }
+
+    .input-bar button {
+      background: var(--accent);
+      border: none;
+      border-radius: 8px;
+      padding: 12px 24px;
+      color: white;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    .input-bar button:hover { opacity: 0.85; }
+    .input-bar button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── Audio player (hidden, used for playback) ── */
+    audio { display: none; }
+
+    /* ── Scrollbar ── */
+    .messages::-webkit-scrollbar { width: 6px; }
+    .messages::-webkit-scrollbar-track { background: transparent; }
+    .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <!-- Avatar Panel -->
+  <div class="avatar-panel">
+    <div class="avatar-container" id="avatarContainer">
+      <img id="avatarImage" src="/static/reference.png" alt="Avatar">
+      <video id="avatarVideo" autoplay style="display:none;"></video>
+    </div>
+    <div class="avatar-name">
+      <span class="status-dot ready" id="statusDot"></span>
+      <span id="personaName">Aria</span>
+      <span id="backendLabel" style="margin-left: 8px; font-size: 11px; opacity: 0.5;"></span>
+    </div>
+  </div>
+
+  <!-- Chat Panel -->
+  <div class="chat-panel">
+    <div class="chat-header">
+      <h1>Chat</h1>
+      <div class="backend-info" id="backendInfo">connecting...</div>
+    </div>
+
+    <div class="messages" id="messages"></div>
+
+    <div class="input-bar">
+      <input type="text" id="input" placeholder="Type a message..." autocomplete="off">
+      <button id="sendBtn" onclick="send()">Send</button>
+    </div>
+  </div>
+
+  <audio id="audioPlayer"></audio>
+
+  <script>
+    const messagesEl = document.getElementById('messages');
+    const inputEl = document.getElementById('input');
+    const sendBtn = document.getElementById('sendBtn');
+    const statusDot = document.getElementById('statusDot');
+    const avatarImage = document.getElementById('avatarImage');
+    const avatarVideo = document.getElementById('avatarVideo');
+    const audioPlayer = document.getElementById('audioPlayer');
+    const backendInfo = document.getElementById('backendInfo');
+
+    let ws = null;
+    let currentAssistantEl = null;
+    let reconnectTimer = null;
+
+    // ── WebSocket ──
+    function connect() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+      ws.onopen = () => {
+        console.log('WS connected');
+        backendInfo.textContent = 'connected';
+        sendBtn.disabled = false;
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      };
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        handleMessage(msg);
+      };
+
+      ws.onclose = () => {
+        backendInfo.textContent = 'disconnected — reconnecting...';
+        sendBtn.disabled = true;
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = (err) => {
+        console.error('WS error', err);
+        ws.close();
+      };
+    }
+
+    function handleMessage(msg) {
+      switch (msg.type) {
+        case 'token':
+          setStatus('thinking');
+          if (!currentAssistantEl) {
+            currentAssistantEl = addMessage('', 'assistant');
+          }
+          currentAssistantEl.querySelector('.text').textContent += msg.data;
+          scrollToBottom();
+          break;
+
+        case 'audio':
+          setStatus('speaking');
+          audioPlayer.src = msg.url;
+          audioPlayer.play().catch(e => console.warn('Audio autoplay blocked:', e));
+          audioPlayer.onended = () => setStatus('ready');
+          break;
+
+        case 'video':
+          avatarImage.style.display = 'none';
+          avatarVideo.style.display = 'block';
+          avatarVideo.src = msg.url;
+          avatarVideo.play().catch(e => console.warn('Video autoplay blocked:', e));
+          avatarVideo.onended = () => {
+            avatarVideo.style.display = 'none';
+            avatarImage.style.display = 'block';
+          };
+          break;
+
+        case 'done':
+          if (currentAssistantEl && msg.timings) {
+            const timingEl = document.createElement('div');
+            timingEl.className = 'timing';
+            const parts = [];
+            if (msg.timings.llm_ms) parts.push(`LLM: ${msg.timings.llm_ms}ms`);
+            if (msg.timings.tts_ms) parts.push(`TTS: ${msg.timings.tts_ms}ms`);
+            if (msg.timings.anim_ms) parts.push(`Anim: ${msg.timings.anim_ms}ms`);
+            if (msg.timings.total_ms) parts.push(`Total: ${msg.timings.total_ms}ms`);
+            timingEl.textContent = parts.join(' · ');
+            currentAssistantEl.appendChild(timingEl);
+          }
+          currentAssistantEl = null;
+          if (!audioPlayer.paused) {
+            // still speaking
+          } else {
+            setStatus('ready');
+          }
+          sendBtn.disabled = false;
+          break;
+
+        case 'error':
+          setStatus('ready');
+          if (currentAssistantEl) {
+            currentAssistantEl.querySelector('.text').textContent += `\n[Error: ${msg.message}]`;
+          } else {
+            addMessage(`Error: ${msg.message}`, 'assistant');
+          }
+          currentAssistantEl = null;
+          sendBtn.disabled = false;
+          break;
+      }
+    }
+
+    function send() {
+      const text = inputEl.value.trim();
+      if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+      addMessage(text, 'user');
+      ws.send(JSON.stringify({ message: text }));
+      inputEl.value = '';
+      sendBtn.disabled = true;
+      setStatus('thinking');
+      scrollToBottom();
+    }
+
+    function addMessage(text, role) {
+      const el = document.createElement('div');
+      el.className = `message ${role}`;
+      const textSpan = document.createElement('span');
+      textSpan.className = 'text';
+      textSpan.textContent = text;
+      el.appendChild(textSpan);
+      messagesEl.appendChild(el);
+      scrollToBottom();
+      return el;
+    }
+
+    function setStatus(state) {
+      statusDot.className = `status-dot ${state}`;
+    }
+
+    function scrollToBottom() {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    // Enter key to send
+    inputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        send();
+      }
+    });
+
+    // Fetch backend info
+    fetch('/health').then(r => r.json()).then(data => {
+      document.getElementById('personaName').textContent = data.persona || 'Aria';
+      const b = data.backends || {};
+      backendInfo.textContent = `${b.llm || '?'} · ${b.tts || '?'} · ${b.animation || '?'}`;
+      document.getElementById('backendLabel').textContent = `(${data.gpu_type || '?'})`;
+    }).catch(() => {});
+
+    // Connect
+    connect();
+  </script>
+</body>
+</html>

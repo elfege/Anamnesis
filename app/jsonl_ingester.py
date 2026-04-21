@@ -31,7 +31,7 @@ from typing import Optional
 
 import httpx
 
-from config import OLLAMA_URL, OLLAMA_DEFAULT_MODEL, ANTHROPIC_API_KEY, CLAUDE_MODEL
+from config import OLLAMA_URL, OLLAMA_ENDPOINTS, OLLAMA_DEFAULT_MODEL, ANTHROPIC_API_KEY, CLAUDE_MODEL
 from database import get_episodes_collection, get_settings_collection
 from embedding import get_embedding
 
@@ -624,35 +624,43 @@ async def _summarize_with_ollama(exchange_text: str, model: str) -> Optional[dic
     if len(exchange_text) > MAX_EXCHANGE_FOR_SUMMARY:
         exchange_text = exchange_text[:MAX_EXCHANGE_FOR_SUMMARY] + "\n\n[... truncated ...]"
 
-    try:
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            response = await client.post(
-                f"{OLLAMA_URL}/api/chat",
-                json={
-                    "model": model,
-                    "stream": False,
-                    "options": {"num_thread": _get_core_limit(
-                        (await get_jsonl_settings()).get("cpu_core_pct", 70)
-                    )},
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": f"{SUMMARIZE_PROMPT}\n\n---\n\nEXCHANGE:\n{exchange_text}",
-                        }
-                    ],
-                },
-            )
-            response.raise_for_status()
+    # Try Ollama endpoints in fallback order
+    ollama_urls = [OLLAMA_URL] if OLLAMA_URL else [ep[0] for ep in OLLAMA_ENDPOINTS]
+    last_err = None
+    for ollama_url in ollama_urls:
+        try:
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                response = await client.post(
+                    f"{ollama_url}/api/chat",
+                    json={
+                        "model": model,
+                        "stream": False,
+                        "options": {"num_thread": _get_core_limit(
+                            (await get_jsonl_settings()).get("cpu_core_pct", 70)
+                        )},
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": f"{SUMMARIZE_PROMPT}\n\n---\n\nEXCHANGE:\n{exchange_text}",
+                            }
+                        ],
+                    },
+                )
+                response.raise_for_status()
 
-        reply = response.json().get("message", {}).get("content", "").strip()
-        return _parse_summary_response(reply)
+            reply = response.json().get("message", {}).get("content", "").strip()
+            return _parse_summary_response(reply)
+        except httpx.ConnectError:
+            last_err = f"Cannot connect to Ollama at {ollama_url}"
+            logger.debug(last_err)
+            continue
+        except Exception as e:
+            last_err = str(e)
+            logger.debug(f"Ollama summarization failed on {ollama_url}: {e}")
+            continue
 
-    except httpx.ConnectError:
-        logger.error("Cannot connect to Ollama — is it running?")
-        return None
-    except Exception as e:
-        logger.error(f"Ollama summarization failed: {e}")
-        return None
+    logger.error(f"All Ollama endpoints failed: {last_err}")
+    return None
 
 
 async def _summarize_with_claude(exchange_text: str) -> Optional[dict]:
