@@ -38,11 +38,17 @@ TTS_MODEL_URL = os.environ.get("TTS_MODEL_URL", "")
 TTS_SPEAKER_WAV = os.environ.get("TTS_SPEAKER_WAV", "")      # Voice cloning reference
 
 # ─── Animation Backend ──────────────────────────────────────────
-# liveportrait | none
-ANIM_BACKEND = os.environ.get("ANIM_BACKEND", "liveportrait")
+# sadtalker | liveportrait | none
+ANIM_BACKEND = os.environ.get("ANIM_BACKEND", "sadtalker")
 ANIM_REFERENCE_IMAGE = os.environ.get("ANIM_REFERENCE_IMAGE", "/app/static/reference.png")
 
-# LivePortrait settings
+# SadTalker settings (default — audio-driven, single stage)
+SADTALKER_DIR = os.environ.get("SADTALKER_DIR", "/opt/SadTalker")
+SADTALKER_CHECKPOINT_DIR = os.environ.get(
+    "SADTALKER_CHECKPOINT_DIR", "/models/sadtalker"
+)
+
+# LivePortrait settings (video-driven — needs separate audio→motion stage)
 LIVEPORTRAIT_CHECKPOINT_DIR = os.environ.get(
     "LIVEPORTRAIT_CHECKPOINT_DIR", "/models/liveportrait"
 )
@@ -52,9 +58,9 @@ HOST = os.environ.get("AVATAR_HOST", "0.0.0.0")
 PORT = int(os.environ.get("AVATAR_PORT", "3012"))
 
 # ─── Persona ─────────────────────────────────────────────────────
-PERSONA_NAME = os.environ.get("PERSONA_NAME", "Aria")
+PERSONA_NAME = os.environ.get("PERSONA_NAME", "Belle")
 PERSONA_SYSTEM_PROMPT = os.environ.get("PERSONA_SYSTEM_PROMPT", (
-    "You are Aria, a thoughtful and curious conversational partner. "
+    "You are Belle, a thoughtful and curious conversational partner. "
     "You speak naturally, with warmth and intelligence. "
     "Keep responses concise — 1-3 sentences — since they will be spoken aloud."
 ))

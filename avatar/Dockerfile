@@ -12,25 +12,38 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     git \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps (base — no torch yet for CPU/edge-tts-only mode)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install PyTorch only if LivePortrait animation is needed
-# (controlled by ANIM_BACKEND env at runtime, but torch must be present at build time)
+# Install PyTorch when GPU animation is needed
 ARG INSTALL_TORCH=false
 RUN if [ "$INSTALL_TORCH" = "true" ]; then \
-      pip install --no-cache-dir --index-url ${TORCH_INDEX_URL} torch torchvision; \
+      pip install --no-cache-dir --index-url ${TORCH_INDEX_URL} torch torchvision torchaudio; \
     fi
 
-# Clone LivePortrait if building with animation support
-ARG INSTALL_LIVEPORTRAIT=false
-RUN if [ "$INSTALL_LIVEPORTRAIT" = "true" ]; then \
-      git clone https://github.com/KwaiVGI/LivePortrait.git /opt/LivePortrait && \
-      cd /opt/LivePortrait && \
-      pip install --no-cache-dir -r requirements.txt; \
+# SadTalker dependencies (installed when torch is present)
+# SadTalker itself is mounted as a volume at /opt/SadTalker
+RUN if [ "$INSTALL_TORCH" = "true" ]; then \
+      pip install --no-cache-dir \
+        face_alignment \
+        dlib \
+        imageio \
+        imageio-ffmpeg \
+        librosa \
+        numba \
+        resampy \
+        pydub \
+        scipy \
+        kornia \
+        yacs \
+        gfpgan \
+        facexlib \
+        basicsr \
+        safetensors; \
     fi
 
 # App code

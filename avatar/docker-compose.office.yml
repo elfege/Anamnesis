@@ -1,4 +1,4 @@
-# AMD RX 6800 (ROCm) — full pipeline with LivePortrait animation
+# AMD RX 6800 (ROCm) — full pipeline with SadTalker animation
 version: "3.8"
 
 services:
@@ -9,7 +9,6 @@ services:
       args:
         TORCH_INDEX_URL: https://download.pytorch.org/whl/rocm6.3
         INSTALL_TORCH: "true"
-        INSTALL_LIVEPORTRAIT: "true"
     container_name: avatar-office
     ports:
       - "3012:3012"
@@ -27,15 +26,16 @@ services:
       TTS_BACKEND: edge
       TTS_VOICE: en-US-AnaNeural
 
-      # Animation — full LivePortrait
-      ANIM_BACKEND: liveportrait
-      LIVEPORTRAIT_CHECKPOINT_DIR: /models/liveportrait
+      # Animation — SadTalker (audio-driven)
+      ANIM_BACKEND: sadtalker
+      SADTALKER_DIR: /opt/SadTalker
+      SADTALKER_CHECKPOINT_DIR: /opt/SadTalker/checkpoints
 
-      PERSONA_NAME: Aria
+      PERSONA_NAME: Belle
       LOG_LEVEL: INFO
     volumes:
       - ./app/static:/app/static
-      - liveportrait-models:/models/liveportrait
+      - /tmp/SadTalker:/opt/SadTalker:ro
       - /opt/rocm-6.3.3:/opt/rocm-6.3.3:ro
       - /usr/bin/rocm-smi:/usr/bin/rocm-smi:ro
     devices:
@@ -45,6 +45,3 @@ services:
       - "44"
       - "992"
     restart: unless-stopped
-
-volumes:
-  liveportrait-models:

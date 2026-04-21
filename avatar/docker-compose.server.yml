@@ -1,4 +1,4 @@
-# NVIDIA GTX 1660 SUPER (CUDA) — full pipeline with LivePortrait animation
+# NVIDIA GTX 1660 SUPER (CUDA) — full pipeline with SadTalker animation
 version: "3.8"
 
 services:
@@ -9,7 +9,6 @@ services:
       args:
         TORCH_INDEX_URL: https://download.pytorch.org/whl/cu121
         INSTALL_TORCH: "true"
-        INSTALL_LIVEPORTRAIT: "true"
     container_name: avatar-server
     ports:
       - "3012:3012"
@@ -17,26 +16,25 @@ services:
       GPU_TYPE: cuda
       MACHINE_NAME: server
 
-      # LLM — use Ollama on dellserver or office
+      # LLM — use Ollama on office or dellserver
       LLM_BACKEND: ollama
-      OLLAMA_URL: http://192.168.10.20:11434
+      OLLAMA_URL: http://192.168.10.110:11434
       OLLAMA_MODEL: llama3.2
 
       # TTS
       TTS_BACKEND: edge
       TTS_VOICE: en-US-AnaNeural
 
-      # Animation — full LivePortrait
-      ANIM_BACKEND: liveportrait
-      LIVEPORTRAIT_CHECKPOINT_DIR: /models/liveportrait
+      # Animation — SadTalker (audio-driven)
+      ANIM_BACKEND: sadtalker
+      SADTALKER_DIR: /opt/SadTalker
+      SADTALKER_CHECKPOINT_DIR: /opt/SadTalker/checkpoints
 
-      # Persona
-      PERSONA_NAME: Aria
-
+      PERSONA_NAME: Belle
       LOG_LEVEL: INFO
     volumes:
       - ./app/static:/app/static
-      - liveportrait-models:/models/liveportrait
+      - sadtalker-repo:/opt/SadTalker
     deploy:
       resources:
         reservations:
@@ -47,4 +45,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  liveportrait-models:
+  sadtalker-repo:

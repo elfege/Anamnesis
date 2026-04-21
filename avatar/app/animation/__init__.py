@@ -3,7 +3,10 @@ from animation.base import AnimationBackend
 
 
 def get_backend(backend_name: str) -> AnimationBackend:
-    if backend_name == "liveportrait":
+    if backend_name == "sadtalker":
+        from animation.sadtalker import SadTalkerBackend
+        return SadTalkerBackend()
+    elif backend_name == "liveportrait":
         from animation.liveportrait import LivePortraitBackend
         return LivePortraitBackend()
     elif backend_name == "none":

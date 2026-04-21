@@ -26,7 +26,7 @@ services:
       TTS_VOICE: en-US-AnaNeural
       ANIM_BACKEND: none
 
-      PERSONA_NAME: Aria
+      PERSONA_NAME: Belle
       LOG_LEVEL: DEBUG
     volumes:
       - ./app/static:/app/static
