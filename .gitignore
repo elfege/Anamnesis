@@ -35,3 +35,6 @@ README_project_history*.md
 
 # Docs — only HTML published, not markdown
 docs/*.md
+
+# Avatar/persona samples — images + audio sources (may be copyright, large)
+samples/

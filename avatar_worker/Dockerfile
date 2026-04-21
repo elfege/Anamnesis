@@ -46,7 +46,7 @@ RUN pip install --no-cache-dir \
       basicsr \
       safetensors \
       "transformers<5" \
-      coqui-tts \
+      "coqui-tts[codec]" \
       demucs \
       soundfile
 

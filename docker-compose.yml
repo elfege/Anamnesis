@@ -86,6 +86,9 @@ services:
       - ${SSH_DIR:-~/.ssh}:/root/.ssh:ro
       # ── Avatar: cloned voice WAVs (persistent) ────────────────
       - anamnesis_voices:/app/voices
+      # ── Avatar/persona source samples (images, audio — read-write
+      #    so UI-uploaded sources persist on host alongside manually placed files)
+      - ./samples:/app/samples
     depends_on:
       anamnesis-mongo:
         condition: service_healthy
