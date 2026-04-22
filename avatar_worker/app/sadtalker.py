@@ -22,6 +22,11 @@ async def animate(audio_path: str, image_path: str, output_dir: str) -> str:
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
+    # 512 on 6GB VRAM hosts OOMs (needs ~5GB peak + baseline). 256 is safe
+    # on the GTX 1660 SUPER and still produces decent-quality video.
+    # Configurable via SADTALKER_SIZE env. Skip gfpgan enhancer at 256
+    # because output already small enough; enhancer costs another ~1GB.
+    size = str(config.SADTALKER_SIZE)
     cmd = [
         "python3", os.path.join(config.SADTALKER_DIR, "inference.py"),
         "--source_image", image_path,
@@ -29,9 +34,10 @@ async def animate(audio_path: str, image_path: str, output_dir: str) -> str:
         "--result_dir", output_dir,
         "--checkpoint_dir", config.SADTALKER_CHECKPOINT_DIR,
         "--still",
-        "--enhancer", "gfpgan",
-        "--size", "512",
+        "--size", size,
     ]
+    if config.SADTALKER_ENHANCER:
+        cmd += ["--enhancer", config.SADTALKER_ENHANCER]
 
     env = {**os.environ}
     if config.GPU_TYPE == "rocm":

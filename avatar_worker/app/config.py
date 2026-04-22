@@ -27,6 +27,13 @@ SADTALKER_DIR = os.environ.get("SADTALKER_DIR", "/opt/SadTalker")
 SADTALKER_CHECKPOINT_DIR = os.environ.get(
     "SADTALKER_CHECKPOINT_DIR", "/opt/SadTalker/checkpoints"
 )
+# Render resolution. 512 = best quality (~5GB VRAM peak). 256 = lower quality
+# but fits in 6GB cards alongside the SadTalker weights themselves. Default
+# conservative 256 — machines with headroom set SADTALKER_SIZE=512.
+SADTALKER_SIZE = int(os.environ.get("SADTALKER_SIZE", "256"))
+# GFPGAN face enhancer adds ~1GB VRAM; skip on tight hosts.
+# Set to "" to disable, or "gfpgan" / "RestoreFormer" to enable.
+SADTALKER_ENHANCER = os.environ.get("SADTALKER_ENHANCER", "")
 
 # On tight-VRAM hosts (e.g. GTX 1660 SUPER 6GB), unload XTTS before running
 # SadTalker so both fit sequentially. Cost: ~5s reload on next XTTS call.

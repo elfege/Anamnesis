@@ -16,6 +16,9 @@ services:
       HSA_OVERRIDE_GFX_VERSION: "10.3.0"
       # Office RX 6800 has 16GB — no need to unload XTTS for SadTalker.
       AUTO_UNLOAD_XTTS: "false"
+      # Plenty of VRAM — crank to full 512 with gfpgan enhancer.
+      SADTALKER_SIZE: "512"
+      SADTALKER_ENHANCER: "gfpgan"
       LOG_LEVEL: INFO
       SADTALKER_DIR: /opt/SadTalker
       SADTALKER_CHECKPOINT_DIR: /opt/SadTalker/checkpoints
