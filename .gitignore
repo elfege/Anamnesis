@@ -28,13 +28,14 @@ Thumbs.db
 
 # Private operational files — never track
 CLAUDE.md
-README_handoff*.md
-README_project_history*.md
+README_*.md
 0_ANAMNESIS_SOURCES/
 *.log
 
 # Docs — only HTML published, not markdown
 docs/*.md
+
+
 
 # Avatar/persona samples — images + audio sources (may be copyright, large)
 samples/
