@@ -44,12 +44,18 @@ async def animate(audio_path: str, image_path: str, output_dir: str) -> str:
         env.setdefault("HSA_OVERRIDE_GFX_VERSION", "10.3.0")
 
     logger.info("Running SadTalker…")
+    # NOTE: SadTalker's save_video_with_watermark writes a temp mp4 to cwd
+    # before moving it to result_dir. If cwd is the bind-mounted
+    # /opt/SadTalker (read-only), shutil.move fails with FileNotFoundError
+    # because ffmpeg couldn't create the temp. Use the writable output_dir
+    # as cwd instead. SadTalker inference.py already resolves its own paths
+    # as absolute, so cwd only matters for the temp-file step.
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
-        cwd=config.SADTALKER_DIR,
+        cwd=output_dir,
     )
     stdout, stderr = await proc.communicate()
 
