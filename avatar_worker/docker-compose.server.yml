@@ -12,9 +12,13 @@ services:
     environment:
       GPU_TYPE: cuda
       MACHINE_NAME: server
+      WORKER_ID: server-cuda-1660
       LOG_LEVEL: INFO
       SADTALKER_DIR: /opt/SadTalker
       SADTALKER_CHECKPOINT_DIR: /opt/SadTalker/checkpoints
+      # 1660 SUPER has 6GB; XTTS + SadTalker don't co-fit. Unload XTTS
+      # before SadTalker runs (next XTTS call pays ~5s reload cost).
+      AUTO_UNLOAD_XTTS: "true"
     deploy:
       resources:
         reservations:

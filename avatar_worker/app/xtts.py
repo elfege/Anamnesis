@@ -1,5 +1,11 @@
-"""XTTS v2 — voice cloning from a speaker_wav reference."""
+"""XTTS v2 — voice cloning from a speaker_wav reference.
+
+Lazy-loaded, thread-safe, with explicit unload to free VRAM for SadTalker
+on tight-VRAM hosts (e.g. GTX 1660 SUPER 6GB where XTTS + SadTalker don't
+co-fit).
+"""
 import asyncio
+import gc
 import logging
 import os
 import threading
@@ -12,6 +18,10 @@ logger = logging.getLogger("worker.xtts")
 
 _model = None
 _lock = threading.Lock()
+
+
+def is_loaded() -> bool:
+    return _model is not None
 
 
 def _ensure_loaded():
@@ -28,6 +38,31 @@ def _ensure_loaded():
         device = "cuda" if torch.cuda.is_available() else "cpu"
         _model = CoquiTTS(config.XTTS_MODEL_NAME).to(device)
         logger.info(f"XTTS loaded on {device}")
+
+
+def unload() -> bool:
+    """Drop the XTTS model from VRAM. Next synthesize() call pays the reload cost.
+
+    Returns True if a model was unloaded, False if nothing was loaded.
+    Thread-safe.
+    """
+    global _model
+    if _model is None:
+        return False
+    with _lock:
+        if _model is None:
+            return False
+        logger.info("Unloading XTTS to free VRAM")
+        try:
+            import torch
+            _model = None
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+        except Exception as e:
+            logger.warning(f"Partial unload (torch cleanup failed): {e}")
+        return True
 
 
 async def synthesize(
