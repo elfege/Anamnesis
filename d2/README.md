@@ -4,7 +4,7 @@ A dialectical optimization framework with structured negative retention.
 
 ## Status
 
-Formalization complete (see [formal definitions](https://github.com/elfege/RESEARCH/blob/main/formal_definitions_RS_and_delta_squared.md)).
+Formalization complete (see [formal definitions](https://github.com/elfege/RESEARCH/blob/master/formal_definitions_RS_and_delta_squared.md)).
 Reference implementation scaffolded in this directory. Empirical benchmarks
 against Adam on WikiText-103 pending — first run will test δ² in isolation as
 the simplest claim; the full dialectical design (§Composition with Adam below)
@@ -163,9 +163,9 @@ d2/
 
 ## Theoretical Background
 
-- Essay 1: [The Arithmetic Aufhebung](https://github.com/elfege/RESEARCH/blob/main/essai_aufhebung_arithmetique.md)
-- Essay 2: [Contingency as Reservoir of Determination](https://github.com/elfege/RESEARCH/blob/main/essai_contingence_et_determination.md)
-- Formal Definitions: [RS and δ²](https://github.com/elfege/RESEARCH/blob/main/formal_definitions_RS_and_delta_squared.md)
+- Essay 1: [The Arithmetic Aufhebung](https://github.com/elfege/RESEARCH/blob/master/essai_aufhebung_arithmetique.md)
+- Essay 2: [Contingency as Reservoir of Determination](https://github.com/elfege/RESEARCH/blob/master/essai_contingence_et_determination.md)
+- Formal Definitions: [RS and δ²](https://github.com/elfege/RESEARCH/blob/master/formal_definitions_RS_and_delta_squared.md)
 - Full research repository: [github.com/elfege/RESEARCH](https://github.com/elfege/RESEARCH)
 
 ## Author
