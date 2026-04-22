@@ -15,8 +15,13 @@ from avatar import voices as voices_module
 from avatar import llm as avatar_llm
 from avatar.tts.dispatch import synthesize_with_voice
 from avatar.animation.sadtalker_client import SadTalkerClient
+from database import get_chat_session, save_chat_session
 
 logger = logging.getLogger("anamnesis.avatar.pipeline")
+
+# How many prior turns to feed Ollama. 20 = ~40 messages including user+assistant.
+# Keeps VRAM / context window bounded for llama3.2.
+AVATAR_MAX_HISTORY_TURNS = 20
 
 
 @dataclass
@@ -26,6 +31,7 @@ class PipelineResult:
     video_path: Optional[str] = None
     timings: dict = field(default_factory=dict)
     error: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 class AvatarPipeline:
@@ -50,20 +56,45 @@ class AvatarPipeline:
         voice_id: Optional[str] = None,
         animate: bool = None,
         reference_image: Optional[str] = None,
+        session_id: Optional[str] = None,
+        backend: str = "ollama",
+        model: Optional[str] = None,
+        preferred_worker: Optional[str] = None,
+        no_fallback: bool = False,
         on_token=None,
         on_audio=None,
         on_video=None,
     ) -> PipelineResult:
-        result = PipelineResult()
+        result = PipelineResult(session_id=session_id)
         t0 = time.monotonic()
         animate = animate if animate is not None else config.AVATAR_ANIMATE_DEFAULT
+
+        # ── Step 0: Load prior conversation history from MongoDB ──
+        prior_messages: list[dict] = []
+        if session_id:
+            try:
+                doc = await get_chat_session(session_id)
+                if doc:
+                    # Keep only the last N turns, stripped to role/content for Ollama
+                    stored = doc.get("messages", [])
+                    trimmed = stored[-(AVATAR_MAX_HISTORY_TURNS * 2):]
+                    prior_messages = [
+                        {"role": m["role"], "content": m["content"]}
+                        for m in trimmed if m.get("role") in ("user", "assistant")
+                    ]
+            except Exception as exc:
+                logger.warning(f"Could not load session {session_id}: {exc}")
 
         # ── Step 1: LLM ─────────────────────────────────────────
         t_llm = time.monotonic()
         parts: list[str] = []
         endpoint_label = None
         async for kind, text in avatar_llm.stream_reply(
-            config.AVATAR_PERSONA_SYSTEM_PROMPT, user_message
+            config.AVATAR_PERSONA_SYSTEM_PROMPT,
+            user_message,
+            previous_messages=prior_messages,
+            backend=backend,
+            model=model,
         ):
             if kind == "token":
                 parts.append(text)
@@ -83,6 +114,25 @@ class AvatarPipeline:
             return result
         logger.info(f"LLM done: {len(result.text)} chars in {result.timings['llm_ms']}ms")
 
+        # Persist BEFORE TTS/animation so a downstream failure does not drop history.
+        # TTS and animation are presentation layers; the conversation turn is already valid.
+        if session_id:
+            try:
+                title = user_message[:60].strip() + ("…" if len(user_message) > 60 else "")
+                new_messages = prior_messages + [
+                    {"role": "user", "content": user_message},
+                    {"role": "assistant", "content": result.text},
+                ]
+                await save_chat_session(
+                    session_id=session_id,
+                    title=title,
+                    messages=new_messages,
+                    backend="avatar",
+                    model=f"ollama/{config.OLLAMA_DEFAULT_MODEL}",
+                )
+            except Exception as exc:
+                logger.warning(f"Could not persist avatar session {session_id}: {exc}")
+
         # Unload Ollama model so GPU is free for worker (XTTS + SadTalker)
         if animate or voice_id and voice_id.startswith("cloned:"):
             await avatar_llm.unload_model()
@@ -94,7 +144,8 @@ class AvatarPipeline:
         voice_spec = self._voices.resolve(voice_id)
         try:
             result.audio_path = await synthesize_with_voice(
-                voice_spec, result.text, audio_path
+                voice_spec, result.text, audio_path,
+                preferred_worker=preferred_worker, no_fallback=no_fallback,
             )
             result.timings["tts_ms"] = int((time.monotonic() - t_tts) * 1000)
             result.timings["voice_id"] = voice_id or config.DEFAULT_VOICE_ID
@@ -119,7 +170,8 @@ class AvatarPipeline:
                     wav_for_anim = os.path.join(audio_dir, "speech_for_anim.wav")
                     await asyncio.to_thread(_mp3_to_wav, result.audio_path, wav_for_anim)
                     result.video_path = await self._sadtalker.animate(
-                        wav_for_anim, ref, video_path
+                        wav_for_anim, ref, video_path,
+                        preferred_worker=preferred_worker, no_fallback=no_fallback,
                     )
                     result.timings["anim_ms"] = int((time.monotonic() - t_anim) * 1000)
                     if on_video:

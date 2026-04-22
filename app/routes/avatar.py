@@ -26,11 +26,21 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, W
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
+import httpx
+
 import config
 from avatar import voices as voices_module
 from avatar.tts.dispatch import synthesize_with_voice
 from avatar.pipeline import get_pipeline
 from avatar.audio.demucs_client import extract_vocals_via_worker
+from avatar.workers import probe_all_workers
+from avatar.llm import ANAMNESIS_GPT_ENDPOINTS
+from database import (
+    list_chat_sessions,
+    get_chat_session,
+    delete_chat_session,
+    rename_chat_session,
+)
 
 logger = logging.getLogger("anamnesis.routes.avatar")
 
@@ -180,11 +190,20 @@ async def chat_rest(body: dict):
         return JSONResponse({"error": "Empty message"}, status_code=400)
     voice_id = body.get("voice_id")
     animate = body.get("animate")
+    session_id = body.get("session_id")
+    backend = body.get("backend") or "ollama"
+    model = body.get("model")
+    preferred_worker = body.get("preferred_worker")
+    no_fallback = bool(body.get("no_fallback"))
 
     pipeline = get_pipeline()
-    result = await pipeline.process(message, voice_id=voice_id, animate=animate)
+    result = await pipeline.process(
+        message, voice_id=voice_id, animate=animate, session_id=session_id,
+        backend=backend, model=model,
+        preferred_worker=preferred_worker, no_fallback=no_fallback,
+    )
 
-    resp = {"text": result.text, "timings": result.timings}
+    resp = {"text": result.text, "timings": result.timings, "session_id": result.session_id}
     if result.error:
         resp["error"] = result.error
     if result.audio_path:
@@ -204,47 +223,210 @@ async def chat_ws(ws: WebSocket):
     pipeline = get_pipeline()
     logger.info("Avatar WS connected")
 
+    # Current in-flight pipeline task — user can cancel via {type: "stop"}
+    current_task: Optional[asyncio.Task] = None
+
+    async def run_pipeline(data: dict):
+        """Run a single pipeline cycle and stream results over the WS."""
+        message = (data.get("message") or "").strip()
+        if not message:
+            await ws.send_json({"type": "error", "message": "Empty message"})
+            return
+        voice_id = data.get("voice_id")
+        animate = data.get("animate")
+        session_id = data.get("session_id")
+        backend = data.get("backend") or "ollama"
+        model = data.get("model")
+        preferred_worker = data.get("preferred_worker")
+        no_fallback = bool(data.get("no_fallback"))
+
+        async def on_token(token: str):
+            await ws.send_json({"type": "token", "data": token})
+
+        async def on_audio(path: str):
+            name = f"audio_{hash(path) & 0xFFFFFFFF:08x}.mp3"
+            _serve_file(path, name)
+            await ws.send_json({"type": "audio", "url": f"/api/avatar/media/{name}"})
+
+        async def on_video(path: str):
+            name = f"video_{hash(path) & 0xFFFFFFFF:08x}.mp4"
+            _serve_file(path, name)
+            await ws.send_json({"type": "video", "url": f"/api/avatar/media/{name}"})
+
+        try:
+            result = await pipeline.process(
+                message, voice_id=voice_id, animate=animate, session_id=session_id,
+                backend=backend, model=model,
+                preferred_worker=preferred_worker, no_fallback=no_fallback,
+                on_token=on_token, on_audio=on_audio, on_video=on_video,
+            )
+            done = {"type": "done", "timings": result.timings, "session_id": result.session_id}
+            if result.error:
+                done["error"] = result.error
+            await ws.send_json(done)
+        except asyncio.CancelledError:
+            # User pressed stop — notify client and swallow the cancellation
+            try:
+                await ws.send_json({"type": "stopped"})
+            except Exception:
+                pass
+            raise
+
     try:
         while True:
             raw = await ws.receive_text()
             data = json.loads(raw)
-            message = (data.get("message") or "").strip()
-            if not message:
-                await ws.send_json({"type": "error", "message": "Empty message"})
+
+            # Control message: stop the in-flight generation
+            if data.get("type") == "stop":
+                if current_task and not current_task.done():
+                    current_task.cancel()
                 continue
-            voice_id = data.get("voice_id")
-            animate = data.get("animate")
 
-            async def on_token(token: str):
-                await ws.send_json({"type": "token", "data": token})
+            # Cancel any previous in-flight run before starting a new one
+            if current_task and not current_task.done():
+                current_task.cancel()
+                try:
+                    await current_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
-            async def on_audio(path: str):
-                name = f"audio_{hash(path) & 0xFFFFFFFF:08x}.mp3"
-                _serve_file(path, name)
-                await ws.send_json({"type": "audio", "url": f"/api/avatar/media/{name}"})
-
-            async def on_video(path: str):
-                name = f"video_{hash(path) & 0xFFFFFFFF:08x}.mp4"
-                _serve_file(path, name)
-                await ws.send_json({"type": "video", "url": f"/api/avatar/media/{name}"})
-
-            result = await pipeline.process(
-                message, voice_id=voice_id, animate=animate,
-                on_token=on_token, on_audio=on_audio, on_video=on_video,
-            )
-            done = {"type": "done", "timings": result.timings}
-            if result.error:
-                done["error"] = result.error
-            await ws.send_json(done)
+            current_task = asyncio.create_task(run_pipeline(data))
+            # Don't await here — next iteration immediately listens for more messages
+            # (including stop). Task runs concurrently.
 
     except WebSocketDisconnect:
         logger.info("Avatar WS disconnected")
+        if current_task and not current_task.done():
+            current_task.cancel()
     except Exception as e:
         logger.exception("Avatar WS error")
         try:
             await ws.send_json({"type": "error", "message": str(e)})
         except Exception:
             pass
+
+
+# ─── Model + hardware probes (Phase 7.2) ─────────────────────────
+
+@router.get("/api/avatar/models")
+async def list_backends_and_models():
+    """Return available LLM backends and their models.
+
+    Shape:
+      {
+        "default_backend": "ollama",
+        "default_model": "...",
+        "backends": {
+          "ollama":        {"available": bool, "models": [...], "endpoint": "..."},
+          "claude":        {"available": bool, "models": ["claude-..."]},
+          "anamnesis_gpt": {"available": bool, "endpoints": [...]},
+        }
+      }
+    """
+    out = {
+        "default_backend": "ollama",
+        "default_model": config.OLLAMA_DEFAULT_MODEL,
+        "backends": {},
+    }
+
+    # Ollama — probe first reachable endpoint for its tag list
+    ollama_info = {"available": False, "models": [], "endpoint": None}
+    try:
+        for url, label, _ in config.OLLAMA_ENDPOINTS:
+            try:
+                async with httpx.AsyncClient(timeout=4.0) as client:
+                    r = await client.get(f"{url}/api/tags")
+                    if r.status_code == 200:
+                        ollama_info["available"] = True
+                        ollama_info["endpoint"] = label
+                        ollama_info["models"] = [m["name"] for m in r.json().get("models", [])]
+                        break
+            except Exception:
+                continue
+    except Exception as e:
+        ollama_info["error"] = str(e)
+    out["backends"]["ollama"] = ollama_info
+
+    # Claude API — available iff key present
+    out["backends"]["claude"] = {
+        "available": bool(config.ANTHROPIC_API_KEY),
+        "models": [config.CLAUDE_MODEL] if config.ANTHROPIC_API_KEY else [],
+    }
+
+    # AnamnesisGPT — available iff an endpoint responds
+    ana_info = {"available": False, "endpoints": [], "models": []}
+    for url in ANAMNESIS_GPT_ENDPOINTS:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get(f"{url}/health")
+                if r.status_code == 200:
+                    ana_info["available"] = True
+                    ana_info["endpoints"].append(url)
+                    ana_info["models"] = ["anamnesis-gpt"]
+        except Exception:
+            continue
+    out["backends"]["anamnesis_gpt"] = ana_info
+
+    return out
+
+
+@router.get("/api/avatar/workers")
+async def list_workers():
+    """Probe all configured GPU workers and return reachability + capabilities.
+
+    Shape:
+      {
+        "workers": [
+          {"url": "...", "label": "...", "reachable": bool,
+           "worker_id": "...", "gpu_type": "cuda|rocm|cpu",
+           "capabilities": ["xtts", "sadtalker", "demucs"],
+           "error": null | str}
+        ]
+      }
+    """
+    workers = await probe_all_workers()
+    return {"workers": workers}
+
+
+# ─── Sessions (reuses chat_sessions collection with backend="avatar") ─
+
+@router.get("/api/avatar/sessions")
+async def avatar_list_sessions(limit: int = 50):
+    sessions = await list_chat_sessions(limit=limit, backend="avatar")
+    return {"sessions": sessions}
+
+
+@router.get("/api/avatar/sessions/{session_id}")
+async def avatar_get_session(session_id: str):
+    doc = await get_chat_session(session_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Session not found")
+    # Guard: only return avatar sessions via this endpoint
+    if doc.get("backend") != "avatar":
+        raise HTTPException(status_code=404, detail="Not an avatar session")
+    return doc
+
+
+@router.delete("/api/avatar/sessions/{session_id}")
+async def avatar_delete_session(session_id: str):
+    doc = await get_chat_session(session_id)
+    if not doc or doc.get("backend") != "avatar":
+        raise HTTPException(status_code=404, detail="Session not found")
+    await delete_chat_session(session_id)
+    return {"ok": True}
+
+
+@router.patch("/api/avatar/sessions/{session_id}/title")
+async def avatar_rename_session(session_id: str, body: dict):
+    title = (body or {}).get("title", "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title required")
+    doc = await get_chat_session(session_id)
+    if not doc or doc.get("backend") != "avatar":
+        raise HTTPException(status_code=404, detail="Session not found")
+    await rename_chat_session(session_id, title)
+    return {"ok": True}
 
 
 # ─── Media serving ──────────────────────────────────────────────

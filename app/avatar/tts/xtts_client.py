@@ -12,6 +12,7 @@ import httpx
 
 import config
 from avatar.tts.base import TTSBackend
+from avatar.workers import order_endpoints as _order_endpoints
 
 logger = logging.getLogger("anamnesis.avatar.tts.xtts")
 
@@ -27,7 +28,8 @@ class XTTSClient(TTSBackend):
         return 24000
 
     async def synthesize_to_file(
-        self, text: str, output_path: str, voice_spec: Optional[dict] = None
+        self, text: str, output_path: str, voice_spec: Optional[dict] = None,
+        preferred_worker: Optional[str] = None, no_fallback: bool = False,
     ) -> str:
         spec = voice_spec or {}
         speaker_wav = spec.get("speaker_wav")
@@ -37,8 +39,9 @@ class XTTSClient(TTSBackend):
         if not speaker_wav or not Path(speaker_wav).exists():
             raise RuntimeError(f"XTTSClient needs an existing speaker_wav; got: {speaker_wav}")
 
+        endpoints = _order_endpoints(config.AVATAR_WORKER_ENDPOINTS, preferred_worker, no_fallback)
         last_err = None
-        for url, label in config.AVATAR_WORKER_ENDPOINTS:
+        for url, label in endpoints:
             try:
                 async with httpx.AsyncClient(timeout=300) as client:
                     with open(speaker_wav, "rb") as f:

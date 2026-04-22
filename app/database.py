@@ -104,9 +104,10 @@ async def save_chat_session(session_id: str, title: str, messages: list, backend
     )
 
 
-async def list_chat_sessions(limit: int = 50) -> list:
+async def list_chat_sessions(limit: int = 50, backend: str | None = None) -> list:
     col = get_chat_sessions_collection()
-    cursor = col.find({}, {"messages": 0}).sort("updated_at", -1).limit(limit)
+    query = {"backend": backend} if backend else {}
+    cursor = col.find(query, {"messages": 0}).sort("updated_at", -1).limit(limit)
     results = []
     async for doc in cursor:
         doc["_id"] = str(doc["_id"])

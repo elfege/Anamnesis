@@ -19,6 +19,17 @@ def _get_backend(name: str) -> TTSBackend:
     return _cache[name]
 
 
-async def synthesize_with_voice(voice_spec: dict, text: str, output_path: str) -> str:
-    backend = _get_backend(voice_spec.get("backend", "edge"))
+async def synthesize_with_voice(
+    voice_spec: dict, text: str, output_path: str,
+    preferred_worker: Optional[str] = None, no_fallback: bool = False,
+) -> str:
+    backend_name = voice_spec.get("backend", "edge")
+    backend = _get_backend(backend_name)
+    # Only worker-based backends (xtts) take the preferred_worker/no_fallback kwargs.
+    # Edge TTS runs in-process and ignores them.
+    if backend_name == "xtts":
+        return await backend.synthesize_to_file(
+            text, output_path, voice_spec,
+            preferred_worker=preferred_worker, no_fallback=no_fallback,
+        )
     return await backend.synthesize_to_file(text, output_path, voice_spec)

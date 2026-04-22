@@ -168,9 +168,82 @@
     .btn-primary:disabled, .btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
     .progress { font-size: 12px; color: var(--text-dim); padding: 8px 0; font-family: 'JetBrains Mono', monospace; }
     .progress.error { color: var(--danger); }
+
+    /* ── Sessions drawer (slide-out from left, overlays avatar panel) ── */
+    .sessions-drawer {
+      position: fixed; top: 0; left: 0; bottom: 0;
+      width: 300px; background: var(--surface);
+      border-right: 1px solid var(--border);
+      transform: translateX(-100%); transition: transform 0.2s ease-out;
+      z-index: 50; display: flex; flex-direction: column;
+    }
+    .sessions-drawer.open { transform: translateX(0); box-shadow: 2px 0 12px rgba(0,0,0,0.5); }
+    .sessions-header {
+      padding: 14px 16px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .sessions-header h2 { font-size: 14px; color: var(--text); margin: 0; }
+    .sessions-list { flex: 1; overflow-y: auto; }
+    .session-item {
+      padding: 10px 16px; cursor: pointer; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    }
+    .session-item:hover { background: rgba(255,255,255,0.03); }
+    .session-item.active { background: rgba(110, 168, 254, 0.08); border-left: 2px solid var(--accent); padding-left: 14px; }
+    .session-item .title { flex: 1; font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .session-item .meta { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+    .session-item .del {
+      opacity: 0; transition: opacity 0.1s; background: none; border: none;
+      color: var(--danger); cursor: pointer; font-size: 14px; padding: 4px;
+    }
+    .session-item:hover .del { opacity: 1; }
+    .new-chat-btn {
+      margin: 12px 16px; padding: 10px; background: var(--accent); color: white;
+      border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;
+    }
+    .new-chat-btn:hover { opacity: 0.9; }
+    .sessions-toggle {
+      background: none; border: 1px solid var(--border); color: var(--text-dim);
+      padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 13px;
+      margin-right: 8px;
+    }
+    .sessions-toggle:hover { color: var(--text); border-color: var(--accent); }
+    .sessions-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+      opacity: 0; pointer-events: none; transition: opacity 0.2s; z-index: 40;
+    }
+    .sessions-backdrop.open { opacity: 1; pointer-events: auto; }
+
+    /* ── Settings popover (opened by gear icon) ── */
+    .settings-popover {
+      position: absolute; top: 56px; right: 16px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 14px; width: 320px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+      display: none; z-index: 60;
+    }
+    .settings-popover.open { display: block; }
+    .settings-row {
+      display: grid; grid-template-columns: 90px 1fr; gap: 10px;
+      align-items: center; margin-bottom: 10px;
+    }
+    .settings-row label { font-size: 12px; color: var(--text-dim); }
+    .settings-row select { width: 100%; }
+    .settings-footer { font-size: 11px; color: var(--text-dim); margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border); }
   </style>
 </head>
 <body>
+  <!-- Sessions drawer (slide-out from left) -->
+  <div class="sessions-backdrop" id="sessionsBackdrop"></div>
+  <aside class="sessions-drawer" id="sessionsDrawer">
+    <div class="sessions-header">
+      <h2>Conversations</h2>
+      <button class="icon-btn" id="sessionsCloseBtn" title="Close">✕</button>
+    </div>
+    <button class="new-chat-btn" id="newChatBtn">+ New conversation</button>
+    <div class="sessions-list" id="sessionsList"><div class="progress" style="padding:12px 16px">Loading…</div></div>
+  </aside>
+
   <div class="avatar-panel">
     <div class="avatar-container">
       <img id="avatarImage" src="/static/img/belle_reference.png" alt="Avatar">
@@ -187,10 +260,11 @@
     <div class="chat-header">
       <div class="chat-header-left">
         <a href="/dashboard" class="home-btn" title="Back to Anamnesis">← Home</a>
+        <button class="sessions-toggle" id="sessionsToggleBtn" title="Conversations">☰</button>
         <h1>Avatar</h1>
       </div>
       <div class="voice-bar">
-        <label for="voiceSel">Voice:</label>
+        <label for="voiceSel" style="font-size:12px">Voice:</label>
         <select id="voiceSel"></select>
         <button class="icon-btn" id="previewBtn" title="Preview current voice">▶</button>
         <button class="icon-btn" id="newVoiceBtn" title="Add a voice">＋ New</button>
@@ -198,14 +272,37 @@
         <label style="margin-left:12px">
           <input type="checkbox" id="animChk"> <span style="font-size:12px;color:var(--text-dim)">Animate</span>
         </label>
+        <button class="icon-btn" id="settingsBtn" title="Backend, model, worker" style="margin-left:12px">⚙</button>
       </div>
       <div class="backend-info" id="backendInfo">connecting…</div>
+    </div>
+
+    <!-- Settings popover (backend / model / worker) -->
+    <div class="settings-popover" id="settingsPopover">
+      <div class="settings-row">
+        <label>Backend</label>
+        <select id="backendSel"></select>
+      </div>
+      <div class="settings-row">
+        <label>Model</label>
+        <select id="modelSel"></select>
+      </div>
+      <div class="settings-row">
+        <label>Worker</label>
+        <select id="workerSel"></select>
+      </div>
+      <div class="settings-row" style="align-items:center">
+        <label for="noFallbackChk" title="If set, only the preferred worker is tried; no fallback chain">No fallback</label>
+        <input type="checkbox" id="noFallbackChk" style="width:auto">
+      </div>
+      <div class="settings-footer" id="settingsFooter"></div>
     </div>
 
     <div class="messages" id="messages"></div>
     <div class="input-bar">
       <input type="text" id="input" placeholder="Type a message…" autocomplete="off">
       <button id="sendBtn" onclick="send()">Send</button>
+      <button id="stopBtn" onclick="stopGeneration()" style="display:none; background:var(--danger); color:white;">Stop</button>
     </div>
   </div>
 
@@ -277,6 +374,7 @@
     const messagesEl = document.getElementById('messages');
     const inputEl = document.getElementById('input');
     const sendBtn = document.getElementById('sendBtn');
+    const stopBtn = document.getElementById('stopBtn');
     const statusDot = document.getElementById('statusDot');
     const avatarImage = document.getElementById('avatarImage');
     const avatarVideo = document.getElementById('avatarVideo');
@@ -289,6 +387,25 @@
     const animChk = document.getElementById('animChk');
 
     const LS_KEY = 'anamnesis.avatar.voice_id';
+    const LS_SESSION = 'anamnesis.avatar.session_id';
+    const LS_BACKEND = 'anamnesis.avatar.backend';
+    const LS_MODEL = 'anamnesis.avatar.model';
+    const LS_WORKER = 'anamnesis.avatar.worker';
+    const LS_NOFB = 'anamnesis.avatar.no_fallback';
+
+    // Session state
+    let currentSessionId = null;
+
+    function newSessionId() {
+      if (crypto && crypto.randomUUID) return crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+      });
+    }
+    function loadSessionPref() { try { return localStorage.getItem(LS_SESSION); } catch { return null; } }
+    function saveSessionPref(id) { try { localStorage.setItem(LS_SESSION, id); } catch {} }
+    function clearSessionPref() { try { localStorage.removeItem(LS_SESSION); } catch {} }
     const LS_ANIM = 'anamnesis.avatar.animate';
     function saveVoicePref(id) { try { localStorage.setItem(LS_KEY, id); } catch {} }
     function loadVoicePref() { try { return localStorage.getItem(LS_KEY); } catch { return null; } }
@@ -472,13 +589,14 @@
       ws = new WebSocket(`${proto}://${location.host}/api/avatar/ws`);
       ws.onopen = () => {
         backendInfo.textContent = 'connected';
-        sendBtn.disabled = false;
+        setGenerating(false);
         if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
       };
       ws.onmessage = (event) => handleMessage(JSON.parse(event.data));
       ws.onclose = () => {
         backendInfo.textContent = 'disconnected — reconnecting…';
         sendBtn.disabled = true;
+        stopBtn.style.display = 'none';
         reconnectTimer = setTimeout(connect, 3000);
       };
       ws.onerror = () => ws.close();
@@ -524,14 +642,25 @@
           }
           currentAssistantEl = null;
           if (audioPlayer.paused) setStatus('ready');
-          sendBtn.disabled = false;
+          setGenerating(false);
+          break;
+        case 'stopped':
+          if (currentAssistantEl) {
+            const hint = document.createElement('div');
+            hint.className = 'timing';
+            hint.textContent = '(stopped)';
+            currentAssistantEl.appendChild(hint);
+          }
+          currentAssistantEl = null;
+          setStatus('ready');
+          setGenerating(false);
           break;
         case 'error':
           setStatus('ready');
           if (currentAssistantEl) currentAssistantEl.querySelector('.text').textContent += `\n[Error: ${msg.message}]`;
           else addMessage(`Error: ${msg.message}`, 'assistant');
           currentAssistantEl = null;
-          sendBtn.disabled = false;
+          setGenerating(false);
           break;
       }
     }
@@ -539,17 +668,249 @@
     function send() {
       const text = inputEl.value.trim();
       if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+      if (!currentSessionId) {
+        currentSessionId = newSessionId();
+        saveSessionPref(currentSessionId);
+      }
       addMessage(text, 'user');
       ws.send(JSON.stringify({
         message: text,
         voice_id: voiceSel.value || null,
-        animate: animChk.checked
+        animate: animChk.checked,
+        session_id: currentSessionId,
+        backend: backendSel.value || 'ollama',
+        model: modelSel.value || null,
+        preferred_worker: workerSel.value || null,
+        no_fallback: noFallbackChk.checked
       }));
       inputEl.value = '';
-      sendBtn.disabled = true;
+      setGenerating(true);
       setStatus('thinking');
       scrollToBottom();
     }
+
+    function stopGeneration() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'stop' }));
+      // UI state flips back when server sends "stopped" or "done"
+    }
+
+    function setGenerating(on) {
+      sendBtn.style.display = on ? 'none' : '';
+      stopBtn.style.display = on ? '' : 'none';
+      sendBtn.disabled = on;
+    }
+
+    // ── Backend / model / worker (live inside the settings popover) ──
+    const backendSel = document.getElementById('backendSel');
+    const modelSel = document.getElementById('modelSel');
+    const workerSel = document.getElementById('workerSel');
+    const noFallbackChk = document.getElementById('noFallbackChk');
+    const settingsBtn = document.getElementById('settingsBtn');
+    const settingsPopover = document.getElementById('settingsPopover');
+    const settingsFooter = document.getElementById('settingsFooter');
+
+    settingsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      settingsPopover.classList.toggle('open');
+    });
+    document.addEventListener('click', (e) => {
+      if (settingsPopover.classList.contains('open') &&
+          !settingsPopover.contains(e.target) && e.target !== settingsBtn) {
+        settingsPopover.classList.remove('open');
+      }
+    });
+
+    function updateSettingsSummary() {
+      const b = backendSel.value || 'ollama';
+      const m = modelSel.value || '(default)';
+      const w = workerSel.options[workerSel.selectedIndex]?.textContent || 'auto';
+      const fb = noFallbackChk.checked ? ' · no-fb' : '';
+      settingsFooter.textContent = `${b} · ${m} · ${w}${fb}`;
+    }
+
+    let backendsData = null;
+
+    async function refreshBackends() {
+      try {
+        const r = await fetch('/api/avatar/models');
+        backendsData = await r.json();
+      } catch (e) { console.error('models fetch failed', e); return; }
+
+      const saved = localStorage.getItem(LS_BACKEND) || backendsData.default_backend || 'ollama';
+      backendSel.innerHTML = '';
+      const LABELS = {
+        'ollama': 'ollama (local)',
+        'claude': 'claude (API)',
+        'anamnesis_gpt': 'anamnesis_gpt (1.5B demo — low quality)',
+      };
+      for (const [name, info] of Object.entries(backendsData.backends || {})) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        const base = LABELS[name] || name;
+        opt.textContent = info.available ? base : `${base} (n/a)`;
+        opt.disabled = !info.available;
+        backendSel.appendChild(opt);
+      }
+      backendSel.value = (backendsData.backends[saved]?.available ? saved : backendsData.default_backend) || 'ollama';
+      populateModels();
+      updateSettingsSummary();
+    }
+
+    function populateModels() {
+      const b = backendSel.value;
+      const info = backendsData?.backends?.[b];
+      modelSel.innerHTML = '';
+      if (!info || !info.models || !info.models.length) {
+        const opt = document.createElement('option');
+        opt.value = ''; opt.textContent = '(default)';
+        modelSel.appendChild(opt);
+        return;
+      }
+      for (const m of info.models) {
+        const opt = document.createElement('option');
+        opt.value = m; opt.textContent = m;
+        modelSel.appendChild(opt);
+      }
+      const savedModel = localStorage.getItem(LS_MODEL);
+      if (savedModel && info.models.includes(savedModel)) {
+        modelSel.value = savedModel;
+      } else if (b === 'ollama' && info.models.includes(backendsData.default_model)) {
+        modelSel.value = backendsData.default_model;
+      }
+    }
+
+    backendSel.addEventListener('change', () => {
+      localStorage.setItem(LS_BACKEND, backendSel.value);
+      populateModels();
+      updateSettingsSummary();
+    });
+    modelSel.addEventListener('change', () => {
+      localStorage.setItem(LS_MODEL, modelSel.value);
+      updateSettingsSummary();
+    });
+
+    async function refreshWorkers() {
+      try {
+        const r = await fetch('/api/avatar/workers');
+        const data = await r.json();
+        workerSel.innerHTML = '';
+        const autoOpt = document.createElement('option');
+        autoOpt.value = ''; autoOpt.textContent = 'auto (fallback chain)';
+        workerSel.appendChild(autoOpt);
+        for (const w of (data.workers || [])) {
+          const opt = document.createElement('option');
+          opt.value = w.worker_id || w.label;
+          const dot = w.reachable ? '●' : '○';
+          const caps = (w.capabilities || []).length ? ` [${w.capabilities.join(',')}]` : '';
+          opt.textContent = `${dot} ${w.label}${caps}`;
+          opt.disabled = !w.reachable;
+          workerSel.appendChild(opt);
+        }
+        const saved = localStorage.getItem(LS_WORKER);
+        if (saved && [...workerSel.options].some(o => o.value === saved && !o.disabled)) {
+          workerSel.value = saved;
+        }
+        updateSettingsSummary();
+      } catch (e) { console.error('workers fetch failed', e); }
+    }
+
+    workerSel.addEventListener('change', () => {
+      localStorage.setItem(LS_WORKER, workerSel.value);
+      updateSettingsSummary();
+    });
+
+    // no-fallback toggle
+    try { noFallbackChk.checked = localStorage.getItem(LS_NOFB) === '1'; } catch {}
+    noFallbackChk.addEventListener('change', () => {
+      try { localStorage.setItem(LS_NOFB, noFallbackChk.checked ? '1' : '0'); } catch {}
+      updateSettingsSummary();
+    });
+
+    // ── Sessions drawer ────────────────────────────────────────────
+    const drawer = document.getElementById('sessionsDrawer');
+    const backdrop = document.getElementById('sessionsBackdrop');
+    const sessionsList = document.getElementById('sessionsList');
+    const sessionsToggle = document.getElementById('sessionsToggleBtn');
+    const sessionsClose = document.getElementById('sessionsCloseBtn');
+    const newChatBtn = document.getElementById('newChatBtn');
+
+    function openSessions() {
+      drawer.classList.add('open');
+      backdrop.classList.add('open');
+      loadSessionsList();
+    }
+    function closeSessions() {
+      drawer.classList.remove('open');
+      backdrop.classList.remove('open');
+    }
+    sessionsToggle.addEventListener('click', openSessions);
+    sessionsClose.addEventListener('click', closeSessions);
+    backdrop.addEventListener('click', closeSessions);
+
+    async function loadSessionsList() {
+      try {
+        const r = await fetch('/api/avatar/sessions');
+        const data = await r.json();
+        if (!data.sessions || !data.sessions.length) {
+          sessionsList.innerHTML = '<div class="progress" style="padding:12px 16px">No conversations yet.</div>';
+          return;
+        }
+        sessionsList.innerHTML = '';
+        for (const s of data.sessions) {
+          const item = document.createElement('div');
+          item.className = 'session-item' + (s.session_id === currentSessionId ? ' active' : '');
+          item.innerHTML = `
+            <div style="flex:1; overflow:hidden">
+              <div class="title"></div>
+              <div class="meta"></div>
+            </div>
+            <button class="del" title="Delete">🗑</button>`;
+          item.querySelector('.title').textContent = s.title || '(untitled)';
+          const when = s.updated_at ? new Date(s.updated_at).toLocaleString() : '';
+          item.querySelector('.meta').textContent = `${s.message_count || 0} msgs · ${when}`;
+          item.addEventListener('click', (e) => {
+            if (e.target.classList.contains('del')) return;
+            loadSession(s.session_id);
+          });
+          item.querySelector('.del').addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (!confirm(`Delete "${s.title || s.session_id}"?`)) return;
+            await fetch(`/api/avatar/sessions/${s.session_id}`, { method: 'DELETE' });
+            if (s.session_id === currentSessionId) startNewSession();
+            loadSessionsList();
+          });
+          sessionsList.appendChild(item);
+        }
+      } catch (e) {
+        sessionsList.innerHTML = `<div class="progress error" style="padding:12px 16px">Error: ${e.message}</div>`;
+      }
+    }
+
+    async function loadSession(session_id) {
+      try {
+        const r = await fetch(`/api/avatar/sessions/${session_id}`);
+        if (!r.ok) throw new Error(await r.text());
+        const doc = await r.json();
+        currentSessionId = session_id;
+        saveSessionPref(session_id);
+        messagesEl.innerHTML = '';
+        for (const m of (doc.messages || [])) {
+          addMessage(m.content, m.role === 'user' ? 'user' : 'assistant');
+        }
+        closeSessions();
+      } catch (e) {
+        alert(`Could not load session: ${e.message}`);
+      }
+    }
+
+    function startNewSession() {
+      currentSessionId = newSessionId();
+      saveSessionPref(currentSessionId);
+      messagesEl.innerHTML = '';
+      closeSessions();
+    }
+    newChatBtn.addEventListener('click', startNewSession);
     function addMessage(text, role) {
       const el = document.createElement('div');
       el.className = `message ${role}`;
@@ -579,7 +940,30 @@
     }).catch(() => {});
 
     refreshVoices();
+    refreshBackends();
+    refreshWorkers();
     connect();
+
+    // Restore last session if one was in progress
+    (async () => {
+      const saved = loadSessionPref();
+      if (!saved) return;
+      try {
+        const r = await fetch(`/api/avatar/sessions/${saved}`);
+        if (r.ok) {
+          const doc = await r.json();
+          if (doc.messages && doc.messages.length) {
+            currentSessionId = saved;
+            for (const m of doc.messages) {
+              addMessage(m.content, m.role === 'user' ? 'user' : 'assistant');
+            }
+          }
+        } else {
+          // Session gone; start fresh
+          clearSessionPref();
+        }
+      } catch {}
+    })();
   </script>
 </body>
 </html>

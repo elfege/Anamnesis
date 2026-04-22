@@ -6,6 +6,7 @@ from typing import Optional
 import httpx
 
 import config
+from avatar.workers import order_endpoints as _order_endpoints
 
 logger = logging.getLogger("anamnesis.avatar.sadtalker")
 
@@ -16,9 +17,13 @@ class SadTalkerClient:
     def name(self) -> str:
         return "sadtalker@worker"
 
-    async def animate(self, audio_path: str, reference_image: str, output_path: str) -> str:
+    async def animate(
+        self, audio_path: str, reference_image: str, output_path: str,
+        preferred_worker: Optional[str] = None, no_fallback: bool = False,
+    ) -> str:
+        endpoints = _order_endpoints(config.AVATAR_WORKER_ENDPOINTS, preferred_worker, no_fallback)
         last_err = None
-        for url, label in config.AVATAR_WORKER_ENDPOINTS:
+        for url, label in endpoints:
             try:
                 async with httpx.AsyncClient(timeout=600) as client:
                     with open(audio_path, "rb") as a, open(reference_image, "rb") as i:
