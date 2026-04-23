@@ -32,8 +32,11 @@ README_*.md
 0_ANAMNESIS_SOURCES/
 *.log
 
+
+
 # Docs — only HTML published, not markdown
 docs/*.md
+0_ANAMNESIS_DOCS_http.server.sh
 
 
 

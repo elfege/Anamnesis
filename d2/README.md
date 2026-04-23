@@ -80,6 +80,33 @@ structure, and (iv) the near-real-time learning loop described below, which
 closes the circuit between inference and training without requiring offline
 fine-tuning cycles.
 
+### Fixed taxonomy, learned distribution
+
+A clarification to preempt a common misreading: the four categories of
+negation (inessential difference, essential difference, opposition,
+annihilation) are **fixed structural categories** derived from the
+underlying Hegelian framework — they are *a priori* and do not evolve
+from data. The system does **not** learn new categories. It is
+**not** a Piagetian/constructivist system in which schemas accommodate
+to novel experience.
+
+What the system *does* learn is the **distribution over those fixed
+categories across its own weight space and input regions**. A region of
+weight space that initially produces "essential difference" frictions
+might, after enough accumulated bassin entries, start producing
+"annihilation" frictions in a recurring pattern. That pattern signals
+to the controller — not "I need a new category" but "this region is
+structurally unstable; the dialogue/search trigger should fire here."
+
+**Categories fixed; distribution over categories learned.** This is
+coherent with the Hegelian framework (categories necessary, not
+contingent) while still adaptive behaviorally.
+
+See also: [`docs/bitter_lesson/_README_on_the_bitter_lesson.md`](../docs/bitter_lesson/_README_on_the_bitter_lesson.md)
+for the full discussion of what is and isn't novel here, the
+heuristic/epistemogenetic distinction, and Sutton's "Bitter Lesson"
+critique applied to this project.
+
 ## Near Real-Time Learning
 
 A core goal of the architecture — not an afterthought — is that the model
