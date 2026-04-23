@@ -1,12 +1,18 @@
-# 0_ANAMNESIS — Embedding-based AI Context Persistence
+# Anamnesis — Self-Hosted AI Infrastructure with Episodic Memory
 
 > *Anamnesis (Greek): the act of recollection. Learning is not acquiring new knowledge but remembering what the soul already knew before embodiment.*
 
 ## What This Is
 
-A system that gives Claude instances episodic memory across sessions using vector embeddings and MongoDB.
+A self-hosted AI infrastructure platform that delivers three tightly integrated layers:
 
-Each session, significant experiences are distilled into text, embedded into high-dimensional vectors, and stored. Next session, the current context is embedded, the most relevant past episodes are retrieved by vector similarity, and loaded into context. The AI remembers — imperfectly, selectively, but non-randomly.
+1. **Episodic memory** — vector-searchable long-term memory across 75,000+ ingested documents (source code, CLAUDE.md, handoffs, publications), embedded via BAAI/bge-large and indexed over MongoDB Atlas-compatible vector search. Any running AI instance can query this memory and pull the most relevant prior episodes into its current context.
+
+2. **Multi-backend chat + conversational avatar** — persistent sessions with runtime switching between local Ollama models, Anthropic Claude API, and an in-house fine-tuned model. Includes a real-time animated-persona pipeline (LLM → TTS → lip-sync, WebSocket-streamed) with voice cloning and browser mic recording.
+
+3. **Continual-learning engine (δ²) — research-stage** — a custom optimizer and "tension reservoir" (bassin de tenseurs potentiels) designed for stable adaptation from streaming feedback on fixed models without catastrophic forgetting. See [`d2/README.md`](d2/README.md) and [`docs/bitter_lesson/_README_on_the_bitter_lesson.md`](docs/bitter_lesson/_README_on_the_bitter_lesson.md) for the theoretical framing and honest literature positioning (EWC, GEM, SAM).
+
+All three run across a heterogeneous hardware fleet (Dell PowerEdge R730xd orchestrator + AMD ROCm and NVIDIA CUDA GPU workers) with automatic failover.
 
 ## Architecture
 
@@ -34,13 +40,17 @@ Top-K relevant episodes loaded into context
 
 | Component | Technology | Port |
 |-----------|-----------|------|
-| API + Dashboard | FastAPI + uvicorn | 3010 |
+| API + Dashboard | FastAPI + uvicorn (Motor async MongoDB driver) | 3010 |
 | Episode store | MongoDB Atlas Local 8.0 ($vectorSearch) | 5438 |
 | Embedding model | sentence-transformers `bge-large-en-v1.5` (1024 dims, local) | — |
-| Crawler | Python async — ingests CLAUDE.md, handoffs, code (DB-configured) | — |
+| Crawler | Python async — ingests CLAUDE.md, handoffs, code, 7 document formats (DB-configured) | — |
 | JSONL Ingester | Scores + summarizes conversation logs (DB-configured roots) | — |
-| Chat | Ollama (local), Claude API, or AnamnesisGPT | — |
-| Trainer + Inference | FastAPI container per GPU machine (training + /generate) | 3011 |
+| Chat | Ollama (local), Claude API, or AnamnesisGPT (runtime switchable, WebSocket/SSE streamed) | — |
+| Trainer + Inference | FastAPI container per GPU machine (training + `/generate`) | 3011 |
+| Avatar GPU workers | XTTS v2 voice cloning + SadTalker lip-sync + Demucs vocal extraction | 3013 |
+| Avatar pipeline | LLM → TTS → animation, multi-backend, session-persistent | 3010 (routes) |
+
+Full HTTP API reference: [`API.md`](API.md).
 
 ## Episode Schema
 
@@ -65,14 +75,17 @@ Top-K relevant episodes loaded into context
 | FastAPI REST API | ✅ Live |
 | MongoDB vector search | ✅ Live |
 | Dashboard (Overview, Episodes, Search, Crawler, Chat, Embedding) | ✅ Live |
-| CLAUDE.md + handoff crawler | ✅ Live |
+| CLAUDE.md + handoff crawler (7 document formats: .docx, .pdf, .odt, .pages, .md, .txt, .rtf) | ✅ Live |
 | JSONL conversation log ingester | ✅ Live |
 | Ollama chat integration | ✅ Live |
 | Claude API chat integration | ✅ Live |
-| AnamnesisGPT (personal LLM, multi-GPU failover) | ✅ Live |
+| AnamnesisGPT (personal LLM, multi-GPU failover) | ✅ Live (demo — 1.5B base, low quality) |
 | Trainer containers (GPU fine-tune + inference, multi-machine) | ✅ Live |
 | Training dashboard tab | ✅ Live |
 | Terminal panel (backend activity log) | ✅ Live |
+| Avatar pipeline (LLM→TTS→animation) with session memory + multi-backend + worker selector | ✅ Live |
+| Voice cloning (XTTS v2) + Demucs song→vocals + browser mic capture | ✅ Live |
+| δ² continual-learning engine | 🛠 Scaffolded, pre-benchmark |
 
 ## Trainer Containers
 
@@ -124,6 +137,13 @@ Deploy trainers:
 ./deploy_trainers.sh --server2-only
 ```
 
+## Research & Design Docs
+
+- [`API.md`](API.md) — full HTTP API reference (every endpoint, grouped by concern)
+- [`d2/README.md`](d2/README.md) — the continual-learning engine, its relationship to EWC/GEM/SAM, and its composition with Adam
+- [`docs/bitter_lesson/_README_on_the_bitter_lesson.md`](docs/bitter_lesson/_README_on_the_bitter_lesson.md) — Sutton's "Bitter Lesson" critique applied to δ², honest catalog of what's novel vs adjacent, Hegelian-vs-Piagetian distinction
+- External: [github.com/elfege/RESEARCH](https://github.com/elfege/RESEARCH) — the philosophical essays and formal mathematical addendum that motivate the δ² work
+
 ## Key Design Decisions
 
 1. **Unit of storage is the episode, not the concept.** Concepts emerge from retrieval patterns in vector space.
@@ -132,6 +152,10 @@ Deploy trainers:
 4. **Instance-aware.** Episodes are tagged by source instance — cross-instance learning is a feature.
 5. **All source configuration lives in MongoDB.** No hardcoded paths in code. Crawler sources, machine roots, and JSONL source roots are configured via the dashboard Settings tab. First run seeds empty config.
 6. **Trainer containers serve both training and inference.** Each container loads a QLoRA-adapted model and exposes a `/generate` endpoint alongside training management.
+7. **Avatar reuses the chat-session collection.** Session persistence, history, and sidebar listing for the avatar use the same MongoDB collection as the main chat (with a `backend="avatar"` tag), not a parallel persistence layer.
+8. **GPU worker selection is preferred-not-forced by default.** The UI dropdown picks a preferred worker; the fallback chain still runs unless the "no fallback" toggle is on — so a single worker outage doesn't kill the conversation.
+9. **δ² positioning is continual learning, not optimizer replacement.** The project does not compete on general-benchmark performance (where scale wins); it competes on stable adaptation from streaming feedback at fixed model size — the problem GEM and EWC were published on.
+10. **Negation taxonomy is *a priori* (Hegelian), not learned (Piagetian).** The four categories of negation in the bassin are fixed structural categories; what the system learns is the distribution over those categories across its weight space. See [`docs/bitter_lesson/_README_on_the_bitter_lesson.md`](docs/bitter_lesson/_README_on_the_bitter_lesson.md) §11.
 
 ## Relationship to Genesis
 
