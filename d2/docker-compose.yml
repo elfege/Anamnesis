@@ -1,0 +1,73 @@
+# d2/docker-compose.yml — δ² engine service.
+#
+# Run on a GPU machine (server, RunPod, etc.). Different from the
+# AnamnesisGPT trainer (which serves Qwen+QLoRA on port 3011) — this
+# is a separate service for the δ² engine on port 3015.
+#
+# CUDA (server, RunPod):
+#   docker compose -f d2/docker-compose.yml --profile cuda up -d --build
+#
+# ROCm (office RX 6800):
+#   docker compose -f d2/docker-compose.yml --profile rocm up -d --build
+#
+# After it's up:
+#   curl http://<host>:3015/health
+#   # then on dellserver: set D2_ENDPOINT_URL=http://<host>:3015 in .env
+#   # and restart anamnesis-app
+
+services:
+  d2-cuda:
+    profiles: [cuda]
+    build:
+      context: ..
+      dockerfile: d2/Dockerfile
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu121
+    image: anamnesis-d2:cuda
+    container_name: anamnesis-d2
+    restart: unless-stopped
+    ports:
+      - "3015:3015"
+    environment:
+      D2_SERVICE_PORT: "3015"
+      D2_RUNS_DIR: /workspace/runs
+    volumes:
+      # Persist benchmark outputs across container restarts
+      - ./d2_runs:/workspace/runs
+      # Hot-reload code edits (dev convenience — drop in production)
+      - .:/app/d2
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  d2-rocm:
+    profiles: [rocm]
+    build:
+      context: ..
+      dockerfile: d2/Dockerfile
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/rocm6.2
+    image: anamnesis-d2:rocm
+    container_name: anamnesis-d2
+    restart: unless-stopped
+    ports:
+      - "3015:3015"
+    environment:
+      D2_SERVICE_PORT: "3015"
+      D2_RUNS_DIR: /workspace/runs
+      # ROCm-specific: HSA_OVERRIDE_GFX_VERSION sometimes needed for
+      # consumer cards (RX 6800 is gfx1030); set if torch can't detect.
+      HSA_OVERRIDE_GFX_VERSION: "10.3.0"
+    volumes:
+      - ./d2_runs:/workspace/runs
+      - .:/app/d2
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+      - render
