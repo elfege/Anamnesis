@@ -1,0 +1,63 @@
+# docker-compose.runpod.yml — RunPod (CUDA) flavor of the trainer.
+#
+# This file is built and pushed as a Docker image (see deploy_runpod.sh).
+# RunPod itself doesn't directly use docker-compose — it pulls a single
+# image and runs it. We keep this compose file so the build/test loop
+# is identical to docker-compose.server.yml (CUDA on the local server).
+#
+# To rebuild and push (run from project root):
+#   docker compose -f trainers/docker-compose.runpod.yml build
+#   docker push elfege/anamnesis-trainer:cuda-latest
+#
+# Then `./deploy_runpod.sh start` will pull this image on the pod.
+
+services:
+  trainer:
+    image: elfege/anamnesis-trainer:cuda-latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # CUDA build of PyTorch — matches what RunPod's NVIDIA pods expose.
+        # cu121 works with most pods; check RunPod's GPU compatibility for
+        # newer GPUs (H100 may need cu124).
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu121
+
+    # Inside RunPod, the container's own port 3011 gets mapped to a public
+    # port (chosen by RunPod). The trainer always binds to 3011 internally.
+    ports:
+      - "3011:3011"
+
+    environment:
+      # Auto-load the model on container startup so the first request
+      # doesn't have to wait for the Qwen base + LoRA adapter to load.
+      AUTO_LOAD_MODEL: "true"
+
+      # Where to look for fine-tune output / adapter checkpoints inside the
+      # container. RunPod mounts /workspace as a persistent volume — using
+      # it means model checkpoints survive pod restart.
+      OUTPUT_DIR: /workspace/output
+      ADAPTER_DIR: /workspace/output/final
+
+      # Trainer base model. Kept in env so we can swap without rebuilding.
+      BASE_MODEL: ${BASE_MODEL:-Qwen/Qwen2.5-1.5B}
+
+      # Hugging Face cache to /workspace so it survives pod restarts.
+      # Without this, every cold start re-downloads the base model (~3 GB).
+      HF_HOME: /workspace/hf_cache
+      TRANSFORMERS_CACHE: /workspace/hf_cache
+
+    # RunPod's persistent volume is /workspace by convention.
+    volumes:
+      - /workspace:/workspace
+
+    # Use NVIDIA runtime — required for any GPU access on a RunPod pod.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    restart: unless-stopped

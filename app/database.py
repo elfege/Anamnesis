@@ -70,6 +70,19 @@ def get_settings_collection():
     return _db["settings"]
 
 
+def get_db():
+    """Return the raw Motor database handle.
+
+    Useful for new collections (e.g. worker_registry) that don't yet have
+    their own typed accessor. New code should usually create a dedicated
+    `get_<name>_collection()` helper instead, but this is fine for ad-hoc
+    use during development.
+    """
+    if _db is None:
+        raise RuntimeError("MongoDB not connected. Call connect_to_mongo() first.")
+    return _db
+
+
 # ─── Chat feedback (thumbs up/down for training) ─────────────────
 
 def get_feedback_collection():
