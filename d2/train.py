@@ -48,6 +48,7 @@ import torch
 
 from neural_network import Transformer, TransformerConfig
 from optimizer import DeltaSquaredOptimizer
+from controller import DialecticalController, build_controller_from_model
 from bassin import BassinStore, classify_negation, NegationType
 from config import TrainingConfig
 
@@ -223,6 +224,20 @@ def create_optimizer(model: Transformer, config: TrainingConfig):
             w_bar_ema_decay=config.d2_w_bar_ema_decay,
         )
         logger.info("Using optimizer: DeltaSquared (δ²)")
+
+    elif config.optimizer == 'controller':
+        # ── Dialectical Controller (Adam ↔ δ² switching) ─────────────
+        # Holds BOTH optimizers and picks one each step based on a
+        # confidence signal (loss / grad_norm / entropy). See controller.py
+        # for the full explanation. This is the "speculative moment" of
+        # the framework — neither pure Adam nor pure δ², but their
+        # preserved opposition.
+        optimizer = build_controller_from_model(model, config)
+        logger.info(
+            f"Using optimizer: DialecticalController "
+            f"(signal={config.controller_signal}, warmup={config.controller_warmup_steps})"
+        )
+
     else:
         raise ValueError(f"Unknown optimizer: {config.optimizer}")
 
@@ -382,13 +397,24 @@ def train(config: TrainingConfig):
         # Even with δ², we clip extreme gradients to prevent NaN.
         # This is a belt-and-suspenders safety measure, not part of the
         # δ² theory. It should rarely activate if hyperparameters are right.
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        # `clip_grad_norm_` returns the TOTAL gradient norm — we capture it
+        # because the controller can use it as a confidence signal.
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
         # ── Optimizer step ───────────────────────────────────────────
         # THIS IS WHERE THE DIFFERENCE HAPPENS.
-        # Adam: subtracts normalized gradient from weights.
-        # δ²: sign-squares the friction, accumulates in bassin, injects bounded tension.
-        optimizer.step()
+        #   Adam:        subtracts normalized gradient from weights.
+        #   δ²:          sign-squares the friction, accumulates in bassin, injects bounded tension.
+        #   Controller:  picks Adam or δ² each step based on a confidence signal,
+        #                so it needs the loss / grad_norm passed in to decide.
+        if isinstance(optimizer, DialecticalController):
+            # Pass the signals the controller might use.
+            # It only reads the one its `signal` config asked for; the others
+            # are ignored. Cheap enough to always pass both.
+            optimizer.step(loss=accum_loss, grad_norm=float(grad_norm))
+        else:
+            # Standard optimizers (AdamW, DeltaSquaredOptimizer) take no args.
+            optimizer.step()
 
         # ── Logging ──────────────────────────────────────────────────
         if step % config.log_interval == 0:

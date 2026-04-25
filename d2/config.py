@@ -30,9 +30,25 @@ class TrainingConfig:
     bias: bool = False                  # no bias = slightly better + faster
 
     # ── Optimizer selection ──────────────────────────────────────────────
-    # "adam"   = standard AdamW (control/baseline)
-    # "delta2" = the δ² optimizer with bassin
+    # "adam"       = standard AdamW (control/baseline)
+    # "delta2"     = the δ² optimizer with bassin
+    # "controller" = dialectical controller switching Adam <-> δ² per step
+    #                based on a confidence signal (the "speculative moment")
     optimizer: str = "delta2"
+
+    # ── Controller hyperparameters (used when optimizer="controller") ────
+    # Which signal drives the switch: "loss" (default) | "grad_norm" | "entropy"
+    controller_signal: str = "loss"
+    # Always use Adam for the first N steps (let it find a basin first)
+    controller_warmup_steps: int = 100
+    # Loss-signal: how many recent losses to average for stability detection
+    controller_loss_window: int = 50
+    # Loss-signal: deviation threshold (relative to std) for "stable vs spiking"
+    controller_loss_stable_threshold: float = 0.01
+    # Grad-norm-signal: below this we call it "stable"
+    controller_grad_norm_threshold: float = 1.0
+    # Entropy-signal: below this we call it "confident"
+    controller_entropy_threshold: float = 1.5
 
     # ── Adam hyperparameters (used when optimizer="adam") ────────────────
     adam_lr: float = 6e-4               # learning rate
