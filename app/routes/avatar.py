@@ -368,6 +368,20 @@ async def list_backends_and_models():
             continue
     out["backends"]["anamnesis_gpt"] = ana_info
 
+    # δ² — available iff D2_ENDPOINT_URL is set AND the trainer responds
+    d2_endpoint = os.environ.get("D2_ENDPOINT_URL", "").rstrip("/")
+    d2_info = {"available": False, "endpoint": d2_endpoint or None, "models": []}
+    if d2_endpoint:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get(f"{d2_endpoint}/health")
+                if r.status_code == 200:
+                    d2_info["available"] = True
+                    d2_info["models"] = ["d2"]
+        except Exception:
+            pass
+    out["backends"]["d2"] = d2_info
+
     return out
 
 

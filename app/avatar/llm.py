@@ -30,6 +30,11 @@ logger = logging.getLogger("anamnesis.avatar.llm")
 _NANOGPT_URLS_RAW = os.environ.get("NANOGPT_URLS", os.environ.get("NANOGPT_URL", ""))
 ANAMNESIS_GPT_ENDPOINTS = [u.strip().rstrip("/") for u in _NANOGPT_URLS_RAW.split(",") if u.strip()]
 
+# δ² engine endpoint (dedicated trainer container running d2/inference.py).
+# Different model + optimizer than the AnamnesisGPT QLoRA fine-tune, so it
+# gets its own URL. May be unset if the δ² trainer isn't deployed yet.
+D2_ENDPOINT = os.environ.get("D2_ENDPOINT_URL", "").rstrip("/")
+
 
 # ─── Ollama ─────────────────────────────────────────────────────
 
@@ -245,6 +250,74 @@ async def _stream_anamnesis_gpt(
     yield ("error", f"No AnamnesisGPT endpoint reachable. Tried: {', '.join(ANAMNESIS_GPT_ENDPOINTS)}")
 
 
+# ─── Backend: δ² engine (dedicated trainer) ─────────────────────
+
+async def _stream_d2(
+    system: str,
+    user_message: str,
+    model: Optional[str],
+    previous_messages: Optional[list[dict]],
+) -> AsyncIterator[tuple[str, str]]:
+    """
+    Stream from the δ² trainer container.
+
+    Distinct from _stream_anamnesis_gpt:
+      - Talks to D2_ENDPOINT_URL (one trainer, not a failover chain)
+      - The trainer's /generate accepts an `enable_bassin_recall` flag
+        which is true by default — this is what makes δ² different from
+        ordinary text generation: when the model is uncertain, it pulls
+        from the bassin and re-generates with contrastive context.
+
+    Falls back gracefully (yields "error") if D2_ENDPOINT_URL isn't set.
+    """
+    if not D2_ENDPOINT:
+        yield ("error", "D2_ENDPOINT_URL not configured — δ² trainer not deployed")
+        return
+
+    parts = [f"[SYSTEM] {system + _lang_instruction(_detect_language(user_message))}"]
+    for m in (previous_messages or []):
+        parts.append(f"[{m.get('role', '').upper()}] {m.get('content', '')}")
+    parts.append(f"[USER] {user_message}")
+    parts.append("[ASSISTANT]")
+    prompt = "\n\n".join(parts)
+
+    body = {
+        "prompt": prompt,
+        "max_tokens": 512,
+        "temperature": 0.8,
+        "top_k": 200,
+        "enable_bassin_recall": True,
+        "uncertainty_threshold": 1.5,
+        "stream": True,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream("POST", f"{D2_ENDPOINT}/generate", json=body) as r:
+                if r.status_code != 200:
+                    text = await r.aread()
+                    yield ("error", f"d2 {r.status_code}: {text.decode()[:200]}")
+                    return
+                yield ("endpoint", f"d2:{D2_ENDPOINT}")
+                async for line in r.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except Exception:
+                        continue
+                    if ev.get("done"):
+                        return
+                    token = ev.get("token", "")
+                    if token:
+                        yield ("token", token)
+    except Exception as exc:
+        yield ("error", f"d2 endpoint error: {exc}")
+
+
 # ─── Public dispatcher ──────────────────────────────────────────
 
 async def stream_reply(
@@ -261,8 +334,11 @@ async def stream_reply(
     elif backend == "claude":
         async for evt in _stream_claude(system, user_message, model, previous_messages):
             yield evt
-    elif backend in ("anamnesis_gpt", "anamnesis-gpt", "d2"):
+    elif backend in ("anamnesis_gpt", "anamnesis-gpt"):
         async for evt in _stream_anamnesis_gpt(system, user_message, model, previous_messages):
+            yield evt
+    elif backend == "d2":
+        async for evt in _stream_d2(system, user_message, model, previous_messages):
             yield evt
     else:
         yield ("error", f"Unknown backend: {backend!r}")

@@ -24,6 +24,7 @@ UTC. MongoDB `_id` fields are serialized as strings.
 - [Bash (sandboxed)](#bash-sandboxed)
 - [Worker registry (ephemeral GPUs)](#worker-registry-ephemeral-gpus)
 - [Anamnesis config + restart](#anamnesis-config--restart)
+- [δ² engine (continual-learning research)](#δ²-engine-continual-learning-research)
 
 ---
 
@@ -310,6 +311,50 @@ Persisted app configuration with optional host-side restart trigger
 | `GET` | `/api/anamnesis/config` | Return all persisted config keys from collection `anamnesis_config`. |
 | `DELETE` | `/api/anamnesis/config/{key}` | Remove one persisted config key. |
 | `GET` | `/api/anamnesis/restart/status` | Cheap health check: returns `{available, trigger_file, current_content}` if the bind mount is in place and the watcher has initialized; `{available: false, reason}` otherwise. |
+
+---
+
+## δ² engine (continual-learning research)
+
+Prefix: `/api/d2` · tag: `d2`
+
+Thin proxy layer to the δ² trainer container (a separate GPU-attached
+container running the code in `d2/`). All routes return 503 until
+`D2_ENDPOINT_URL` is set in `.env` and the trainer is reachable.
+
+### Status
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/d2/status` | `{configured, reachable, endpoint, model_loaded, current_optimizer, training_status, bassin_size}`. |
+
+### Inference
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/d2/generate` | Forward generation request. Body: `{prompt, max_tokens?, temperature?, top_k?, enable_bassin_recall?, uncertainty_threshold?}`. Bassin recall triggers when next-token entropy exceeds threshold. |
+
+### Training control
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/d2/train/start` | Launch a training run. Body: `{optimizer="adam"\|"delta2"\|"controller", benchmark="permuted_mnist"\|"split_mnist", tasks, epochs, seed, notes?}`. Returns `{ok, run_id, started_at}`. |
+| `POST` | `/api/d2/train/stop` | Stop the current training run. |
+| `GET` | `/api/d2/train/status` | `{status, run_id, started_at, step, total_steps, current_loss, controller_stats?, bassin_stats}`. |
+
+### Bassin inspection
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/d2/bassin/stats` | `{size, tension_distribution, negation_type_counts, by_layer}`. |
+| `POST` | `/api/d2/bassin/query` | Retrieve tensions semantically related to a context. Body: `{context, top_k?, negation_types?}`. |
+
+### Historical runs
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/d2/runs` | List historical training runs (Adam/δ²/controller comparisons). |
+| `GET` | `/api/d2/runs/{run_id}` | Full metrics for one run. |
 
 ---
 
