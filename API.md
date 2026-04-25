@@ -22,6 +22,7 @@ UTC. MongoDB `_id` fields are serialized as strings.
 - [Files browser](#files-browser)
 - [Dashboard & Status](#dashboard--status)
 - [Bash (sandboxed)](#bash-sandboxed)
+- [Worker registry (ephemeral GPUs)](#worker-registry-ephemeral-gpus)
 
 ---
 
@@ -38,6 +39,7 @@ Atlas-compatible vector index.
 | `POST` | `/api/episodes` | Create an episode. Body: `{instance, project, summary, raw_exchange, tags?}`. Server computes the embedding. Returns the persisted `EpisodeOut`. |
 | `POST` | `/api/episodes/search` | Vector similarity search. Body: `{query_text, top_k?}`. Returns up to `top_k` episodes ranked by cosine similarity, each with a `score`. |
 | `GET` | `/api/episodes` | List episodes (paginated). Query: `limit`, `skip`, `project`, `instance`, `tag`. |
+| `GET` | `/api/episodes/recent` | Stream all episodes from the last N days as NDJSON (no page cap). Query: `days` (required, fractional OK), optional `project`, `instance`, `tag`, `limit`. |
 | `GET` | `/api/episodes/{episode_id}` | Fetch a single episode by its ID. |
 | `DELETE` | `/api/episodes/{episode_id}` | Delete an episode. |
 | `POST` | `/api/episodes/reembed` | Re-embed all episodes with the current embedding model. Runs in background; poll `/reembed/status` for progress. |
@@ -268,6 +270,28 @@ consent token (issued by `/api/bash/consent/{consent_id}`) to execute.
 |--------|------|-------------|
 | `POST` | `/api/bash/consent/{consent_id}` | Issue a consent token for a pending command. |
 | `POST` | `/api/bash/run` | Execute a command. Body: `{command, consent_token}`. |
+
+---
+
+## Worker registry (ephemeral GPUs)
+
+Prefix: `/api/workers` · tag: `workers`
+
+Dynamic registry for ephemeral GPU workers (RunPod, EC2, etc.) whose URLs
+change between sessions. Static workers continue to be configured via
+`.env` (`NANOGPT_URLS`, `AVATAR_WORKER_URL_*`); this registry adds
+hot-swap support without an app restart.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/workers/register` | Register / refresh a worker. Body: `{url, label, kind="manual"\|"runpod"\|"ec2"}`. Upsert by `label`. |
+| `DELETE` | `/api/workers/register/{worker_id}` | Unregister a worker. 404 if not found. |
+| `GET` | `/api/workers/list` | List registered workers. Query: `kind` (optional filter). |
+| `POST` | `/api/workers/{worker_id}/heartbeat` | Update `last_seen` timestamp. |
+
+Schema: `{worker_id, url, kind, registered_at, last_seen}` in MongoDB
+collection `worker_registry`. Used by `deploy_runpod.sh` and similar
+scripts to register/unregister cloud GPU pods without editing `.env`.
 
 ---
 
