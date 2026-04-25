@@ -1,0 +1,45 @@
+# anamnesis-restart-watcher.service
+#
+# Systemd service that runs scripts/anamnesis-restart-watcher.sh on the host
+# (NOT inside the container). The watcher polls /dev/shm/anamnesis-restart/trigger;
+# when the Anamnesis app writes "reboot" to it, the watcher runs ./start.sh.
+#
+# INSTALL:
+#   sudo cp deployment/anamnesis-restart-watcher.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now anamnesis-restart-watcher
+#
+# CHECK:
+#   sudo systemctl status anamnesis-restart-watcher
+#   sudo journalctl -u anamnesis-restart-watcher -f
+#
+# UNINSTALL:
+#   sudo systemctl disable --now anamnesis-restart-watcher
+#   sudo rm /etc/systemd/system/anamnesis-restart-watcher.service
+#   sudo systemctl daemon-reload
+
+[Unit]
+Description=Anamnesis app restart watcher (host-side)
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=elfege
+Group=elfege
+
+# Where the watcher script lives — adjust if you cloned elsewhere.
+Environment=ANAMNESIS_PROJECT_DIR=/home/elfege/0_GENESIS_PROJECT/0_ANAMNESIS
+
+ExecStart=/home/elfege/0_GENESIS_PROJECT/0_ANAMNESIS/scripts/anamnesis-restart-watcher.sh
+
+# Restart on failure with a small backoff
+Restart=on-failure
+RestartSec=5
+
+# Logs go to journalctl by default
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

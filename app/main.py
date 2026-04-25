@@ -21,6 +21,7 @@ from routes.feedback import router as feedback_router
 from routes.context_index import router as context_index_router
 from routes.avatar import router as avatar_router
 from routes.workers import router as workers_router
+from routes.restart import router as restart_router
 from crawler import load_crawler_config, run_crawl_cycle
 from jsonl_ingester import run_jsonl_ingestion, initialize_ingester, load_jsonl_source_roots
 from scheduler import (
@@ -147,6 +148,7 @@ app.include_router(feedback_router)
 app.include_router(context_index_router)
 app.include_router(avatar_router)
 app.include_router(workers_router)
+app.include_router(restart_router)
 
 
 @app.get("/health")

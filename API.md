@@ -23,6 +23,7 @@ UTC. MongoDB `_id` fields are serialized as strings.
 - [Dashboard & Status](#dashboard--status)
 - [Bash (sandboxed)](#bash-sandboxed)
 - [Worker registry (ephemeral GPUs)](#worker-registry-ephemeral-gpus)
+- [Anamnesis config + restart](#anamnesis-config--restart)
 
 ---
 
@@ -292,6 +293,23 @@ hot-swap support without an app restart.
 Schema: `{worker_id, url, kind, registered_at, last_seen}` in MongoDB
 collection `worker_registry`. Used by `deploy_runpod.sh` and similar
 scripts to register/unregister cloud GPU pods without editing `.env`.
+
+---
+
+## Anamnesis config + restart
+
+Prefix: `/api/anamnesis` · tag: `anamnesis-config`
+
+Persisted app configuration with optional host-side restart trigger
+(NVR pattern — tmpfs file as container ↔ host interface). See
+`deployment/README.md` for setup details.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/anamnesis/config-and-restart` | Persist config dict to MongoDB; if `restart=true` (default), write "reboot" to `/dev/shm/anamnesis-restart/trigger`. The host-side watcher picks it up and runs `./start.sh` within ~5s. |
+| `GET` | `/api/anamnesis/config` | Return all persisted config keys from collection `anamnesis_config`. |
+| `DELETE` | `/api/anamnesis/config/{key}` | Remove one persisted config key. |
+| `GET` | `/api/anamnesis/restart/status` | Cheap health check: returns `{available, trigger_file, current_content}` if the bind mount is in place and the watcher has initialized; `{available: false, reason}` otherwise. |
 
 ---
 
