@@ -30,6 +30,7 @@
         <button class="tab" data-tab="chat">Chat</button>
         <button class="tab" data-tab="embedding">Embedding</button>
         <button class="tab" data-tab="training">Training</button>
+        <button class="tab" data-tab="d2">δ²</button>
         <button class="tab" data-tab="architecture">Architecture</button>
         <a class="tab" href="/avatar" style="text-decoration:none;display:inline-flex;align-items:center;">Avatar ↗</a>
     </nav>
@@ -656,6 +657,252 @@
             </div>
         </template>
 
+    </section>
+
+    <!-- ─── δ² Tab — continual-learning research ────────────── -->
+    <section id="tab-d2" class="tab-content">
+        <div class="project-description" style="margin-bottom:16px">
+            <p><strong>What this is:</strong> Live status and historical results of the δ² engine — a continual-learning optimizer that retains structured negatives in a tension reservoir (bassin) instead of discarding them. Compared head-to-head with EWC and GEM on standard benchmarks.</p>
+            <p style="margin-top:6px;color:var(--muted)">
+                <strong>Status</strong> — δ² trainer container reachability + current optimizer + bassin size. Refreshes every 5s. &nbsp;
+                <strong>Bassin</strong> — distribution of retained tensions across the four Hegelian negation types and across model layers. &nbsp;
+                <strong>Runs</strong> — historical benchmark results (ACC / BWT / FWT) for adam, ewc, gem, delta2, controller.
+            </p>
+            <p style="margin-top:6px;color:var(--muted);font-size:11px">
+                Reference: <a href="https://github.com/elfege/Anamnesis/blob/main/d2/README.md" target="_blank" style="color:var(--accent)">d2/README.md</a> ·
+                Theory: <a href="https://github.com/elfege/Anamnesis/blob/main/docs/bitter_lesson/_README_on_the_bitter_lesson.md" target="_blank" style="color:var(--accent)">bitter-lesson reference</a>
+            </p>
+        </div>
+
+        <!-- ── Status panel ─────────────────────────────────── -->
+        <div class="d2-status-card" style="background:var(--card);border-radius:6px;padding:14px 16px;margin-bottom:16px;border:1px solid var(--border)">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+                <span class="d2-status-dot" id="d2-status-dot" style="width:10px;height:10px;border-radius:50%;background:#888;display:inline-block"></span>
+                <strong id="d2-status-label" style="font-size:14px">checking…</strong>
+                <span id="d2-status-endpoint" style="color:var(--muted);font-size:12px;font-family:monospace"></span>
+            </div>
+            <div id="d2-status-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;font-size:12px">
+                <div>Optimizer: <strong id="d2-current-optimizer">—</strong></div>
+                <div>Training: <strong id="d2-training-status">—</strong></div>
+                <div>Model loaded: <strong id="d2-model-loaded">—</strong></div>
+                <div>Bassin size: <strong id="d2-bassin-size">—</strong></div>
+                <div>Run id: <strong id="d2-run-id" style="font-family:monospace;font-size:11px">—</strong></div>
+            </div>
+        </div>
+
+        <!-- ── Bassin distribution ─────────────────────────── -->
+        <h3 style="margin-top:20px;font-size:14px">Bassin — negation type distribution</h3>
+        <div id="d2-bassin-bars" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:8px">
+            <div class="d2-bar-card" data-type="inessential_difference">
+                <div class="d2-bar-label">Inessential difference</div>
+                <div class="d2-bar-track"><div class="d2-bar-fill" style="background:#777"></div></div>
+                <div class="d2-bar-count">—</div>
+            </div>
+            <div class="d2-bar-card" data-type="essential_difference">
+                <div class="d2-bar-label">Essential difference</div>
+                <div class="d2-bar-track"><div class="d2-bar-fill" style="background:#5a8"></div></div>
+                <div class="d2-bar-count">—</div>
+            </div>
+            <div class="d2-bar-card" data-type="opposition">
+                <div class="d2-bar-label">Opposition</div>
+                <div class="d2-bar-track"><div class="d2-bar-fill" style="background:#e80"></div></div>
+                <div class="d2-bar-count">—</div>
+            </div>
+            <div class="d2-bar-card" data-type="annihilation">
+                <div class="d2-bar-label">Annihilation</div>
+                <div class="d2-bar-track"><div class="d2-bar-fill" style="background:#c44"></div></div>
+                <div class="d2-bar-count">—</div>
+            </div>
+        </div>
+
+        <!-- ── Historical runs ─────────────────────────────── -->
+        <h3 style="margin-top:24px;font-size:14px">Historical benchmark runs</h3>
+        <table id="d2-runs-table" style="width:100%;border-collapse:collapse;margin-top:8px;font-size:12px">
+            <thead>
+                <tr style="border-bottom:1px solid var(--border);text-align:left">
+                    <th style="padding:6px 8px">Run ID</th>
+                    <th style="padding:6px 8px">Method</th>
+                    <th style="padding:6px 8px">Benchmark</th>
+                    <th style="padding:6px 8px;text-align:right">ACC</th>
+                    <th style="padding:6px 8px;text-align:right">BWT</th>
+                    <th style="padding:6px 8px;text-align:right">FWT</th>
+                    <th style="padding:6px 8px">Started</th>
+                </tr>
+            </thead>
+            <tbody id="d2-runs-tbody">
+                <tr><td colspan="7" style="padding:14px;text-align:center;color:var(--muted)">no runs yet</td></tr>
+            </tbody>
+        </table>
+
+        <p style="margin-top:18px;color:var(--muted);font-size:11px">
+            ACC = average accuracy across all tasks at end of training (higher better) ·
+            BWT = backward transfer (close to 0 = no forgetting; negative = catastrophic forgetting) ·
+            FWT = forward transfer (positive = generalization across tasks)
+        </p>
+
+        <!-- ── Inline styles for the bars ───────────────────── -->
+        <style>
+            .d2-bar-card {
+                background:var(--card); border:1px solid var(--border);
+                border-radius:6px; padding:10px;
+            }
+            .d2-bar-label { font-size:11px; color:var(--muted); margin-bottom:6px; }
+            .d2-bar-track {
+                background:rgba(255,255,255,0.05); height:8px; border-radius:4px;
+                overflow:hidden;
+            }
+            .d2-bar-fill {
+                height:100%; width:0%;
+                transition: width 0.3s;
+            }
+            .d2-bar-count {
+                font-size:13px; font-weight:600; margin-top:4px;
+                font-family:monospace;
+            }
+        </style>
+
+        <!-- ── JS for the d² tab ─────────────────────────────── -->
+        <script>
+        (function(){
+            // Poll /api/d2/status every 5 seconds while this tab is active.
+            // We don't bother polling when the tab is hidden — saves load on
+            // both the orchestrator and the trainer.
+            let pollTimer = null;
+
+            function setStatusDot(state) {
+                // state: "ok" (reachable + model loaded), "warn" (reachable but no model),
+                //        "err" (unreachable or unconfigured), "checking"
+                const dot = document.getElementById('d2-status-dot');
+                const colors = { ok:'#4caf50', warn:'#f5a623', err:'#d4556e', checking:'#888' };
+                dot.style.background = colors[state] || '#888';
+                if (state === 'checking') dot.style.animation = 'pulse 1s infinite';
+                else dot.style.animation = '';
+            }
+
+            async function refreshD2Status() {
+                try {
+                    const r = await fetch('/api/d2/status');
+                    const data = await r.json();
+                    const label = document.getElementById('d2-status-label');
+                    const endpoint = document.getElementById('d2-status-endpoint');
+
+                    if (!data.configured) {
+                        setStatusDot('err');
+                        label.textContent = 'not configured';
+                        endpoint.textContent = '(set D2_ENDPOINT_URL in .env)';
+                    } else if (!data.reachable) {
+                        setStatusDot('err');
+                        label.textContent = 'unreachable';
+                        endpoint.textContent = data.endpoint || '';
+                    } else if (!data.model_loaded) {
+                        setStatusDot('warn');
+                        label.textContent = 'reachable, model not loaded';
+                        endpoint.textContent = data.endpoint || '';
+                    } else {
+                        setStatusDot('ok');
+                        label.textContent = 'live';
+                        endpoint.textContent = data.endpoint || '';
+                    }
+
+                    document.getElementById('d2-current-optimizer').textContent = data.current_optimizer || '—';
+                    document.getElementById('d2-training-status').textContent = data.training_status || '—';
+                    document.getElementById('d2-model-loaded').textContent = data.model_loaded === true ? 'yes' : data.model_loaded === false ? 'no' : '—';
+                    document.getElementById('d2-bassin-size').textContent = data.bassin_size != null ? data.bassin_size.toLocaleString() : '—';
+                    document.getElementById('d2-run-id').textContent = data.current_run_id || '—';
+                } catch (e) {
+                    setStatusDot('err');
+                    document.getElementById('d2-status-label').textContent = 'fetch failed';
+                    document.getElementById('d2-status-endpoint').textContent = String(e).slice(0, 80);
+                }
+            }
+
+            async function refreshD2Bassin() {
+                try {
+                    const r = await fetch('/api/d2/bassin/stats');
+                    if (!r.ok) return;
+                    const data = await r.json();
+                    const counts = data.negation_type_counts || {};
+                    const total = Object.values(counts).reduce((a,b) => a + b, 0) || 1;
+                    document.querySelectorAll('.d2-bar-card').forEach(card => {
+                        const type = card.dataset.type;
+                        const n = counts[type] || 0;
+                        const pct = (n / total) * 100;
+                        card.querySelector('.d2-bar-fill').style.width = pct + '%';
+                        card.querySelector('.d2-bar-count').textContent =
+                            `${n.toLocaleString()} (${pct.toFixed(1)}%)`;
+                    });
+                } catch (e) { /* trainer not reachable; leave as-is */ }
+            }
+
+            async function refreshD2Runs() {
+                try {
+                    const r = await fetch('/api/d2/runs');
+                    if (!r.ok) return;
+                    const data = await r.json();
+                    const tbody = document.getElementById('d2-runs-tbody');
+                    const runs = data.runs || [];
+                    if (!runs.length) {
+                        tbody.innerHTML = '<tr><td colspan="7" style="padding:14px;text-align:center;color:var(--muted)">no runs yet</td></tr>';
+                        return;
+                    }
+                    tbody.innerHTML = '';
+                    for (const run of runs) {
+                        const m = run.metrics || {};
+                        const req = run.request || {};
+                        const tr = document.createElement('tr');
+                        tr.style.borderBottom = '1px solid var(--border)';
+                        const fmt = (v, sign) => v == null ? '—' : (sign ? (v >= 0 ? '+' : '') : '') + v.toFixed(4);
+                        const ts = run.started_at ? new Date(run.started_at * 1000).toLocaleString() : '—';
+                        tr.innerHTML = `
+                            <td style="padding:6px 8px;font-family:monospace;font-size:11px">${run.run_id || '—'}</td>
+                            <td style="padding:6px 8px"><strong>${m.method || req.optimizer || '—'}</strong></td>
+                            <td style="padding:6px 8px">${m.benchmark || req.benchmark || '—'}</td>
+                            <td style="padding:6px 8px;text-align:right;font-family:monospace">${fmt(m.acc)}</td>
+                            <td style="padding:6px 8px;text-align:right;font-family:monospace">${fmt(m.bwt, true)}</td>
+                            <td style="padding:6px 8px;text-align:right;font-family:monospace">${fmt(m.fwt, true)}</td>
+                            <td style="padding:6px 8px;color:var(--muted);font-size:11px">${ts}</td>
+                        `;
+                        tbody.appendChild(tr);
+                    }
+                } catch (e) { /* trainer not reachable; leave as-is */ }
+            }
+
+            function refreshAll() {
+                refreshD2Status();
+                refreshD2Bassin();
+                refreshD2Runs();
+            }
+
+            // Wire to tab activation. The dashboard.js tab switcher fires
+            // "click" on .tab buttons; we just listen on our own button.
+            // Also start polling immediately if our tab is already active
+            // on page load (e.g. user refreshed while viewing the tab).
+            function startPolling() {
+                refreshAll();
+                if (pollTimer) clearInterval(pollTimer);
+                pollTimer = setInterval(refreshAll, 5000);
+            }
+            function stopPolling() {
+                if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+            }
+
+            const d2Btn = document.querySelector('.tab[data-tab="d2"]');
+            if (d2Btn) {
+                d2Btn.addEventListener('click', startPolling);
+            }
+            // Other tabs stop our polling
+            document.querySelectorAll('.tab').forEach(btn => {
+                if (btn.dataset.tab && btn.dataset.tab !== 'd2') {
+                    btn.addEventListener('click', stopPolling);
+                }
+            });
+            // Auto-start if d² is the active tab on load
+            const activeTab = document.querySelector('.tab.active');
+            if (activeTab && activeTab.dataset.tab === 'd2') {
+                startPolling();
+            }
+        })();
+        </script>
     </section>
 
     <!-- ─── Architecture Tab ─────────────────────────────────── -->
