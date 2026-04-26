@@ -39,10 +39,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ── Python deps ─────────────────────────────────────────────────────────────
 # We install torch separately because the index URL varies by hardware.
 RUN pip install --no-cache-dir --upgrade pip wheel
-RUN pip install --no-cache-dir torch --index-url ${TORCH_INDEX_URL}
+RUN pip install --no-cache-dir torch torchvision --index-url ${TORCH_INDEX_URL}
 
 # Lightweight inference + serving deps.
 # transformers/datasets are pulled in for tokenizer + dataset prep.
+# torchvision is needed by d2/experiments/continual.py for split-MNIST /
+# permuted-MNIST loaders (the actual hypothesis-test benchmarks).
 RUN pip install --no-cache-dir \
         fastapi==0.115.0 \
         uvicorn==0.30.6 \
