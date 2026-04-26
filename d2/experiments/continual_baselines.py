@@ -494,6 +494,126 @@ class GEMConstraint:
 
 
 # ============================================================================
+# SAM — Sharpness-Aware Minimization
+# ============================================================================
+
+class SAMOptimizer(torch.optim.Optimizer):
+    """
+    Sharpness-Aware Minimization (Foret et al., 2020).
+
+    SAM is the closest published cousin to δ² in spirit — both seek out
+    contested directions in the loss surface rather than smoothing them
+    away. SAM does it via per-step adversarial perturbation (find the
+    worst nearby point, take the gradient there). δ² does it via
+    persistent retention (signed-square the friction, accumulate in
+    bassin, inject bounded tension).
+
+    We include SAM as a CONTINUAL-LEARNING BASELINE alongside EWC and
+    GEM. Flat minima generalize better, so SAM should retain past-task
+    accuracy better than vanilla AdamW. Beating SAM on backward transfer
+    (BWT) would mean δ²'s structured retention captures something flat
+    minima alone don't.
+
+    USAGE:
+        # SAM wraps a base optimizer (typically SGD or AdamW)
+        base_opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        sam = SAMOptimizer(model.parameters(), base_optimizer=base_opt, rho=0.05)
+
+        for batch in loader:
+            # Two forward+backward passes per step (SAM's cost)
+            loss1 = task_loss(model, batch); loss1.backward()
+            sam.first_step(zero_grad=True)        # perturb to worst point
+            loss2 = task_loss(model, batch); loss2.backward()
+            sam.second_step(zero_grad=True)       # step using perturbed grad
+
+    NOTE on `rho`: this is the perturbation radius. 0.05 is the paper's
+    default for vision tasks. Larger rho = more aggressive search for
+    flat minima but harder to optimize. Smaller rho ≈ standard SGD.
+
+    REFERENCES:
+        Foret, P. et al. (2020) "Sharpness-Aware Minimization for
+        Efficiently Improving Generalization." ICLR 2021.
+    """
+
+    def __init__(self, params, base_optimizer, rho: float = 0.05):
+        if rho < 0:
+            raise ValueError(f"rho must be >= 0, got {rho}")
+        defaults = dict(rho=rho)
+        super().__init__(params, defaults)
+
+        # Store the inner optimizer (AdamW, SGD, etc.) — SAM delegates
+        # the actual weight update to it; SAM only modifies WHERE the
+        # gradient gets computed (at the perturbed point, not at W).
+        self.base_optimizer = base_optimizer
+        # Re-key our defaults onto the base optimizer's groups so they
+        # share state cleanly.
+        self.param_groups = self.base_optimizer.param_groups
+
+    @torch.no_grad()
+    def first_step(self, zero_grad: bool = False):
+        """
+        Step 1 of SAM: move the weights to the worst nearby point.
+
+        Compute the perturbation ε = ρ × ∇L(W) / ‖∇L(W)‖ and add it to
+        each parameter. After this call, the parameters have temporarily
+        moved to W + ε. The next backward pass will compute ∇L(W + ε).
+
+        We save the perturbation in state so second_step can undo it.
+        """
+        # Compute total gradient norm across all parameters
+        grad_norm = self._grad_norm()
+        for group in self.param_groups:
+            scale = group.get("rho", 0.05) / (grad_norm + 1e-12)
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                # The perturbation: ε_i = (ρ / ‖∇L‖) × ∇L_i
+                e_w = p.grad * scale
+                p.add_(e_w)
+                # Save so we can undo in step 2
+                self.state[p]["e_w"] = e_w
+        if zero_grad:
+            self.zero_grad()
+
+    @torch.no_grad()
+    def second_step(self, zero_grad: bool = False):
+        """
+        Step 2 of SAM: undo the perturbation, then run the base optimizer
+        with the gradient computed at the perturbed point.
+
+        At this point param.grad = ∇L(W + ε) from the second backward
+        pass. We move parameters back to W (subtracting ε), then let the
+        base optimizer (AdamW etc.) take its normal step using the
+        perturbed-point gradient.
+        """
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                # Undo the perturbation: W_perturbed - ε = W_original
+                e_w = self.state[p].get("e_w")
+                if e_w is not None:
+                    p.sub_(e_w)
+        # Now param.grad still holds ∇L(W + ε). The base optimizer uses it.
+        self.base_optimizer.step()
+        if zero_grad:
+            self.zero_grad()
+
+    @torch.no_grad()
+    def _grad_norm(self) -> torch.Tensor:
+        """Compute the total L2 norm of gradients across all parameters."""
+        # Use the first parameter's device as the reference
+        device = self.param_groups[0]["params"][0].device
+        total = torch.zeros((), device=device)
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                total = total + p.grad.norm(p=2).pow(2)
+        return total.sqrt()
+
+
+# ============================================================================
 # A simple "no-baseline" controller — just runs whatever optimizer you pass it
 # ============================================================================
 

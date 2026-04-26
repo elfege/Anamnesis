@@ -154,6 +154,7 @@ from experiments.continual_baselines import (
     EWCRegularizer,
     GEMConstraint,
     NoBaselineWrapper,
+    SAMOptimizer,
 )
 
 logger = logging.getLogger("anamnesis.d2.continual")
@@ -320,6 +321,14 @@ def build_optimizer(method: str, model: nn.Module, lr: float):
         opt = torch.optim.AdamW(model.parameters(), lr=lr)
         baseline = GEMConstraint(memory_size=256)
 
+    elif method == "sam":
+        # SAM wraps a base optimizer (AdamW). The baseline wrapper is a
+        # no-op because SAM lives in the optimizer object itself, not in
+        # a separate per-step regularizer/constraint.
+        base_opt = torch.optim.AdamW(model.parameters(), lr=lr)
+        opt = SAMOptimizer(model.parameters(), base_optimizer=base_opt, rho=0.05)
+        baseline = NoBaselineWrapper()
+
     elif method == "delta2":
         opt = DeltaSquaredOptimizer(
             model.parameters(),
@@ -372,7 +381,8 @@ def train_one_task(
 ):
     """
     Train the model on one task for `epochs` epochs.
-    Applies any baseline-specific behavior (EWC penalty, GEM projection).
+    Applies any baseline-specific behavior (EWC penalty, GEM projection,
+    SAM two-pass forward/backward).
     """
     model.train()
     for epoch in range(epochs):
@@ -380,6 +390,23 @@ def train_one_task(
         n_batches = 0
         for batch in train_loader:
             x, y = batch[0].to(device), batch[1].to(device)
+
+            # ── SAM: two-pass training ──────────────────────────────
+            # SAM needs forward+backward TWICE per step:
+            #   1. compute ∇L(W); perturb to W+ε
+            #   2. compute ∇L(W+ε); undo perturbation; base_optimizer.step()
+            # Roughly 2× the wall-clock cost of standard training.
+            if method == "sam":
+                optimizer.zero_grad()
+                loss = F.cross_entropy(model(x), y)
+                loss.backward()
+                optimizer.first_step(zero_grad=True)
+                # Second forward+backward at the perturbed point
+                F.cross_entropy(model(x), y).backward()
+                optimizer.second_step(zero_grad=True)
+                total_loss += loss.item()
+                n_batches += 1
+                continue
 
             optimizer.zero_grad()
             logits = model(x)
@@ -482,7 +509,7 @@ def compute_metrics(acc_matrix: list[list[float]]) -> dict:
 
 def main():
     p = argparse.ArgumentParser(description="δ² continual-learning benchmark runner")
-    p.add_argument("--method", choices=["adam", "ewc", "gem", "delta2", "controller"],
+    p.add_argument("--method", choices=["adam", "ewc", "gem", "sam", "delta2", "controller"],
                    required=True, help="Which method to evaluate")
     p.add_argument("--benchmark", choices=["permuted_mnist", "split_mnist"],
                    default="permuted_mnist", help="Which benchmark to run")
