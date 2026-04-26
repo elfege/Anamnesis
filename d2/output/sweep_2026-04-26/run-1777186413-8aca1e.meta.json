@@ -1,0 +1,29 @@
+{
+  "run_id": "run-1777186413-8aca1e",
+  "started_at": 1777186413.2537687,
+  "command": [
+    "python",
+    "-m",
+    "d2.experiments.continual",
+    "--method",
+    "ewc",
+    "--benchmark",
+    "permuted_mnist",
+    "--tasks",
+    "5",
+    "--epochs",
+    "1",
+    "--seed",
+    "0",
+    "--output",
+    "/workspace/runs/run-1777186413-8aca1e.json"
+  ],
+  "request": {
+    "optimizer": "ewc",
+    "benchmark": "permuted_mnist",
+    "tasks": 5,
+    "epochs": 1,
+    "seed": 0,
+    "notes": "full sweep auto"
+  }
+}

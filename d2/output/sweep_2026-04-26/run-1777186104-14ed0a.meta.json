@@ -1,0 +1,29 @@
+{
+  "run_id": "run-1777186104-14ed0a",
+  "started_at": 1777186104.5106962,
+  "command": [
+    "python",
+    "-m",
+    "d2.experiments.continual",
+    "--method",
+    "controller",
+    "--benchmark",
+    "permuted_mnist",
+    "--tasks",
+    "2",
+    "--epochs",
+    "1",
+    "--seed",
+    "0",
+    "--output",
+    "/workspace/runs/run-1777186104-14ed0a.json"
+  ],
+  "request": {
+    "optimizer": "controller",
+    "benchmark": "permuted_mnist",
+    "tasks": 2,
+    "epochs": 1,
+    "seed": 0,
+    "notes": "smoke test from auto-mode session"
+  }
+}

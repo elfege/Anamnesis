@@ -1,0 +1,29 @@
+{
+  "run_id": "run-1777186635-524c0d",
+  "started_at": 1777186635.8628423,
+  "command": [
+    "python",
+    "-m",
+    "d2.experiments.continual",
+    "--method",
+    "delta2",
+    "--benchmark",
+    "permuted_mnist",
+    "--tasks",
+    "5",
+    "--epochs",
+    "1",
+    "--seed",
+    "0",
+    "--output",
+    "/workspace/runs/run-1777186635-524c0d.json"
+  ],
+  "request": {
+    "optimizer": "delta2",
+    "benchmark": "permuted_mnist",
+    "tasks": 5,
+    "epochs": 1,
+    "seed": 0,
+    "notes": "full sweep auto"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "run_id": "run-1777186264-e93bfa",
+  "started_at": 1777186264.0574226,
+  "command": [
+    "python",
+    "-m",
+    "d2.experiments.continual",
+    "--method",
+    "controller",
+    "--benchmark",
+    "permuted_mnist",
+    "--tasks",
+    "2",
+    "--epochs",
+    "1",
+    "--seed",
+    "0",
+    "--output",
+    "/workspace/runs/run-1777186264-e93bfa.json"
+  ],
+  "request": {
+    "optimizer": "controller",
+    "benchmark": "permuted_mnist",
+    "tasks": 2,
+    "epochs": 1,
+    "seed": 0,
+    "notes": "smoke test attempt 2"
+  }
+}

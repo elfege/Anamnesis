@@ -1,0 +1,60 @@
+{
+  "acc": 0.75458,
+  "bwt": -0.06917500000000001,
+  "fwt": -0.005650000000000002,
+  "matrix": [
+    [
+      0.8888,
+      0.0946,
+      0.107,
+      0.0711,
+      0.0992
+    ],
+    [
+      0.8679,
+      0.8337,
+      0.1039,
+      0.0814,
+      0.1174
+    ],
+    [
+      0.838,
+      0.7967,
+      0.7488,
+      0.0416,
+      0.1359
+    ],
+    [
+      0.8166,
+      0.7067,
+      0.7212,
+      0.7814,
+      0.1373
+    ],
+    [
+      0.7565,
+      0.7331,
+      0.7154,
+      0.771,
+      0.7969
+    ]
+  ],
+  "method": "controller",
+  "benchmark": "permuted_mnist",
+  "tasks": 5,
+  "epochs_per_task": 1,
+  "seed": 0,
+  "duration_seconds": 61.27774691581726,
+  "controller_stats": {
+    "total_steps": 2345,
+    "adam_steps": 199,
+    "delta2_steps": 2146,
+    "adam_fraction": 0.08486140724946695,
+    "delta2_fraction": 0.915138592750533,
+    "last_decision": {
+      "used_optimizer": "delta2",
+      "signal_value": 0.47208996268023706,
+      "reason": "loss spike (deviation=0.472)"
+    }
+  }
+}

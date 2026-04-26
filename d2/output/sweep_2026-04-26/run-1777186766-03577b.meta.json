@@ -1,0 +1,29 @@
+{
+  "run_id": "run-1777186766-03577b",
+  "started_at": 1777186766.9862654,
+  "command": [
+    "python",
+    "-m",
+    "d2.experiments.continual",
+    "--method",
+    "adam",
+    "--benchmark",
+    "split_mnist",
+    "--tasks",
+    "5",
+    "--epochs",
+    "1",
+    "--seed",
+    "0",
+    "--output",
+    "/workspace/runs/run-1777186766-03577b.json"
+  ],
+  "request": {
+    "optimizer": "adam",
+    "benchmark": "split_mnist",
+    "tasks": 5,
+    "epochs": 1,
+    "seed": 0,
+    "notes": "full sweep auto"
+  }
+}

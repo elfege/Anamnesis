@@ -1,0 +1,33 @@
+{
+  "acc": 0.83875,
+  "bwt": -0.015199999999999991,
+  "fwt": -0.005400000000000002,
+  "matrix": [
+    [
+      0.8888,
+      0.0946
+    ],
+    [
+      0.8736,
+      0.8039
+    ]
+  ],
+  "method": "controller",
+  "benchmark": "permuted_mnist",
+  "tasks": 2,
+  "epochs_per_task": 1,
+  "seed": 0,
+  "duration_seconds": 19.827736854553223,
+  "controller_stats": {
+    "total_steps": 938,
+    "adam_steps": 133,
+    "delta2_steps": 805,
+    "adam_fraction": 0.1417910447761194,
+    "delta2_fraction": 0.8582089552238806,
+    "last_decision": {
+      "used_optimizer": "adam",
+      "signal_value": 0.07906471394901309,
+      "reason": "loss stable (deviation=0.079)"
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "run_id": "run-1777186699-ea0bc0",
+  "started_at": 1777186699.9187255,
+  "command": [
+    "python",
+    "-m",
+    "d2.experiments.continual",
+    "--method",
+    "controller",
+    "--benchmark",
+    "permuted_mnist",
+    "--tasks",
+    "5",
+    "--epochs",
+    "1",
+    "--seed",
+    "0",
+    "--output",
+    "/workspace/runs/run-1777186699-ea0bc0.json"
+  ],
+  "request": {
+    "optimizer": "controller",
+    "benchmark": "permuted_mnist",
+    "tasks": 5,
+    "epochs": 1,
+    "seed": 0,
+    "notes": "full sweep auto"
+  }
+}
