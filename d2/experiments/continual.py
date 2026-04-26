@@ -330,12 +330,33 @@ def build_optimizer(method: str, model: nn.Module, lr: float):
         baseline = NoBaselineWrapper()
 
     elif method == "delta2":
+        # Path A — standalone replacement form (the original — empirically
+        # fails to learn at default hyperparameters, ACC ≈ 0.099 on permuted
+        # MNIST per d2/output/sweep_2026-04-26/).
         opt = DeltaSquaredOptimizer(
             model.parameters(),
             alpha1=1e-5, alpha2=1e-4,
             gamma=0.99, eta=1e-3,
             bound_fn="tanh",
             w_bar_mode="ema",
+            additive_mode=False,
+        )
+        baseline = NoBaselineWrapper()
+
+    elif method == "delta2_additive":
+        # Path B — additive form: gradient descent does the actual learning,
+        # δ² adds a bounded tension nudge on top from accumulated past
+        # contradictions. Closer to the philosophical claim and avoids the
+        # bloat / no-learning trap of the standalone form. base_lr matches
+        # the lr we'd use for plain Adam on the same task (1e-3).
+        opt = DeltaSquaredOptimizer(
+            model.parameters(),
+            alpha1=1e-5, alpha2=1e-4,
+            gamma=0.99, eta=1e-3,
+            bound_fn="tanh",
+            w_bar_mode="ema",
+            additive_mode=True,
+            base_lr=lr,
         )
         baseline = NoBaselineWrapper()
 
@@ -509,7 +530,8 @@ def compute_metrics(acc_matrix: list[list[float]]) -> dict:
 
 def main():
     p = argparse.ArgumentParser(description="δ² continual-learning benchmark runner")
-    p.add_argument("--method", choices=["adam", "ewc", "gem", "sam", "delta2", "controller"],
+    p.add_argument("--method", choices=["adam", "ewc", "gem", "sam",
+                                         "delta2", "delta2_additive", "controller"],
                    required=True, help="Which method to evaluate")
     p.add_argument("--benchmark", choices=["permuted_mnist", "split_mnist"],
                    default="permuted_mnist", help="Which benchmark to run")

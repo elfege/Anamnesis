@@ -191,6 +191,19 @@ class DeltaSquaredOptimizer(Optimizer):
         clip_value: float = 1.0,
         w_bar_mode: str = "ema",
         w_bar_ema_decay: float = 0.999,
+        # ── PATH (B) — additive mode ──────────────────────────────────────
+        # When True, do NOT replace the gradient step. Instead:
+        #     W_next = W_now − base_lr·grad   +   η·tanh(B)
+        #            └── learning ──────────┘ └── δ² nudge ─┘
+        # This keeps the learning signal Adam-like (so the model actually
+        # fits each task) and adds the δ² tension on top as a structural
+        # memory of past contradictions. Closer to the philosophical claim
+        # ("contradictions are productive content alongside learning, not
+        # a replacement for it"). When False, behaves like the original
+        # standalone-replacement formulation (which empirically didn't
+        # learn — see d2/output/sweep_2026-04-26/ ACC ≈ 0.099 for δ²).
+        additive_mode: bool = False,
+        base_lr: float = 1e-3,
     ):
         # Validate inputs
         if alpha1 < 0.0:
@@ -199,6 +212,8 @@ class DeltaSquaredOptimizer(Optimizer):
             raise ValueError(f"alpha2 must be >= 0, got {alpha2}")
         if not 0.0 <= gamma < 1.0:
             raise ValueError(f"gamma must be in [0, 1), got {gamma}")
+        if base_lr < 0.0:
+            raise ValueError(f"base_lr must be >= 0, got {base_lr}")
 
         # Store hyperparameters in the format PyTorch expects.
         # "defaults" is a dict that gets attached to every parameter group.
@@ -211,6 +226,8 @@ class DeltaSquaredOptimizer(Optimizer):
             clip_value=clip_value,
             w_bar_mode=w_bar_mode,
             w_bar_ema_decay=w_bar_ema_decay,
+            additive_mode=additive_mode,
+            base_lr=base_lr,
         )
         super().__init__(params, defaults)
 
@@ -342,12 +359,33 @@ class DeltaSquaredOptimizer(Optimizer):
                 else:
                     raise ValueError(f"Unknown bound_fn: {bound_fn}")
 
-                # ── Inject bounded tension into the weights ──────────────
-                # W_next = W_now + η × f(B)
+                # ── Apply the update ──────────────────────────────────────
+                # Two modes:
                 #
-                # This is THE update. The weights move in the direction of
-                # accumulated tension, bounded so they can't explode.
-                p.data.add_(bounded, alpha=eta)
+                #   STANDALONE (additive_mode=False, original δ² formulation):
+                #     W_next = W_now + η · f(B)
+                #     The δ² nudge IS the update. No gradient descent step
+                #     happens. Empirically this fails to learn — the bounded
+                #     injection carries insufficient signal to fit even
+                #     task 1 (see d2/output/sweep_2026-04-26/, ACC ≈ 0.099).
+                #
+                #   ADDITIVE (additive_mode=True, path b):
+                #     W_next = W_now − base_lr · grad   +   η · f(B)
+                #     Standard gradient descent does the actual learning;
+                #     δ² adds a tension nudge on top as structural memory
+                #     of past contradictions. Stays true to the philosophy
+                #     ("contradictions productive *alongside* learning, not
+                #     a replacement for it") and avoids the bloat / no-learning
+                #     trap of the standalone form.
+                if group['additive_mode']:
+                    base_lr = group['base_lr']
+                    # Gradient descent step (Adam-style sign convention: subtract grad)
+                    p.data.add_(delta2, alpha=-base_lr)
+                    # δ² tension nudge on top
+                    p.data.add_(bounded, alpha=eta)
+                else:
+                    # Original standalone replacement form (kept for comparison)
+                    p.data.add_(bounded, alpha=eta)
 
                 # ── Update W̄ (reference state for δ₁) ───────────────────
                 # If using EMA mode, W̄ slowly tracks the current weights.
