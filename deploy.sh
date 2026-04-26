@@ -73,11 +73,11 @@ if ! command -v display_block &>/dev/null; then
 fi
 
 run() {
-	if $TEST; then
+	if [[ "$TEST" == "true" ]]; then
 		echo -e "${YELLOW}[TEST]${NC} would run: $*"
 		return 0
 	fi
-	if $DEBUG; then
+	if [[ "$DEBUG" == "true" ]]; then
 		dbg "$*"
 		"$@"
 	else
@@ -88,11 +88,11 @@ run() {
 run_ssh() {
 	local host="$1"; shift
 	local cmd="$*"
-	if $TEST; then
+	if [[ "$TEST" == "true" ]]; then
 		echo -e "${YELLOW}[TEST]${NC} would ssh ${host}: ${cmd}"
 		return 0
 	fi
-	if $DEBUG; then
+	if [[ "$DEBUG" == "true" ]]; then
 		dbg "ssh $host \"$cmd\""
 		ssh "$host" "$cmd"
 	else
@@ -121,7 +121,7 @@ tgt_field() { echo "$2" | awk -F'|' -v i="$1" '{print $i}'; }
 host_available() {
 	local host="$1"
 	[[ "$host" == "local" ]] && return 0
-	if $TEST; then return 0; fi
+	if [[ "$TEST" == "true" ]]; then return 0; fi
 	# RunPod is a special pseudo-host: reachability = "is a pod up and registered?"
 	# We check the worker_registry endpoint on the orchestrator (dellserver:3010).
 	# This avoids needing SSH credentials to a pod that may not exist.
@@ -253,6 +253,11 @@ action_all() {
 		local h=$(tgt_field 1 "$t")
 		local w=$(tgt_field 2 "$t")
 		[[ "$w" == "local" ]] && continue
+		# Skip d²-* — different lifecycle: research-mode, opt-in via menu
+		# option 6 / --action=d2*. Building it under "EVERYTHING" but
+		# never starting it (start.sh's action_remote_workers also skips
+		# d²-*) is more confusing than helpful.
+		[[ "$h" == d2-* ]] && continue
 		build_one "$h" || true
 	done
 	display_block "Starting everything"
@@ -265,6 +270,8 @@ action_remote_workers() {
 		local h=$(tgt_field 1 "$t")
 		local w=$(tgt_field 2 "$t")
 		[[ "$w" == "local" ]] && continue
+		# Skip d²-* (research-mode, opt-in only — see action_d2)
+		[[ "$h" == d2-* ]] && continue
 		build_one "$h" || true
 	done
 }
@@ -386,7 +393,7 @@ menu_targets() {
 }
 
 # ── Entry point ───────────────────────────────────────────────
-if $MENU_MODE; then
+if [[ "$MENU_MODE" == "true" ]]; then
 	menu_main
 else
 	case "$ACTION" in

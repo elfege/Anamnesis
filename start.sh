@@ -90,11 +90,11 @@ run() {
 	local label=""
 	while [[ "$1" == --label=* ]]; do label="${1#--label=}"; shift; done
 	[[ "$1" == "--" ]] && shift
-	if $TEST; then
+	if [[ "$TEST" == "true" ]]; then
 		echo -e "${YELLOW}[TEST]${NC} would run: $*${label:+  ${DIM}— $label${NC}}"
 		return 0
 	fi
-	if $DEBUG; then
+	if [[ "$DEBUG" == "true" ]]; then
 		dbg "$*"
 		"$@"
 	else
@@ -106,11 +106,11 @@ run_ssh() {
 	# run_ssh HOST REMOTE_CMD
 	local host="$1"; shift
 	local cmd="$*"
-	if $TEST; then
+	if [[ "$TEST" == "true" ]]; then
 		echo -e "${YELLOW}[TEST]${NC} would ssh ${host}: ${cmd}"
 		return 0
 	fi
-	if $DEBUG; then
+	if [[ "$DEBUG" == "true" ]]; then
 		dbg "ssh $host \"$cmd\""
 		ssh "$host" "$cmd"
 	else
@@ -142,7 +142,7 @@ svc_field() {
 host_available() {
 	local host="$1"
 	[[ "$host" == "local" ]] && return 0
-	if $TEST; then return 0; fi
+	if [[ "$TEST" == "true" ]]; then return 0; fi
 	# RunPod is a pseudo-host: reachability = "is a pod URL registered?".
 	# We don't SSH into RunPod pods directly from start.sh — we proxy via
 	# the orchestrator's worker_registry (mirrors deploy.sh).
@@ -174,7 +174,7 @@ do_env_prep() {
 	# AWS secrets
 	if command -v aws &>/dev/null && [[ -z "${SKIP_AWS_PULL:-}" ]]; then
 		start_spinner "" "${CYAN}Pulling secrets from AWS…${NC}"
-		if $TEST; then
+		if [[ "$TEST" == "true" ]]; then
 			echo -e "${YELLOW}[TEST]${NC} would run: $SCRIPT_DIR/pull_env.sh 1"
 		else
 			"$SCRIPT_DIR/pull_env.sh" 1 &>/dev/null || {
@@ -199,7 +199,7 @@ do_env_prep() {
 		id_file=$(awk -v h="$lookup" '$1=="Host" && $2==h{f=1;next} f && /^Host[[:space:]]/{exit} f && /IdentityFile/{print $2;exit}' "$ssh_cfg")
 		id_file="${id_file:-~/.ssh/id_rsa}"
 		start_spinner "" "${CYAN}Adding host.docker.internal to SSH config…${NC}"
-		if $TEST; then
+		if [[ "$TEST" == "true" ]]; then
 			echo -e "${YELLOW}[TEST]${NC} would append host.docker.internal block to $ssh_cfg"
 		else
 			cat >> "$ssh_cfg" <<-EOF
@@ -458,7 +458,7 @@ action_restart_one() {
 	# Warn if it's a trainer that may be running a job
 	if [[ "$handle" == anamnesis-trainer-* ]]; then
 		echo -e "${YELLOW}⚠ Restarting a trainer will KILL any in-progress training job.${NC}"
-		if $MENU_MODE; then
+		if [[ "$MENU_MODE" == "true" ]]; then
 			read -r -p "Proceed anyway? [y/N]: " ok
 			[[ "$ok" =~ ^[yY]$ ]] || { echo "aborted."; return 1; }
 		fi
@@ -497,7 +497,7 @@ action_status() {
 
 action_stop_all() {
 	display_block "Stop everything"
-	if $MENU_MODE; then
+	if [[ "$MENU_MODE" == "true" ]]; then
 		read -r -p "This will stop local + remote services. Continue? [y/N]: " ok
 		[[ "$ok" =~ ^[yY]$ ]] || { echo "aborted."; return 1; }
 	fi
@@ -517,7 +517,7 @@ action_stop_all() {
 
 wait_local_health() {
 	local host_ip=$(hostname -I | awk '{print $1}')
-	if $TEST; then
+	if [[ "$TEST" == "true" ]]; then
 		echo -e "${YELLOW}[TEST]${NC} skipping health wait"
 		return 0
 	fi
@@ -643,7 +643,7 @@ menu_services() {
 }
 
 # ── Entry point ───────────────────────────────────────────────
-if $MENU_MODE; then
+if [[ "$MENU_MODE" == "true" ]]; then
 	menu_main
 else
 	case "$ACTION" in
