@@ -5,17 +5,26 @@
 # Spin up local + optionally remote services (no builds — see deploy.sh).
 #
 # Usage:
-#   ./start.sh                       # interactive menu
-#   ./start.sh --test                # dry-run (no docker/ssh commands executed)
-#   ./start.sh --action=local        # skip menu: recreate dellserver stack
-#   ./start.sh --action=all          # skip menu: recreate local + remote workers
-#   ./start.sh --action=status       # skip menu: print status of all services
-#   ./start.sh --debug               # verbose
-#   ./start.sh --non-interactive     # legacy: equivalent to --action=local
+#   ./start.sh                            # interactive menu
+#   ./start.sh --test                     # dry-run (no docker/ssh commands executed)
+#   ./start.sh --action=local             # skip menu: recreate dellserver stack
+#   ./start.sh --action=all               # skip menu: recreate local + remote workers
+#   ./start.sh --action=status            # skip menu: print status of all services
+#   ./start.sh --action=d2                # bring up δ² engine on server (default)
+#   ./start.sh --action=d2:office         # bring up δ² engine on office (ROCm)
+#   ./start.sh --action=d2:runpod         # use RunPod pod (must be started first)
+#   ./start.sh --action=d2:all            # bring up δ² on every reachable GPU host
+#   ./start.sh --action=d2:smoke          # bring up δ² on server + run smoke benchmark
+#   ./start.sh --action=d2:full           # bring up δ² on server + run all 12 benchmarks
+#   ./start.sh --action=d2-bench:smoke    # benchmarks only (assumes service already up)
+#   ./start.sh --action=d2-bench:full     # ditto for full sweep
+#   ./start.sh --debug                    # verbose
+#   ./start.sh --non-interactive          # legacy: equivalent to --action=local
 #
 # Remote services (auto-detected from ~/.ssh/config or $SSH_ALIAS_*):
-#   • office                — avatar-worker-office, anamnesis-trainer-office
-#   • server                — anamnesis-trainer-server (if configured)
+#   • office                — avatar-worker-office, anamnesis-trainer-office, d2-office (ROCm — unstable)
+#   • server                — anamnesis-trainer-server, d2-server (CUDA — stable)
+#   • runpod                — pseudo-host: pod URL must be in worker_registry (see deploy_runpod.sh)
 #
 # ============================================
 
@@ -110,14 +119,18 @@ run_ssh() {
 }
 
 # ── Service catalog ───────────────────────────────────────────
-# Each service: "handle|where|container|compose_file"
-#   where: "local" or an ssh alias ("office", "server")
+# Each service: "handle|where|container|compose_file[|profile]"
+#   where: "local", an ssh alias ("office", "server"), or "runpod" (special)
+#   profile: optional — used by d²-* entries which require --profile <cuda|rocm>
 SERVICES=(
 	"anamnesis-app|local|anamnesis-app|docker-compose.yml"
 	"anamnesis-mongo|local|anamnesis-mongo|docker-compose.yml"
 	"avatar-worker-office|office|avatar-worker-office|~/0_GENESIS_PROJECT/0_ANAMNESIS/avatar_worker/docker-compose.office.yml"
 	"anamnesis-trainer-office|office|anamnesis-trainer-office|~/0_GENESIS_PROJECT/0_ANAMNESIS/trainers/docker-compose.office.yml"
 	"anamnesis-trainer-server|server|anamnesis-trainer-server|~/0_GENESIS_PROJECT/0_ANAMNESIS/trainers/docker-compose.server.yml"
+	"d2-server|server|anamnesis-d2|~/0_GENESIS_PROJECT/0_ANAMNESIS/d2/docker-compose.yml|cuda"
+	"d2-office|office|anamnesis-d2|~/0_GENESIS_PROJECT/0_ANAMNESIS/d2/docker-compose.yml|rocm"
+	"d2-runpod|runpod|anamnesis-d2|~/0_GENESIS_PROJECT/0_ANAMNESIS/d2/docker-compose.yml|cuda"
 )
 
 svc_field() {
@@ -130,6 +143,14 @@ host_available() {
 	local host="$1"
 	[[ "$host" == "local" ]] && return 0
 	if $TEST; then return 0; fi
+	# RunPod is a pseudo-host: reachability = "is a pod URL registered?".
+	# We don't SSH into RunPod pods directly from start.sh — we proxy via
+	# the orchestrator's worker_registry (mirrors deploy.sh).
+	if [[ "$host" == "runpod" ]]; then
+		curl -sf "http://192.168.10.20:3010/api/workers/list?kind=runpod" 2>/dev/null \
+			| grep -q '"url"' && return 0
+		return 1
+	fi
 	ssh -o ConnectTimeout=3 -o BatchMode=yes -o StrictHostKeyChecking=no "$host" true &>/dev/null
 }
 
@@ -233,6 +254,14 @@ action_remote_workers() {
 		local handle where compose
 		handle=$(svc_field 1 "$spec"); where=$(svc_field 2 "$spec"); compose=$(svc_field 4 "$spec")
 		[[ "$where" == "local" ]] && continue
+		# Skip d²-* — they have their own action_d2 (different lifecycle:
+		# benchmark-driven, not chat-driven, and we don't want every
+		# `start.sh --action=all` to spin up a GPU container that the user
+		# may not currently want running).
+		[[ "$handle" == d2-* ]] && continue
+		# Skip runpod-host services if no pod is currently registered.
+		# host_available("runpod") returns true only when the worker_registry
+		# has a runpod URL, so this is safe.
 		if ! host_available "$where"; then
 			echo -e "${DIM}  skipping $handle — $where unreachable${NC}"
 			continue
@@ -241,6 +270,176 @@ action_remote_workers() {
 		run_ssh "$where" "cd $(dirname "$compose") && docker compose -f $(basename "$compose") up -d"
 		stop_spinner
 	done
+}
+
+# Start the δ² engine on a chosen host, then optionally trigger benchmark runs.
+# Args:
+#   $1 = target ("server" | "office" | "runpod" | "all")
+#   $2 = benchmark mode (optional: "smoke" | "full" | "none"; default "none")
+#       smoke = one method (controller) on permuted_mnist, 2 tasks, 1 epoch
+#       full  = all 6 methods (adam/ewc/gem/sam/delta2/controller) × both benchmarks
+#       none  = just bring service up, no benchmarks
+action_d2() {
+	local target="${1:-server}"
+	local bench="${2:-none}"
+	display_block "Starting δ² engine on ${target}"
+
+	# Find the matching SERVICES spec(s) and bring up each one
+	local d2_handles=()
+	case "$target" in
+		all)
+			for spec in "${SERVICES[@]}"; do
+				local h
+				h=$(svc_field 1 "$spec")
+				[[ "$h" == d2-* ]] && d2_handles+=("$h")
+			done
+			;;
+		server|office|runpod) d2_handles=("d2-${target}") ;;
+		*) echo -e "${RED}Unknown target: $target${NC}"; return 2 ;;
+	esac
+
+	local started_any=false
+	for handle in "${d2_handles[@]}"; do
+		local spec where compose profile
+		for s in "${SERVICES[@]}"; do
+			[[ "$(svc_field 1 "$s")" == "$handle" ]] && { spec="$s"; break; }
+		done
+		[[ -z "$spec" ]] && continue
+		where=$(svc_field 2 "$spec")
+		compose=$(svc_field 4 "$spec")
+		profile=$(svc_field 5 "$spec")
+
+		if ! host_available "$where"; then
+			echo -e "${DIM}  skipping $handle — $where unreachable${NC}"
+			continue
+		fi
+
+		# RunPod: the d² container runs ON the pod, not via SSH from here.
+		# We rely on the pod's own startup (deploy_runpod.sh handles it).
+		# All we do is verify reachability via worker_registry and skip the
+		# `docker compose up`. Status check happens in action_d2_register.
+		if [[ "$where" == "runpod" ]]; then
+			echo -e "${DIM}  $handle: pod self-managed (deploy_runpod.sh start)${NC}"
+			started_any=true
+			continue
+		fi
+
+		start_spinner "" "${CYAN}${handle} @ ${where} (--profile $profile)${NC}"
+		run_ssh "$where" "cd $(dirname "$compose") && docker compose --profile $profile -f $(basename "$compose") up -d"
+		stop_spinner
+		started_any=true
+	done
+
+	$started_any || { echo -e "${YELLOW}No d² targets started.${NC}"; return 1; }
+
+	# Register the chosen primary endpoint with the orchestrator's worker_registry
+	# so the avatar's δ² backend dropdown sees it. We pick the first started
+	# host as primary (caller can override D2_ENDPOINT_URL in .env).
+	action_d2_register "${d2_handles[0]}"
+
+	# Run benchmarks if requested
+	case "$bench" in
+		smoke) action_d2_benchmark smoke "${d2_handles[0]}" ;;
+		full)  action_d2_benchmark full  "${d2_handles[0]}" ;;
+		none|"") : ;;
+		*) echo -e "${YELLOW}unknown bench mode: $bench (use smoke|full|none)${NC}" ;;
+	esac
+}
+
+# Resolve a d² handle to its public URL and POST it to the worker_registry
+# so the orchestrator can pick it up without a restart.
+action_d2_register() {
+	local handle="$1"
+	local where url
+	for s in "${SERVICES[@]}"; do
+		[[ "$(svc_field 1 "$s")" == "$handle" ]] && where=$(svc_field 2 "$s")
+	done
+	case "$where" in
+		server) url="http://192.168.10.15:3015" ;;
+		office) url="http://192.168.10.110:3015" ;;
+		runpod)
+			# Read the registered RunPod URL back from worker_registry — it was
+			# set by deploy_runpod.sh start. We don't need to POST again.
+			echo -e "${DIM}  $handle: URL managed by deploy_runpod.sh${NC}"
+			return 0
+			;;
+		*) echo -e "${YELLOW}Cannot resolve URL for $handle (where=$where)${NC}"; return 1 ;;
+	esac
+	display_block "Registering $handle ($url) with worker_registry"
+	run -- curl -sf -X POST "http://192.168.10.20:3010/api/workers/register" \
+		-H "Content-Type: application/json" \
+		-d "{\"url\":\"$url\",\"label\":\"$handle\",\"kind\":\"d2\"}" \
+		|| echo -e "${YELLOW}  registry POST failed (orchestrator may be down)${NC}"
+}
+
+# Trigger continual-learning benchmark runs against a d² target.
+# Uses the trainer's own /train/start endpoint — runs as subprocess inside
+# the d² container, output goes to /workspace/runs and is queryable via
+# /api/d2/runs and the dashboard δ² tab.
+action_d2_benchmark() {
+	local mode="$1"
+	local handle="${2:-d2-server}"
+	local where url
+	for s in "${SERVICES[@]}"; do
+		[[ "$(svc_field 1 "$s")" == "$handle" ]] && where=$(svc_field 2 "$s")
+	done
+	case "$where" in
+		server) url="http://192.168.10.15:3015" ;;
+		office) url="http://192.168.10.110:3015" ;;
+		runpod)
+			url=$(curl -sf "http://192.168.10.20:3010/api/workers/list?kind=runpod" 2>/dev/null \
+				| python3 -c "import json,sys; d=json.load(sys.stdin); print(d[0]['url'] if d else '')" 2>/dev/null)
+			[[ -z "$url" ]] && { echo -e "${YELLOW}No RunPod URL registered.${NC}"; return 1; }
+			;;
+	esac
+
+	display_block "δ² benchmarks ($mode) → $handle"
+
+	# Wait for the d² service to be ready (up to 60s)
+	local ready=false
+	for _i in $(seq 1 30); do
+		if curl -sf "$url/health" >/dev/null 2>&1; then ready=true; break; fi
+		sleep 2
+	done
+	$ready || { echo -e "${RED}d² service at $url did not become ready in 60s${NC}"; return 1; }
+	echo -e "${GREEN}  d² service reachable at $url${NC}"
+
+	local methods benchmarks tasks epochs
+	if [[ "$mode" == "smoke" ]]; then
+		methods=("controller")
+		benchmarks=("permuted_mnist")
+		tasks=2; epochs=1
+	else
+		methods=("adam" "ewc" "gem" "sam" "delta2" "controller")
+		benchmarks=("permuted_mnist" "split_mnist")
+		tasks=5; epochs=1
+	fi
+
+	for bench in "${benchmarks[@]}"; do
+		for method in "${methods[@]}"; do
+			start_spinner "" "${CYAN}  ${method} on ${bench} (tasks=${tasks}, epochs=${epochs})${NC}"
+			run -- curl -sf -X POST "$url/train/start" \
+				-H "Content-Type: application/json" \
+				-d "{\"optimizer\":\"$method\",\"benchmark\":\"$bench\",\"tasks\":$tasks,\"epochs\":$epochs,\"seed\":0,\"notes\":\"$mode bench from start.sh\"}" \
+				| python3 -c "import json,sys; d=json.load(sys.stdin); print('  run_id:', d.get('run_id'))" \
+				|| echo -e "${YELLOW}    /train/start failed${NC}"
+			stop_spinner
+			# Poll until done (the trainer runs one job at a time)
+			local done=false
+			for _i in $(seq 1 600); do  # up to ~30 min per run
+				local status
+				status=$(curl -sf "$url/train/status" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null || echo "unknown")
+				if [[ "$status" == "completed" ]]; then done=true; break
+				elif [[ "$status" == "failed" ]]; then echo -e "${RED}    run failed${NC}"; break
+				fi
+				sleep 3
+			done
+			$done && echo -e "${GREEN}    done${NC}"
+		done
+	done
+
+	display_block "Benchmark results"
+	echo -e "${DIM}  Open http://192.168.10.20:3010/dashboard → δ² tab for the comparison table${NC}"
 }
 
 action_restart_one() {
@@ -363,20 +562,49 @@ menu_main() {
 		  3) Restart individual service…
 		  4) Show status of all services
 		  5) Stop everything (local + remote)
+		  6) δ² engine (start service / run benchmarks)…
 		  0) Exit
 
 		EOF
-		read -r -p "  Select [0-5]: " choice
+		read -r -p "  Select [0-6]: " choice
 		case "$choice" in
 			1) action_local ;;
 			2) action_all ;;
 			3) menu_services ;;
 			4) action_status ;;
 			5) action_stop_all ;;
+			6) menu_d2 ;;
 			0|q|Q|"") return 0 ;;
 			*) echo -e "  ${YELLOW}?${NC}" ;;
 		esac
 	done
+}
+
+menu_d2() {
+	echo
+	display_block "δ² engine"
+	cat <<-EOF
+
+	  1) Start service on server  ${DIM}(NVIDIA CUDA — recommended)${NC}
+	  2) Start service on office  ${DIM}(AMD ROCm — unstable)${NC}
+	  3) Start service on RunPod  ${DIM}(pod must be up — see deploy_runpod.sh)${NC}
+	  4) Start service on ALL reachable hosts
+	  5) SMOKE benchmark  ${DIM}(controller × permuted_mnist × 2 tasks — ~5 min)${NC}
+	  6) FULL benchmark   ${DIM}(6 methods × 2 benchmarks × 5 tasks — ~30-60 min)${NC}
+	  0) Back
+
+	EOF
+	read -r -p "  Select [0-6]: " pick
+	case "$pick" in
+		1) action_d2 server ;;
+		2) action_d2 office ;;
+		3) action_d2 runpod ;;
+		4) action_d2 all ;;
+		5) action_d2 server smoke ;;
+		6) action_d2 server full ;;
+		0|q|Q|"") return 0 ;;
+		*) echo "?" ;;
+	esac
 }
 
 menu_services() {
@@ -423,9 +651,25 @@ else
 		all)       action_all ;;
 		status)    action_status ;;
 		stop)      action_stop_all ;;
+		d2)        action_d2 server ;;
+		d2:server) action_d2 server ;;
+		d2:office) action_d2 office ;;
+		d2:runpod) action_d2 runpod ;;
+		d2:all)    action_d2 all ;;
+		d2:smoke)  action_d2 server smoke ;;
+		d2:full)   action_d2 server full ;;
+		d2-bench:smoke) action_d2_benchmark smoke d2-server ;;
+		d2-bench:full)  action_d2_benchmark full  d2-server ;;
 		*)
 			if [[ "$ACTION" == restart:* ]]; then
 				action_restart_one "${ACTION#restart:}"
+			elif [[ "$ACTION" == d2:* ]]; then
+				# Generic d2:<target>:<bench> form
+				local rest="${ACTION#d2:}"
+				local target="${rest%%:*}"
+				local bench="${rest#*:}"
+				[[ "$bench" == "$rest" ]] && bench="none"
+				action_d2 "$target" "$bench"
 			else
 				echo -e "${RED}Unknown --action=$ACTION${NC}"
 				exit 2
