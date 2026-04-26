@@ -554,18 +554,22 @@ menu_main() {
 	while true; do
 		echo
 		display_block "ANAMNESIS — Service Manager"
-		$TEST && echo -e "  ${YELLOW}TEST MODE — no commands will be executed${NC}"
-		cat <<-EOF
-
-		  1) Start/recreate local stack (dellserver: anamnesis-app + mongo)
-		  2) Start/recreate EVERYTHING (local + office + server)
-		  3) Restart individual service…
-		  4) Show status of all services
-		  5) Stop everything (local + remote)
-		  6) δ² engine (start service / run benchmarks)…
-		  0) Exit
-
-		EOF
+		[[ "$TEST" == "true" ]] && echo -e "  ${YELLOW}TEST MODE — no commands will be executed${NC}"
+		echo
+		# Menu printed via echo -e so ANSI color escapes are interpreted
+		# (heredocs print color vars as literal \033 strings).
+		echo -e "  ${BOLD}Chat + Avatar pipeline${NC}     ${DIM}(everyday services)${NC}"
+		echo -e "   1) Start LOCAL stack only            ${DIM}→ anamnesis-app + mongo${NC}"
+		echo -e "   2) Start FULL chat stack             ${DIM}→ local + avatar-workers + trainers (all hosts)${NC}"
+		echo -e "   3) Restart one service…              ${DIM}→ pick any specific container${NC}"
+		echo    "   4) Show status of all services"
+		echo -e "   5) Stop everything                    ${DIM}→ local + remote (excl. δ²)${NC}"
+		echo
+		echo -e "  ${BOLD}δ² engine${NC}                    ${DIM}(continual-learning research, opt-in)${NC}"
+		echo    "   6) δ² engine: start service / run benchmarks…"
+		echo
+		echo    "   0) Exit"
+		echo
 		read -r -p "  Select [0-6]: " choice
 		case "$choice" in
 			1) action_local ;;

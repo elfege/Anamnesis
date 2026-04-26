@@ -316,18 +316,24 @@ menu_main() {
 	while true; do
 		echo
 		display_block "ANAMNESIS — Build & Deploy"
-		$TEST && echo -e "  ${YELLOW}TEST MODE — no commands will be executed${NC}"
-		cat <<-EOF
-
-		  1) Rebuild + start LOCAL (anamnesis-app) only
-		  2) Rebuild + start EVERYTHING (local + remote workers)
-		  3) Rebuild a single image…
-		  4) Rebuild all REMOTE workers only (no start)
-		  5) Just prune Docker resources (local)
-		  6) Build + start δ² engine (server / office / runpod / all)
-		  0) Exit
-
-		EOF
+		[[ "$TEST" == "true" ]] && echo -e "  ${YELLOW}TEST MODE — no commands will be executed${NC}"
+		echo
+		# Menu printed via echo -e so ANSI color escapes are interpreted
+		# (heredocs print color vars as literal \033 strings).
+		echo -e "  ${BOLD}Chat + Avatar pipeline${NC}     ${DIM}(everyday services)${NC}"
+		echo -e "   1) Rebuild + start LOCAL only        ${DIM}→ anamnesis-app + mongo${NC}"
+		echo -e "   2) Rebuild + start FULL chat stack   ${DIM}→ anamnesis-app + avatar-workers + trainers (all hosts)${NC}"
+		echo -e "   3) Rebuild a single image…           ${DIM}→ pick any one target${NC}"
+		echo -e "   4) Rebuild REMOTE workers only       ${DIM}→ no start, just images on office/server${NC}"
+		echo
+		echo -e "  ${BOLD}δ² engine${NC}                    ${DIM}(continual-learning research, opt-in)${NC}"
+		echo -e "   6) Build + start δ² engine…          ${DIM}→ server / office / runpod / all${NC}"
+		echo
+		echo -e "  ${BOLD}Maintenance${NC}"
+		echo -e "   5) Just prune Docker resources       ${DIM}→ local only${NC}"
+		echo
+		echo "   0) Exit"
+		echo
 		read -r -p "  Select [0-6]: " choice
 		case "$choice" in
 			1) action_local ;;
