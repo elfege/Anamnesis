@@ -347,16 +347,24 @@ def build_optimizer(method: str, model: nn.Module, lr: float):
         # Path B — additive form: gradient descent does the actual learning,
         # δ² adds a bounded tension nudge on top from accumulated past
         # contradictions. Closer to the philosophical claim and avoids the
-        # bloat / no-learning trap of the standalone form. base_lr matches
-        # the lr we'd use for plain Adam on the same task (1e-3).
+        # bloat / no-learning trap of the standalone form.
+        # IMPORTANT: η must be MUCH smaller than base_lr (~100× smaller)
+        # so the δ² nudge is a structural perturbation alongside learning,
+        # not a competitor to it. If η ≈ base_lr the two terms fight and
+        # the model learns nothing (verified empirically — see 1st pass
+        # of this method, ACC ≈ 0.17 on permuted, 0.09 on split).
+        # base_lr is the actual SGD learning rate for the gradient step.
+        # Increased to 1e-2 (10× the controller's lr) because plain SGD
+        # without momentum needs more juice than Adam at the same nominal
+        # rate to converge in 1 epoch on these MLP+MNIST tasks.
         opt = DeltaSquaredOptimizer(
             model.parameters(),
             alpha1=1e-5, alpha2=1e-4,
-            gamma=0.99, eta=1e-3,
+            gamma=0.99, eta=1e-5,         # 100× smaller than base_lr
             bound_fn="tanh",
             w_bar_mode="ema",
             additive_mode=True,
-            base_lr=lr,
+            base_lr=1e-2,                 # 10× the default Adam lr
         )
         baseline = NoBaselineWrapper()
 

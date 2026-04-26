@@ -1,0 +1,29 @@
+{
+  "run_id": "run-1777226453-57f3f9",
+  "started_at": 1777226453.8092017,
+  "command": [
+    "python",
+    "-m",
+    "d2.experiments.continual",
+    "--method",
+    "delta2_additive",
+    "--benchmark",
+    "permuted_mnist",
+    "--tasks",
+    "5",
+    "--epochs",
+    "1",
+    "--seed",
+    "0",
+    "--output",
+    "/workspace/runs/run-1777226453-57f3f9.json"
+  ],
+  "request": {
+    "optimizer": "delta2_additive",
+    "benchmark": "permuted_mnist",
+    "tasks": 5,
+    "epochs": 1,
+    "seed": 0,
+    "notes": "path b v2 \u2014 eta scaled down"
+  }
+}

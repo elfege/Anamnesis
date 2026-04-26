@@ -1,0 +1,29 @@
+{
+  "run_id": "run-1777226351-2999ce",
+  "started_at": 1777226351.8273044,
+  "command": [
+    "python",
+    "-m",
+    "d2.experiments.continual",
+    "--method",
+    "delta2_additive",
+    "--benchmark",
+    "split_mnist",
+    "--tasks",
+    "5",
+    "--epochs",
+    "1",
+    "--seed",
+    "0",
+    "--output",
+    "/workspace/runs/run-1777226351-2999ce.json"
+  ],
+  "request": {
+    "optimizer": "delta2_additive",
+    "benchmark": "split_mnist",
+    "tasks": 5,
+    "epochs": 1,
+    "seed": 0,
+    "notes": "path b \u2014 additive mode test split"
+  }
+}
