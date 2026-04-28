@@ -72,6 +72,10 @@ services:
       - /etc/machine-id:/etc/host-machine-id:ro
       - ./app:/app
       - model_cache:/root/.cache/torch/sentence_transformers
+      # Phase 7.2b — restart-trigger tmpfs. Container writes "reboot" to
+      # trigger, host-side anamnesis-restart-watcher.service polls + runs
+      # ./start.sh. See deployment/README.md (NVR pattern).
+      - /dev/shm/anamnesis-restart:/dev/shm/anamnesis-restart
       # ── Machine roots (read-only) ─────────────────────────────
       # Customize via .env: SOURCE_0 through SOURCE_5 (host paths)
       # and SOURCE_0_NAME through SOURCE_5_NAME (container mount names).

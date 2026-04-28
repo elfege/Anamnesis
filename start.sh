@@ -160,6 +160,16 @@ do_env_prep() {
 	# Shared pre-flight: AWS secrets pull, .env presence, SSH config, Mongo guard, Ollama
 	display_block "ANAMNESIS — startup pre-flight"
 
+	# Phase 7.2b — tmpfs trigger directory for anamnesis-restart-watcher.
+	# Bind-mounted into anamnesis-app per docker-compose.yml. The watcher
+	# (host systemd unit) polls /dev/shm/anamnesis-restart/trigger and runs
+	# ./start.sh whenever the container writes "reboot" to it. tmpfs is
+	# RAM-backed so it gets recreated on every host reboot.
+	if [[ ! -d /dev/shm/anamnesis-restart ]]; then
+		sudo mkdir -p /dev/shm/anamnesis-restart
+		sudo chmod 777 /dev/shm/anamnesis-restart
+	fi
+
 	# Ollama service
 	if command -v ollama &>/dev/null; then
 		if ! systemctl is-active --quiet ollama 2>/dev/null; then
