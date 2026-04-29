@@ -29,6 +29,9 @@ Thumbs.db
 # Private operational files — never track
 CLAUDE.md
 README_*.md
+# …except documented rules (verbose-name pattern flags them as canonical)
+!README_isolation_rule_*.md
+!README_canonical_*.md
 0_ANAMNESIS_SOURCES/
 *.log
 
