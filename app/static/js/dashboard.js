@@ -779,13 +779,20 @@ $(function () {
                 (ep.similarity_score * 100).toFixed(1) + "% match</span>";
         }
 
+        var safe_id = escape_html(ep.episode_id);
         return (
-            '<div class="episode-card">' +
+            '<div class="episode-card" data-episode-id="' + safe_id + '">' +
                 '<div class="episode-header">' +
-                    '<span class="episode-id">' + escape_html(ep.episode_id) + "</span>" +
+                    '<span class="episode-id">' + safe_id + "</span>" +
                     '<span class="episode-meta">' +
                         escape_html(ep.instance) + " / " + escape_html(ep.project) +
                     "</span>" +
+                    '<button class="episode-delete-btn" title="Delete this episode" ' +
+                            'data-episode-id="' + safe_id + '" ' +
+                            'style="margin-left:auto;background:transparent;border:1px solid var(--danger,#f85149);' +
+                                   'color:var(--danger,#f85149);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px">' +
+                        "Delete" +
+                    "</button>" +
                 "</div>" +
                 '<p class="episode-summary">' + escape_html(ep.summary) + "</p>" +
                 '<div class="episode-footer">' +
@@ -797,6 +804,25 @@ $(function () {
             "</div>"
         );
     }
+
+    // Delegated: Delete episode (Episodes list + Search results + Personal Benchmarks etc.)
+    $(document).on("click", ".episode-delete-btn", function () {
+        var episode_id = $(this).data("episode-id");
+        if (!episode_id) return;
+        if (!confirm("Permanently delete episode\n\n  " + episode_id + "\n\nThis cannot be undone.")) return;
+        var $card = $(this).closest(".episode-card");
+        $card.css("opacity", 0.5);
+        $.ajax({
+            url: "/api/episodes/" + encodeURIComponent(episode_id),
+            method: "DELETE",
+            success: function () { $card.slideUp(150, function () { $card.remove(); }); },
+            error: function (xhr) {
+                $card.css("opacity", 1);
+                var msg = (xhr.responseJSON && xhr.responseJSON.detail) || xhr.statusText || "delete failed";
+                alert("Could not delete: " + msg);
+            },
+        });
+    });
 
     function escape_html(str) {
         if (!str) return "";
@@ -2419,14 +2445,40 @@ $(function () {
                 return;
             }
 
+            var safe_id = $("<div>").text(data.episode_id || "").html();
             var link = data.episode_id
-                ? '<a href="#" class="upload-jump-episode" data-id="' +
-                  $("<div>").text(data.episode_id).html() + '">View in Episodes ↗</a>'
+                ? '<a href="#" class="upload-jump-episode" data-id="' + safe_id +
+                  '">View in Episodes ↗</a>'
+                : "";
+            var undo = data.episode_id
+                ? ' &middot; <a href="#" class="upload-undo-episode" data-id="' + safe_id +
+                  '" style="color:var(--danger,#f85149)">Undo (delete this episode)</a>'
                 : "";
             $result.removeClass("upload-err upload-dup").addClass("upload-ok")
                    .html("Ingested: <code>" + $("<div>").text(data.title || "—").html() +
-                         "</code> · " + advanced_bits.join(" · ") + " " + link);
+                         "</code> · " + advanced_bits.join(" · ") + " " + link + undo);
         }
+
+        // Inline undo link: deletes the just-ingested episode
+        $(document).on("click", ".upload-undo-episode", function (e) {
+            e.preventDefault();
+            var episode_id = $(this).data("id");
+            if (!episode_id) return;
+            if (!confirm("Undo this ingestion? Permanently deletes:\n\n  " + episode_id)) return;
+            var $r = $result;
+            $.ajax({
+                url: "/api/episodes/" + encodeURIComponent(episode_id),
+                method: "DELETE",
+                success: function () {
+                    $r.removeClass("upload-ok upload-dup").addClass("upload-err")
+                      .text("Undone — episode " + episode_id + " deleted.");
+                },
+                error: function (xhr) {
+                    var msg = (xhr.responseJSON && xhr.responseJSON.detail) || xhr.statusText || "delete failed";
+                    alert("Could not undo: " + msg);
+                },
+            });
+        });
 
         function render_error(xhr) {
             var msg = "Error";
@@ -2451,22 +2503,129 @@ $(function () {
             e.preventDefault(); e.stopPropagation();
             $zone.removeClass("dragover");
         });
+        // Stage-then-commit pattern: file selection only stages the file.
+        // Metadata fields (tags + title + project) are required; format-validated
+        // before the Ingest button enables.
+        var _stagedFile = null;
+
+        // ─── Validators ─────────────────────────────────────────
+        // Returns null on valid, error string on invalid.
+        function validate_tags(v) {
+            if (!v) return "required";
+            var parts = v.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+            if (!parts.length) return "at least one tag";
+            // Each tag: alphanumeric + hyphen + underscore (no spaces, no special chars)
+            for (var i = 0; i < parts.length; i++) {
+                var t = parts[i].replace(/^#/, "");                       // allow optional leading #
+                if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,49}$/.test(t)) {
+                    return "tag '" + parts[i] + "' invalid (alphanumeric, _, -, max 50 chars)";
+                }
+            }
+            return null;
+        }
+        function validate_title(v) {
+            if (!v) return "required";
+            if (v.length < 3) return "min 3 chars";
+            if (v.length > 200) return "max 200 chars";
+            return null;
+        }
+        function validate_project(v) {
+            if (!v) return "required";
+            if (!/^[a-z0-9][a-z0-9_-]{1,49}$/i.test(v)) return "slug-style: alphanumeric + _ -, 2-50 chars";
+            return null;
+        }
+        function validate_url(v) {
+            if (!v) return "required";
+            try {
+                var u = new URL(v);
+                if (u.protocol !== "http:" && u.protocol !== "https:") return "must be http:// or https://";
+                return null;
+            } catch (e) { return "not a valid URL"; }
+        }
+
+        // Render small inline-error indicator under each field
+        function set_field_error($field, msg) {
+            var id = $field.attr("id") + "-err";
+            var $err = $("#" + id);
+            if (!$err.length) {
+                $err = $('<div class="upload-field-err" style="font-size:11px;color:var(--danger,#f85149);margin-top:2px"></div>')
+                       .attr("id", id);
+                $field.after($err);
+            }
+            if (msg) {
+                $err.text(msg).show();
+                $field.css("border-color", "var(--danger,#f85149)");
+            } else {
+                $err.hide();
+                $field.css("border-color", "");
+            }
+        }
+
+        function metadata_valid() {
+            var tagsErr    = validate_tags($("#upload-tags").val().trim());
+            var titleErr   = validate_title($("#upload-title").val().trim());
+            var projectErr = validate_project($("#upload-project").val().trim());
+            set_field_error($("#upload-tags"),    tagsErr);
+            set_field_error($("#upload-title"),   titleErr);
+            set_field_error($("#upload-project"), projectErr);
+            return !tagsErr && !titleErr && !projectErr;
+        }
+
+        function refresh_button_states() {
+            var metaOk = metadata_valid();
+            $("#btn-ingest-file").prop("disabled", !(_stagedFile && metaOk));
+            var urlVal = $("#upload-url-input").val().trim();
+            var urlErr = validate_url(urlVal);
+            set_field_error($("#upload-url-input"), urlVal ? urlErr : null);    // only error when user typed something
+            $("#btn-ingest-url").prop("disabled", !(!urlErr && metaOk));
+        }
+
+        $("#upload-tags, #upload-title, #upload-project").on("input change", refresh_button_states);
+        $("#upload-url-input").on("input change", refresh_button_states);
+
         $zone.on("drop", function (e) {
             e.preventDefault(); e.stopPropagation();
             $zone.removeClass("dragover");
             var dt = e.originalEvent && e.originalEvent.dataTransfer;
             if (dt && dt.files && dt.files.length) {
-                handle_file(dt.files[0]);
+                stage_file(dt.files[0]);
             }
         });
 
         $input.on("change", function () {
-            if (this.files && this.files.length) handle_file(this.files[0]);
+            if (this.files && this.files.length) stage_file(this.files[0]);
         });
 
-        function handle_file(file) {
+        function stage_file(file) {
+            _stagedFile = file;
             reset_result();
-            $info.show().text(file.name + "  ·  " + fmt_bytes(file.size));
+            $info.show().html(
+                file.name + "  ·  " + fmt_bytes(file.size) +
+                "  ·  <em>staged — fill Metadata, then click <strong>Ingest file</strong></em>"
+            );
+            $("#upload-stage-actions").show();
+            refresh_button_states();
+        }
+
+        $("#btn-ingest-file").on("click", function () {
+            if (!_stagedFile || !metadata_valid()) return;
+            handle_file(_stagedFile);
+        });
+
+        $("#btn-clear-staged").on("click", function () {
+            _stagedFile = null;
+            $info.hide().text("");
+            $input.val("");
+            $("#upload-stage-actions").hide();
+            refresh_button_states();
+            reset_result();
+        });
+
+        // Initial state (page load): both buttons disabled until metadata valid + file/URL present
+        refresh_button_states();
+
+        function handle_file(file) {
+            $("#btn-ingest-file").prop("disabled", true);
 
             var fd = new FormData();
             fd.append("file", file);
@@ -2509,17 +2668,21 @@ $(function () {
             });
         }
 
-        // URL ingest
+        // URL ingest — same metadata-required gating as file upload
         $btnUrl.on("click", function () {
             var url = $url.val().trim();
-            if (!url) { alert("Enter a URL."); return; }
+            var urlErr = validate_url(url);
+            if (urlErr) { set_field_error($url, urlErr); return; }
+            if (!metadata_valid()) return;
+
             reset_result();
             show_progress("Fetching URL…");
-            var payload = { url: url, project: $("#upload-project").val().trim() || "manual-upload" };
-            var tags = $("#upload-tags").val().trim();
-            var title = $("#upload-title").val().trim();
-            if (tags)  payload.tags = tags.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
-            if (title) payload.title_override = title;
+            var payload = {
+                url: url,
+                project: $("#upload-project").val().trim(),
+                tags: $("#upload-tags").val().trim().split(",").map(function (s) { return s.trim(); }).filter(Boolean),
+                title_override: $("#upload-title").val().trim(),
+            };
 
             $.ajax({
                 url: "/api/episodes/ingest-url",

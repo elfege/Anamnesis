@@ -228,25 +228,35 @@
                        style="display:none">
             </div>
 
+            <!-- Stage-then-commit buttons (file path) -->
+            <div class="settings-row" style="margin-top:8px;display:none" id="upload-stage-actions">
+                <button id="btn-ingest-file" class="btn-primary" disabled>Ingest file</button>
+                <button id="btn-clear-staged" class="btn-secondary">Clear</button>
+                <span class="settings-hint" style="align-self:center">Fill the required Metadata fields below to enable.</span>
+            </div>
+
             <!-- URL row -->
             <div class="settings-row" style="margin-top:10px;align-items:stretch">
                 <input type="url" id="upload-url-input" placeholder="https://example.com/document.pdf"
                        style="flex:1;min-width:240px">
-                <button id="btn-ingest-url" class="btn-primary">Ingest URL</button>
+                <button id="btn-ingest-url" class="btn-primary" disabled>Ingest URL</button>
             </div>
 
-            <!-- Advanced (collapsed) -->
-            <details style="margin-top:10px">
-                <summary style="cursor:pointer;color:var(--text-secondary)">Advanced</summary>
-                <div class="settings-row" style="margin-top:8px;flex-wrap:wrap">
-                    <input type="text" id="upload-tags" placeholder="Tags (comma-separated)"
-                           style="flex:2;min-width:180px">
-                    <input type="text" id="upload-title" placeholder="Title override (optional)"
-                           style="flex:2;min-width:180px">
-                    <input type="text" id="upload-project" placeholder="Project label"
-                           value="manual-upload" style="flex:1;min-width:140px">
+            <!-- Required metadata (always visible — required before ingestion) -->
+            <div style="margin-top:10px">
+                <div style="color:var(--text-secondary);font-size:12px;margin-bottom:6px">
+                    Metadata <span style="color:var(--warning,#d29922)">*</span>
+                    — all fields required so episodes are properly tagged and discoverable
                 </div>
-            </details>
+                <div class="settings-row" style="flex-wrap:wrap">
+                    <input type="text" id="upload-tags" placeholder="Tags (comma-separated) — required"
+                           style="flex:2;min-width:180px" required>
+                    <input type="text" id="upload-title" placeholder="Title — required (free-form)"
+                           style="flex:2;min-width:180px" required>
+                    <input type="text" id="upload-project" placeholder="Project label — required"
+                           value="manual-upload" style="flex:1;min-width:140px" required>
+                </div>
+            </div>
 
             <!-- Progress + result -->
             <div id="upload-progress-wrap" style="display:none;margin-top:12px">
