@@ -945,6 +945,37 @@ async def _stream_openai_compat(
 # The d² trainer's /generate endpoint is BLOCKING (returns full text).
 # We fake a single-token stream so the frontend behaves uniformly.
 
+
+def _maybe_friendly_d2_error(status_code: int, body: str) -> Optional[str]:
+    """Translate known δ² engine errors into ANAMNESIS-voice guidance.
+
+    Returns None if the error doesn't match a known friendly-able pattern —
+    caller should then fall back to the raw error path.
+    """
+    text = (body or "").lower()
+    if status_code == 503 and (
+        "no d² checkpoint found" in text
+        or "no d2 checkpoint found" in text
+        or ("checkpoint" in text and "train one first" in text)
+    ):
+        return (
+            "The δ² inference engine has no checkpoint loaded yet — "
+            "I have no trained model to speak from on this track.\n\n"
+            "To fix this:\n\n"
+            "**Option 1:** Open the dashboard, go to the δ² tab, and click "
+            "**Start Personal Run (δ²)**. It trains a LoRA on your real-life corpus "
+            "in about 15 minutes (zero cost — runs on your own GPU). When it finishes, "
+            "come back here and chat.\n\n"
+            "**Option 2:** If you already trained a personal run, the inference engine "
+            "doesn't yet know how to load LoRA adapters at request time — that wiring "
+            "is a separate followup. For now the personal LoRA is on disk but not "
+            "live-served.\n\n"
+            "Meanwhile you can switch tracks at the top of this page (Bench → Personal "
+            "toggle) and pick a different backend that's already loaded."
+        )
+    return None
+
+
 async def _stream_d2(
     system: str, messages: list[dict], session_id: str, user_msg: str,
     base_url: str,
@@ -972,6 +1003,25 @@ async def _stream_d2(
         async with httpx.AsyncClient(timeout=60.0) as client:
             r = await client.post(f"{base}/generate", json=body)
             if r.status_code != 200:
+                # Special-case the "No d² checkpoint found" 503 — render it as
+                # a friendly inline ANAMNESIS message instead of a red error
+                # bubble. The user lands here when they pick "δ² Personal" but
+                # the inference engine has no .pt or LoRA adapter loaded yet.
+                # Stream tokens so the bubble fills like any other reply.
+                friendly = _maybe_friendly_d2_error(r.status_code, r.text)
+                if friendly is not None:
+                    for word in friendly.split(" "):
+                        token = word + " "
+                        full_response.append(token)
+                        yield f"data: {json.dumps({'token': token})}\n\n"
+                        await asyncio.sleep(0.005)
+                    reply = "".join(full_response).rstrip()
+                    _sessions[session_id].append({"role": "assistant", "content": reply})
+                    _trim(session_id)
+                    # Intentionally do NOT call _store_episode for guidance text —
+                    # this isn't a real model response.
+                    yield f"data: {json.dumps({'done': True, 'session_id': session_id, 'backend': 'd2', 'cost': '$0 (no model loaded)'})}\n\n"
+                    return
                 yield f"data: {json.dumps({'error': f'δ² engine {r.status_code}: {r.text[:200]}'})}\n\n"
                 return
             data = r.json()

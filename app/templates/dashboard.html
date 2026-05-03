@@ -936,6 +936,94 @@
             </div>
         </div>
 
+        <!-- ── Training Launcher ─────────────────────────────────── -->
+        <!--
+          Two one-click runs. Both fire SAFELY:
+          - confirm() before submit
+          - disabled while another run is in progress (poll-driven)
+          - dry_run=true preview is wired via the help (?) icon → Explain modal
+            (we deliberately don't expose dry-run to humans; it's used by tests)
+        -->
+        <div class="d2-section" id="d2-training-launcher">
+            <div class="d2-section-header">
+                <h3>Training Launcher
+                    <span class="d2-help" data-what="the Training Launcher card — what each button does, how long it takes, and what it costs" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                </h3>
+                <span id="d2-launcher-state" style="font-size:11px;color:var(--muted);font-family:monospace">checking…</span>
+            </div>
+            <p class="d2-section-blurb">
+                Fire a training run on your own GPU. Cost: <strong>$0</strong>.
+                Only one run can be active at a time (single GPU, no parallelism).
+            </p>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">
+                <!-- Bench run card -->
+                <div style="border:1px solid var(--border);border-radius:6px;padding:12px;background:rgba(110,168,254,0.04)">
+                    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+                        <strong style="color:var(--accent)">Bench Run</strong>
+                        <span class="d2-help" data-what="what the Bench Run button does — permuted-MNIST + delta2_additive, ~2 minutes, fully reproducible" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                    </div>
+                    <div style="font-size:12px;color:var(--muted);line-height:1.5;margin-bottom:10px">
+                        Permuted-MNIST · 5 tasks · δ²-additive · 1 seed.
+                        Wall time: <strong>~2 minutes</strong>.
+                        Writes to <code>checkpoints_bench/</code>.
+                    </div>
+                    <button id="d2-btn-start-bench" class="d2-launch-btn" type="button">
+                        ▶ Start Bench Run
+                    </button>
+                </div>
+                <!-- Personal run card -->
+                <div style="border:1px solid var(--border);border-radius:6px;padding:12px;background:rgba(245,166,35,0.04)">
+                    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+                        <strong style="color:#f5a623">Personal Run (δ²)</strong>
+                        <span style="font-family:monospace;font-size:10px;color:#f5a623;border:1px solid rgba(245,166,35,0.5);padding:1px 5px;border-radius:3px">PRIVATE</span>
+                        <span class="d2-help" data-what="what the Personal Run button does — gpt2-medium + LoRA on your real-life Anamnesis corpus, ~15 minutes, never leaves disk" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                    </div>
+                    <div style="font-size:12px;color:var(--muted);line-height:1.5;margin-bottom:10px">
+                        gpt2-medium + LoRA on c_attn · 300 steps × 2 tasks ·
+                        bassin via δ². Wall time: <strong>~15 minutes</strong>.
+                        Writes to <code>checkpoints_personal/</code>.
+                    </div>
+                    <button id="d2-btn-start-personal" class="d2-launch-btn" type="button">
+                        ▶ Start Personal Run (δ²)
+                    </button>
+                </div>
+            </div>
+            <div id="d2-launcher-toast" style="margin-top:10px;font-size:12px;color:var(--muted);min-height:18px"></div>
+        </div>
+
+        <!-- ── Live Training Status panel ─────────────────────────── -->
+        <div class="d2-section" id="d2-live-training">
+            <div class="d2-section-header">
+                <h3>Live Training Status
+                    <span class="d2-help" data-what="the Live Training Status panel — what 'active' means, how step / loss / log tail are read, and the auto-refresh cadence" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                </h3>
+                <span id="d2-live-dot" style="width:10px;height:10px;border-radius:50%;background:#888;display:inline-block" title="grey: idle · green: active · amber: stale log"></span>
+            </div>
+            <div id="d2-live-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;font-size:12px;margin-bottom:10px">
+                <div>Run: <strong id="d2-live-name">—</strong></div>
+                <div>Kind: <strong id="d2-live-kind">—</strong></div>
+                <div>Started: <strong id="d2-live-started">—</strong></div>
+                <div>Elapsed: <strong id="d2-live-elapsed">—</strong></div>
+                <div>Step: <strong id="d2-live-step">—</strong></div>
+                <div>Train loss: <strong id="d2-live-train">—</strong></div>
+                <div>Val loss: <strong id="d2-live-val">—</strong></div>
+            </div>
+            <div style="margin-bottom:8px">
+                <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-bottom:4px">
+                    <span>Progress</span>
+                    <span id="d2-live-progress-pct" style="font-family:monospace">—</span>
+                </div>
+                <div style="height:8px;background:var(--border);border-radius:4px;overflow:hidden">
+                    <div id="d2-live-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#6ea8fe,#8fc3ff);transition:width 1s linear"></div>
+                </div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">
+                <strong style="font-size:11px;color:var(--muted)">Last 20 log lines</strong>
+                <button id="d2-btn-stop" class="d2-launch-btn d2-launch-btn-danger" type="button" style="display:none">■ Stop Run</button>
+            </div>
+            <pre id="d2-live-log" style="background:#0c0c0c;color:#cfcfcf;border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:'JetBrains Mono','Fira Code',Consolas,monospace;font-size:11px;line-height:1.45;max-height:280px;overflow:auto;margin:0;white-space:pre-wrap;word-break:break-word">(no run polled yet)</pre>
+        </div>
+
         <!-- ── Status panel (collapsed by default) ─────────────── -->
         <details class="d2-section">
             <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:10px">
@@ -1068,6 +1156,23 @@
             }
             .d2-explain-btn:hover { background:rgba(110,168,254,0.08); border-color:var(--accent); }
             .d2-explain-icon { font-size:14px; }
+
+            /* ── Launch buttons (Training Launcher + Stop) ── */
+            .d2-launch-btn {
+                background:var(--accent); border:1px solid var(--accent);
+                color:#0c1116; padding:8px 14px; font-size:12px; font-weight:600;
+                border-radius:5px; cursor:pointer; transition:opacity 0.15s, background 0.15s;
+                display:inline-flex; align-items:center; gap:6px;
+            }
+            .d2-launch-btn:hover:not(:disabled) { opacity:0.9; }
+            .d2-launch-btn:disabled {
+                cursor:not-allowed; opacity:0.45;
+                background:var(--border); border-color:var(--border); color:var(--muted);
+            }
+            .d2-launch-btn-danger {
+                background:#c44; border-color:#c44; color:#fff;
+            }
+            .d2-launch-btn-danger:hover:not(:disabled) { background:#d55; border-color:#d55; }
 
             /* ── Modal ── */
             .d2-modal-backdrop {
@@ -1795,8 +1900,233 @@
                 }
             }
 
+            // ── Training Launcher + Live Status ────────────────────────
+            //
+            // Polls /api/d2/training/status every 5s while the δ² tab is open.
+            // Disables the Start buttons whenever a run is active.
+            // Renders elapsed-time / step / loss / log tail into the live panel.
+            //
+            // Design choice: HTTP poll (not SSE) for the dashboard because:
+            //   - The status endpoint is cheap (one SSH ping + tail -200)
+            //   - Polling failure modes are easier to recover from than SSE
+            //     reconnection bookkeeping when the user switches tabs
+            //   - SSE endpoint /logs/stream is wired in the backend for any
+            //     future "open a separate window" use; not used here yet.
+            const trainState = {
+                active: false,
+                lastStatus: null,
+            };
+            function _fmtElapsed(s) {
+                if (s == null) return '—';
+                if (s < 60) return s + 's';
+                const m = Math.floor(s / 60), sec = s % 60;
+                if (m < 60) return `${m}m ${sec}s`;
+                const h = Math.floor(m / 60);
+                return `${h}h ${m % 60}m`;
+            }
+            function _setLauncherDisabled(disabled, reason) {
+                ['d2-btn-start-bench', 'd2-btn-start-personal'].forEach(id => {
+                    const b = document.getElementById(id);
+                    if (b) {
+                        b.disabled = disabled;
+                        b.title = disabled ? (reason || 'Disabled') : '';
+                    }
+                });
+                const stateEl = document.getElementById('d2-launcher-state');
+                if (stateEl) stateEl.textContent = disabled ? (reason || 'busy') : 'idle · ready';
+            }
+            function _renderLive(st) {
+                const dot = document.getElementById('d2-live-dot');
+                const stopBtn = document.getElementById('d2-btn-stop');
+                if (!st || st.error) {
+                    dot.style.background = '#888';
+                    dot.title = 'idle';
+                    document.getElementById('d2-live-name').textContent = '—';
+                    document.getElementById('d2-live-kind').textContent = '—';
+                    document.getElementById('d2-live-started').textContent = '—';
+                    document.getElementById('d2-live-elapsed').textContent = '—';
+                    document.getElementById('d2-live-step').textContent = '—';
+                    document.getElementById('d2-live-train').textContent = '—';
+                    document.getElementById('d2-live-val').textContent = '—';
+                    document.getElementById('d2-live-progress-pct').textContent = '—';
+                    document.getElementById('d2-live-progress-bar').style.width = '0%';
+                    document.getElementById('d2-live-log').textContent = st && st.error
+                        ? '(scan failed: ' + st.error + ')'
+                        : '(no run polled yet)';
+                    if (stopBtn) stopBtn.style.display = 'none';
+                    return;
+                }
+                if (st.active) {
+                    dot.style.background = '#3a3';  // green
+                    dot.title = 'active';
+                    if (stopBtn) stopBtn.style.display = 'inline-flex';
+                } else if (st.log_path) {
+                    // Recent log present but process gone — finished or crashed
+                    dot.style.background = '#e80';  // amber
+                    dot.title = 'last run finished';
+                    if (stopBtn) stopBtn.style.display = 'none';
+                } else {
+                    dot.style.background = '#888';
+                    dot.title = 'idle';
+                    if (stopBtn) stopBtn.style.display = 'none';
+                }
+                document.getElementById('d2-live-name').textContent = st.experiment_name || '—';
+                document.getElementById('d2-live-kind').textContent = st.kind || '—';
+                document.getElementById('d2-live-started').textContent = st.started_at || '—';
+                // elapsed_s is mtime-of-log relative to now; for active runs that's
+                // close to "elapsed since last log line", which is good enough.
+                let elapsed = st.elapsed_s;
+                if (st.active && st.started_at) {
+                    try {
+                        const tStart = new Date(st.started_at).getTime();
+                        if (!isNaN(tStart)) elapsed = Math.max(0, Math.floor((Date.now() - tStart) / 1000));
+                    } catch {}
+                }
+                document.getElementById('d2-live-elapsed').textContent = _fmtElapsed(elapsed);
+                document.getElementById('d2-live-step').textContent =
+                    st.step != null
+                        ? (st.total_steps ? `${st.step} / ${st.total_steps}` : `${st.step}`)
+                        : '—';
+                document.getElementById('d2-live-train').textContent =
+                    st.last_train_loss != null ? st.last_train_loss.toFixed(4) : '—';
+                document.getElementById('d2-live-val').textContent =
+                    st.last_val_loss != null ? st.last_val_loss.toFixed(4) : '—';
+                let pct = 0;
+                if (st.step != null && st.total_steps) {
+                    pct = Math.min(100, Math.max(0, (st.step / st.total_steps) * 100));
+                }
+                document.getElementById('d2-live-progress-pct').textContent =
+                    st.step != null && st.total_steps ? `${pct.toFixed(1)}%` : '—';
+                document.getElementById('d2-live-progress-bar').style.width = pct + '%';
+                const logEl = document.getElementById('d2-live-log');
+                if (Array.isArray(st.last_log_lines) && st.last_log_lines.length) {
+                    logEl.textContent = st.last_log_lines.join('\n');
+                    // Auto-scroll to bottom
+                    logEl.scrollTop = logEl.scrollHeight;
+                } else {
+                    logEl.textContent = '(log empty)';
+                }
+            }
+            async function refreshD2Training() {
+                try {
+                    const r = await fetch('/api/d2/training/status');
+                    if (!r.ok) {
+                        _setLauncherDisabled(false, 'status check failed');
+                        _renderLive({error: 'HTTP ' + r.status});
+                        return;
+                    }
+                    const st = await r.json();
+                    trainState.lastStatus = st;
+                    trainState.active = !!st.active;
+                    if (st.active) {
+                        const reason = `busy · ${st.kind || '?'} run in progress`;
+                        _setLauncherDisabled(true, reason);
+                    } else {
+                        _setLauncherDisabled(false, null);
+                    }
+                    _renderLive(st);
+                } catch (e) {
+                    _setLauncherDisabled(false, 'network error');
+                    _renderLive({error: e.message || String(e)});
+                }
+            }
+            // Wire Start buttons (with confirmation)
+            document.getElementById('d2-btn-start-bench')?.addEventListener('click', async () => {
+                if (!confirm(
+                    'Start a Bench training run?\n\n' +
+                    '• Permuted-MNIST · δ²-additive · 5 tasks\n' +
+                    '• Wall time: ~2 minutes\n' +
+                    '• Cost: $0 (runs on your GPU)\n\n' +
+                    'Continue?'
+                )) return;
+                const toast = document.getElementById('d2-launcher-toast');
+                toast.textContent = 'queueing bench run…';
+                try {
+                    const r = await fetch('/api/d2/training/start', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({kind: 'bench'}),
+                    });
+                    const data = await r.json();
+                    if (!r.ok) {
+                        toast.textContent = '✗ ' + (data.detail || ('HTTP ' + r.status));
+                        toast.style.color = 'var(--danger, #f66)';
+                    } else {
+                        toast.style.color = '';
+                        toast.textContent = `✓ Queued ${data.run_id} — see Live Training Status panel`;
+                        setTimeout(refreshD2Training, 1500);
+                    }
+                } catch (e) {
+                    toast.textContent = '✗ ' + (e.message || String(e));
+                    toast.style.color = 'var(--danger, #f66)';
+                }
+            });
+            document.getElementById('d2-btn-start-personal')?.addEventListener('click', async () => {
+                if (!confirm(
+                    'Start a Personal training run (δ²)?\n\n' +
+                    '• gpt2-medium + LoRA on c_attn\n' +
+                    '• 300 steps × 2 tasks on your real-life Anamnesis corpus\n' +
+                    '• Wall time: ~15 minutes\n' +
+                    '• Cost: $0 (runs on your GPU)\n' +
+                    '• Output stays on disk · NEVER published\n\n' +
+                    'Continue?'
+                )) return;
+                const toast = document.getElementById('d2-launcher-toast');
+                toast.textContent = 'queueing personal run…';
+                try {
+                    const r = await fetch('/api/d2/training/start', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({kind: 'personal'}),
+                    });
+                    const data = await r.json();
+                    if (!r.ok) {
+                        toast.textContent = '✗ ' + (data.detail || ('HTTP ' + r.status));
+                        toast.style.color = 'var(--danger, #f66)';
+                    } else {
+                        toast.style.color = '';
+                        toast.textContent = `✓ Queued ${data.run_id} — see Live Training Status panel`;
+                        setTimeout(refreshD2Training, 1500);
+                    }
+                } catch (e) {
+                    toast.textContent = '✗ ' + (e.message || String(e));
+                    toast.style.color = 'var(--danger, #f66)';
+                }
+            });
+            // Wire Stop button (double-confirm)
+            document.getElementById('d2-btn-stop')?.addEventListener('click', async () => {
+                if (!confirm(
+                    'Stop the active training run?\n\n' +
+                    'This sends SIGTERM, then SIGKILL after 2 seconds, to any\n' +
+                    'python -m d2.finetune_lora / d2.experiments.continual\n' +
+                    'process inside the anamnesis-d2 container.\n\n' +
+                    'Continue?'
+                )) return;
+                const toast = document.getElementById('d2-launcher-toast');
+                toast.textContent = 'sending stop signal…';
+                try {
+                    const r = await fetch('/api/d2/training/stop', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({confirmation_token: 'STOP'}),
+                    });
+                    const data = await r.json();
+                    if (!r.ok) {
+                        toast.textContent = '✗ ' + (data.detail || ('HTTP ' + r.status));
+                        toast.style.color = 'var(--danger, #f66)';
+                    } else {
+                        toast.style.color = '';
+                        toast.textContent = data.killed ? '✓ Stop signal sent' : '(no active run found)';
+                        setTimeout(refreshD2Training, 1500);
+                    }
+                } catch (e) {
+                    toast.textContent = '✗ ' + (e.message || String(e));
+                    toast.style.color = 'var(--danger, #f66)';
+                }
+            });
+
             // ── Polling lifecycle ──────────────────────────────────────
-            function refreshAll() { refreshD2Status(); refreshD2Bassin(); refreshD2Runs(); refreshD2Personal(); }
+            function refreshAll() { refreshD2Status(); refreshD2Bassin(); refreshD2Runs(); refreshD2Personal(); refreshD2Training(); }
             function startPolling() {
                 refreshAll();
                 if (d2State.pollTimer) clearInterval(d2State.pollTimer);
@@ -1828,109 +2158,101 @@
         </h3>
         <div class="arch-diagram" id="arch-platform-wrap">
             <pre class="mermaid">
-flowchart LR
-    USER[User browser]
+%%{init: {'theme':'dark','flowchart':{'nodeSpacing':40,'rankSpacing':55,'curve':'basis'}}}%%
+flowchart TB
+    USER([User browser])
 
-    subgraph APP ["Anamnesis app — FastAPI :3010"]
-        UI[Dashboard + /chat + /avatar]
-        API[REST API + WebSockets]
-        CRAWL[Crawler + JSONL Ingester]
+    subgraph APP ["Anamnesis &mdash; FastAPI :3010"]
+        direction TB
+        UI[Dashboard / Chat / Avatar UI]
+        API[REST + WebSocket API]
+        CRAWL[Crawler &amp; JSONL ingester]
     end
 
-    subgraph STORE ["MongoDB Atlas Local :5438"]
+    subgraph STORE ["Storage &mdash; MongoDB Atlas Local :5438"]
+        direction LR
         EP[(episodes)]
         SES[(chat sessions)]
-        BAS[(bassin + d2 runs metadata)]
+        BAS[(bassin / d&sup2; runs)]
     end
 
-    subgraph INF ["Inference backends (8)"]
-        OLL[Ollama x3<br/>local GPUs]
+    subgraph INF ["Inference backends"]
+        direction LR
+        OLL[Ollama x3]
         CAPI[Claude API]
         CCLI[Claude CLI]
-        TOG[Together.ai<br/>stock 70B]
-        RPD[RunPod<br/>private GPU rental]
-        D2E[d2 engine<br/>local container]
+        TOG[Together.ai 70B]
+        RPD[RunPod private GPU]
+        D2E[d&sup2; engine]
     end
 
-    subgraph D2 ["δ² engine container"]
-        OPT[δ²-additive optimizer<br/>+ bassin]
-        CKB[(checkpoints_bench/)]
-        CKP[(checkpoints_personal/)]
-    end
-
-    subgraph TRACK ["Two-track separation (privacy boundary)"]
-        BENCH[Bench<br/>WikiText / permuted-MNIST<br/>paper-eligible · public datasets]
-        PERS[Personal<br/>Anamnesis chronological corpus<br/>NEVER published]
+    subgraph D2 ["d&sup2; training engine"]
+        direction TB
+        OPT[d&sup2;-additive optimizer]
+        CKB[(checkpoints_bench)]
+        CKP[(checkpoints_personal)]
     end
 
     subgraph AV ["Avatar pipeline (Belle)"]
-        LLM2[LLM turn]
+        direction LR
         TTS[XTTS / edge-TTS]
-        SAD[SadTalker animation]
-        WS[WebSocket frames]
+        SAD[SadTalker frames]
     end
 
-    subgraph SRCS ["Crawled sources (multi-machine)"]
-        CMD[CLAUDE.md files]
-        HND[handoff + history docs]
-        CODE[project code]
-        JSL[~/.claude/**/*.jsonl]
-    end
+    SRCS["Crawled sources<br/>CLAUDE.md / handoffs / code / JSONL"]
 
-    USER --> UI
-    UI --> API
+    USER ==> UI
+    UI ==> API
     API --> EP
     API --> SES
     API --> BAS
-
     API --> OLL
     API --> CAPI
     API --> CCLI
     API --> TOG
     API --> RPD
     API --> D2E
-
-    D2E --> OPT
-    OPT --> CKB
-    OPT --> CKP
-    CKB -.belongs to.-> BENCH
-    CKP -.belongs to.-> PERS
+    API ==> TTS
+    TTS ==> SAD
+    SAD -. WS frames .-> USER
 
     SRCS --> CRAWL
     CRAWL --> EP
 
-    API -. planned .-> AV
-    AV -. planned .-> LLM2
-    LLM2 -. planned .-> TTS
-    TTS -. planned .-> SAD
-    SAD -. planned .-> WS
-    WS -. planned .-> USER
+    D2E --> OPT
+    OPT --> CKB
+    OPT --> CKP
+    EP -. personal corpus .-> CKP
 
-    EP -. feeds personal corpus .-> PERS
-    PERS -. fine-tunes .-> CKP
+    classDef app       fill:#0d2538,stroke:#58a6ff,stroke-width:2px,color:#e6edf3
+    classDef store     fill:#0f2a1a,stroke:#3fb950,stroke-width:2px,color:#e6edf3
+    classDef inf       fill:#2a2210,stroke:#d29922,stroke-width:2px,color:#e6edf3
+    classDef d2        fill:#22153a,stroke:#bc8cff,stroke-width:2px,color:#e6edf3
+    classDef planned   fill:#161b22,stroke:#8b949e,stroke-width:1.5px,color:#c9d1d9,stroke-dasharray:6 4
+    classDef src       fill:#161b22,stroke:#30363d,color:#8b949e
+    classDef user      fill:#1c2128,stroke:#e6edf3,stroke-width:2px,color:#e6edf3
 
-    classDef app fill:#1c2128,stroke:#58a6ff,color:#e6edf3
-    classDef store fill:#1c2128,stroke:#3fb950,color:#e6edf3
-    classDef inf fill:#1c2128,stroke:#d29922,color:#e6edf3
-    classDef d2 fill:#1c2128,stroke:#bc8cff,color:#e6edf3
-    classDef bench fill:#1c2128,stroke:#6ea8fe,color:#e6edf3
-    classDef personal fill:#2a1f0c,stroke:#f5a623,color:#e6edf3
-    classDef planned fill:#161b22,stroke:#6e7681,color:#8b949e,stroke-dasharray:5 3
-    classDef src fill:#1c2128,stroke:#30363d,color:#8b949e
-
+    class USER user
     class UI,API,CRAWL app
     class EP,SES,BAS,CKB,CKP store
     class OLL,CAPI,CCLI,TOG,RPD,D2E inf
     class OPT d2
-    class BENCH bench
-    class PERS personal
-    class AV,LLM2,TTS,SAD,WS planned
-    class CMD,HND,CODE,JSL,SRCS src
+    class TTS,SAD,AV planned
+    class SRCS src
+
+    subgraph LEG ["Legend"]
+        direction LR
+        L1[Service]:::app
+        L2[(Store)]:::store
+        L3[Inference]:::inf
+        L4[d&sup2;]:::d2
+        L5[Planned / partial]:::planned
+    end
             </pre>
         </div>
 
         <div class="project-description" style="margin-top:6px;margin-bottom:18px">
-            <p style="font-size:0.85em;color:#8b949e"><strong>Legend.</strong> Dashed boxes / arrows = <em>planned, not yet wired</em> (avatar pipeline end-to-end is in development; Layer-1 continual learning during chat is on the roadmap). <strong>Together.ai</strong> sits behind /chat as the personal-track stock-70B fallback. <strong>RunPod</strong> sits behind /chat for on-demand private-GPU inference; the image is pulled from a private ghcr.io registry via stored auth (never goes public during experimentation). The <strong>two-track separation</strong> is enforced at the filesystem level: <code>checkpoints_bench/</code> and <code>checkpoints_personal/</code> are different bind mounts and the trainer refuses to cross them.</p>
+            <p style="font-size:0.85em;color:#8b949e"><strong>Reading the diagram.</strong> Solid arrows = wired and serving today; dashed arrows + dashed nodes = partially wired or roadmap (the avatar pipeline runs end-to-end behind <code>/avatar</code> but Belle&rsquo;s LLM-driven turn loop and continual Layer-1 learning during chat are still being polished — hence dashed). Colour just chunks the system: <span style="color:#58a6ff">blue</span> = the FastAPI app surface, <span style="color:#3fb950">green</span> = MongoDB stores, <span style="color:#d29922">amber</span> = inference backends, <span style="color:#bc8cff">violet</span> = the d&sup2; training engine. <strong>Two-track separation</strong> (Bench vs Personal) is enforced at the filesystem level — <code>checkpoints_bench/</code> and <code>checkpoints_personal/</code> are different bind mounts and the trainer refuses to cross them. <strong>Together.ai</strong> + <strong>RunPod</strong> sit behind <code>/chat</code>: Together for stock-70B fallback, RunPod for on-demand private-GPU inference (image pulled from a private ghcr.io registry).</p>
         </div>
 
         <h3 class="arch-diagram-toggle open" id="arch-diagram-toggle">
