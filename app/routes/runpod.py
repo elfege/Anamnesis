@@ -50,7 +50,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from config import RUNPOD_API_KEY
+from config import RUNPOD_API_KEY, RUNPOD_REGISTRY_AUTH_ID
 from database import get_db
 
 logger = logging.getLogger("anamnesis.routes.runpod")
@@ -206,7 +206,15 @@ async def _start_stream(gpu: str, profile: str) -> AsyncIterator[str]:
     pod_name = f"anamnesis-{profile}"
     ports_spec = f"{port}/http"
 
-    yield _sse({"stage": "creating", "msg": f"Submitting podFindAndDeployOnDemand mutation (image={image})…"})
+    # If image is on a private registry (e.g. ghcr.io/elfege/anamnesis-d2),
+    # RunPod needs containerRegistryAuthId to pull it. See app/config.py for
+    # how RUNPOD_REGISTRY_AUTH_ID is provisioned.
+    auth_clause = ""
+    if RUNPOD_REGISTRY_AUTH_ID:
+        auth_clause = f', containerRegistryAuthId: "{RUNPOD_REGISTRY_AUTH_ID}"'
+        yield _sse({"stage": "creating", "msg": f"Submitting podFindAndDeployOnDemand mutation (image={image}, private-pull auth: {RUNPOD_REGISTRY_AUTH_ID})…"})
+    else:
+        yield _sse({"stage": "creating", "msg": f"Submitting podFindAndDeployOnDemand mutation (image={image}, no registry auth — public images only)…"})
 
     # GraphQL mutation — same shape as deploy_runpod.sh
     # Inline-string GraphQL because the RunPod public API expects a single
@@ -219,7 +227,8 @@ async def _start_stream(gpu: str, profile: str) -> AsyncIterator[str]:
         f'name: "{pod_name}", '
         f'imageName: "{image}", '
         f'ports: "{ports_spec}", '
-        'env: [{ key: "AUTO_LOAD_MODEL", value: "true" }] '
+        'env: [{ key: "AUTO_LOAD_MODEL", value: "true" }]'
+        f'{auth_clause} '
         ') { id desiredStatus runtime { ports { ip publicPort privatePort isIpPublic } } } }'
     )
 

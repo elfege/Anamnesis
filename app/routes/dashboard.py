@@ -5,7 +5,7 @@ import time
 import httpx
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from crawler import SOURCES, MACHINE_ROOTS, TEACHINGS_DIR, DOCUMENTS_DIR, get_crawler_status
@@ -23,6 +23,18 @@ logger = logging.getLogger("anamnesis.routes.dashboard")
 templates = Jinja2Templates(directory="templates")
 
 router = APIRouter(tags=["dashboard"])
+
+
+@router.get("/", include_in_schema=False)
+async def root_redirect():
+    """Landing route — redirect to /dashboard.
+
+    The dashboard is the canonical entry surface for the platform until a
+    dedicated landing page is shipped (Phase B of the UI overhaul plan).
+    A 307 preserves method semantics, but for a GET it is functionally a
+    302 and crawlers / browsers handle it identically.
+    """
+    return RedirectResponse(url="/dashboard", status_code=307)
 
 
 @router.get("/chat", response_class=HTMLResponse)

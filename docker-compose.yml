@@ -64,6 +64,9 @@ services:
       RUNPOD_POD_ID: "${RUNPOD_POD_ID:-}"
       RUNPOD_ENDPOINT_URL: "${RUNPOD_ENDPOINT_URL:-}"
       RUNPOD_DEFAULT_MODEL: "${RUNPOD_DEFAULT_MODEL:-meta-llama/Meta-Llama-3.1-70B-Instruct}"
+      # Opaque RunPod-side ID for pulling private ghcr.io image.
+      # Provisioned once via saveRegistryAuth GraphQL; lives in AWS secret.
+      RUNPOD_REGISTRY_AUTH_ID: "${RUNPOD_REGISTRY_AUTH_ID:-}"
       TRAINER_URLS: "${TRAINER_URLS:-}"
       TRAINER_LABEL_SERVER1: "${TRAINER_LABEL_SERVER1:-SERVER-1 · ROCm}"
       TRAINER_LABEL_SERVER2: "${TRAINER_LABEL_SERVER2:-SERVER-2 · CUDA}"

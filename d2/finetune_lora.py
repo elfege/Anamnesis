@@ -204,6 +204,10 @@ def main():
     ap.add_argument("--lora-r", type=int, default=8)
     ap.add_argument("--lora-alpha", type=int, default=16)
     ap.add_argument("--lora-dropout", type=float, default=0.05)
+    ap.add_argument("--lora-target-modules", default="q_proj,k_proj,v_proj,o_proj",
+                    help="Comma-separated module names. Llama: q_proj,k_proj,v_proj,o_proj. GPT-2: c_attn. Qwen: q_proj,k_proj,v_proj,o_proj")
+    ap.add_argument("--dtype", choices=["auto", "bf16", "fp16", "fp32"], default="auto",
+                    help="Model dtype. 'auto' = bf16 on Ampere+ (compute>=8.0), fp16 elsewhere. Turing (1660/2080) lacks bf16 support.")
     ap.add_argument("--load-in-4bit", action="store_true", default=True,
                     help="QLoRA: load base in 4-bit to fit on smaller GPUs (default ON)")
     ap.add_argument("--no-load-in-4bit", dest="load_in_4bit", action="store_false")
@@ -248,6 +252,17 @@ def main():
     logger.info(f"loading base model: {args.base_model}")
     tokenizer = AutoTokenizer.from_pretrained(args.base_model)
 
+    # Resolve dtype. bf16 only works on Ampere+ (compute capability >= 8.0).
+    if args.dtype == "auto":
+        if device.type == "cuda":
+            cap = torch.cuda.get_device_capability(device)
+            chosen_dtype = torch.bfloat16 if cap[0] >= 8 else torch.float16
+            logger.info(f"auto-dtype: cuda compute capability {cap} -> {chosen_dtype}")
+        else:
+            chosen_dtype = torch.float32
+    else:
+        chosen_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[args.dtype]
+
     quant_kwargs = {}
     if args.load_in_4bit and device.type == "cuda":
         try:
@@ -255,18 +270,18 @@ def main():
             quant_kwargs = dict(
                 quantization_config=BitsAndBytesConfig(
                     load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.bfloat16,
+                    bnb_4bit_compute_dtype=chosen_dtype,
                     bnb_4bit_use_double_quant=True,
                     bnb_4bit_quant_type="nf4",
                 )
             )
-            logger.info("loading in 4-bit (QLoRA mode)")
+            logger.info(f"loading in 4-bit (QLoRA mode), compute dtype={chosen_dtype}")
         except ImportError:
             logger.warning("bitsandbytes not installed — falling back to fp16")
 
     model = AutoModelForCausalLM.from_pretrained(
         args.base_model,
-        torch_dtype=torch.bfloat16 if device.type == "cuda" else torch.float32,
+        torch_dtype=chosen_dtype,
         device_map="auto" if device.type == "cuda" else None,
         **quant_kwargs,
     )
@@ -277,7 +292,7 @@ def main():
         r=args.lora_r,
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        target_modules=[m.strip() for m in args.lora_target_modules.split(",") if m.strip()],
         bias="none",
     )
     model = get_peft_model(model, lora_config)

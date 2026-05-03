@@ -75,6 +75,12 @@ TOGETHER_BASE_URL = os.environ.get("TOGETHER_BASE_URL", "https://api.together.xy
 RUNPOD_API_KEY = os.environ.get("RUNPOD_API_KEY", "")
 RUNPOD_POD_ID = os.environ.get("RUNPOD_POD_ID", "")
 RUNPOD_ENDPOINT_URL = os.environ.get("RUNPOD_ENDPOINT_URL", "")
+# Opaque RunPod-side ID for private-registry creds (created once via
+# saveRegistryAuth GraphQL mutation, stored in AWS Secrets Manager under
+# ANAMNESIS-Secrets/RUNPOD_REGISTRY_AUTH_ID, surfaced into .env by start.sh).
+# When set, podFindAndDeployOnDemand passes containerRegistryAuthId so RunPod
+# can pull our private ghcr.io image. Empty = public-image-only.
+RUNPOD_REGISTRY_AUTH_ID = os.environ.get("RUNPOD_REGISTRY_AUTH_ID", "")
 RUNPOD_DEFAULT_MODEL = os.environ.get(
     "RUNPOD_DEFAULT_MODEL", "meta-llama/Meta-Llama-3.1-70B-Instruct"
 )

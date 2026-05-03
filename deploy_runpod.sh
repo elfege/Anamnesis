@@ -118,6 +118,22 @@ start_pod() {
     echo "Creating RunPod pod: GPU=$gpu_alias ($gpu_id), image=$DOCKER_IMAGE"
     echo "(This costs money — make sure you intend this.)"
 
+    # ── Container registry auth (private images, e.g. ghcr.io/elfege/anamnesis-d2) ──
+    # If RUNPOD_REGISTRY_AUTH_ID is set, RunPod uses it to authenticate when pulling
+    # the image. Created once via the saveRegistryAuth GraphQL mutation; stored in
+    # AWS Secrets Manager (ANAMNESIS-Secrets/RUNPOD_REGISTRY_AUTH_ID) and surfaced
+    # into .env by start.sh's vault step. If absent, the pod will only be able to
+    # pull public images.
+    local auth_id="${RUNPOD_REGISTRY_AUTH_ID:-}"
+    local auth_clause=""
+    if [[ -n "$auth_id" ]]; then
+        echo "Using container registry auth: $auth_id (private image pull enabled)"
+        auth_clause=", containerRegistryAuthId: \"$auth_id\""
+    else
+        echo "Warning: RUNPOD_REGISTRY_AUTH_ID not set — pod can only pull PUBLIC images."
+        echo "         If $DOCKER_IMAGE is private, the pod will fail to start."
+    fi
+
     # Build the GraphQL mutation to create a pod.
     # Fields:
     #   - cloudType: COMMUNITY (cheaper, can be preempted) vs SECURE (stable, more expensive)
@@ -125,11 +141,12 @@ start_pod() {
     #   - dockerArgs: command to run on container start
     #   - ports: which port to expose (PROFILE-specific: 3011 for trainer, 3015 for d²)
     #   - volumeInGb: persistent storage (model checkpoints survive across restarts)
+    #   - containerRegistryAuthId: opaque RunPod-side ID for private-registry creds
     local pod_name="anamnesis-$PROFILE"
     local ports_spec="$SERVICE_PORT/http"
     local mutation
-    mutation=$(jq -n --arg gpu "$gpu_id" --arg img "$DOCKER_IMAGE" --arg name "$pod_name" --arg ports "$ports_spec" '{
-        query: "mutation { podFindAndDeployOnDemand(input: { cloudType: COMMUNITY, gpuCount: 1, volumeInGb: 50, containerDiskInGb: 20, gpuTypeId: \"\($gpu)\", name: \"\($name)\", imageName: \"\($img)\", ports: \"\($ports)\", env: [{ key: \"AUTO_LOAD_MODEL\", value: \"true\" }] }) { id desiredStatus runtime { ports { ip publicPort privatePort isIpPublic } } } }"
+    mutation=$(jq -n --arg gpu "$gpu_id" --arg img "$DOCKER_IMAGE" --arg name "$pod_name" --arg ports "$ports_spec" --arg auth "$auth_clause" '{
+        query: "mutation { podFindAndDeployOnDemand(input: { cloudType: COMMUNITY, gpuCount: 1, volumeInGb: 50, containerDiskInGb: 20, gpuTypeId: \"\($gpu)\", name: \"\($name)\", imageName: \"\($img)\", ports: \"\($ports)\", env: [{ key: \"AUTO_LOAD_MODEL\", value: \"true\" }]\($auth) }) { id desiredStatus runtime { ports { ip publicPort privatePort isIpPublic } } } }"
     }')
 
     local response

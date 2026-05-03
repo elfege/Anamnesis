@@ -2329,6 +2329,19 @@ $(function () {
         }
     });
 
+    $("#arch-platform-toggle").on("click", function () {
+        var wrap = $("#arch-platform-wrap");
+        var toggle = $(this);
+        if (wrap.is(":visible")) {
+            wrap.slideUp(200);
+            toggle.removeClass("open");
+        } else {
+            if (typeof maybeRenderMermaid === "function") maybeRenderMermaid();
+            wrap.slideDown(250);
+            toggle.addClass("open");
+        }
+    });
+
     // ─── Help (?) modals ────────────────────────────────────────────
     var _help_map = {
         "crawler-overview": "#help-tpl-crawler-overview",

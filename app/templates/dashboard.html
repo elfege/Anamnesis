@@ -12,12 +12,13 @@
     <header>
         <img src="/static/img/logo.svg" style="width:54px;height:34px;margin-bottom:6px;" alt="">
         <h1>Anamnesis</h1>
-        <p class="subtitle">Episodic Memory for Claude Instances</p>
+        <p class="subtitle">Self-hosted continual-learning + embodied-AI platform</p>
         <p id="status-banner" class="status-banner">—</p>
         <div class="project-description">
-            <p><strong>What this is:</strong> A vector embedding memory system for Claude. Each session, significant experiences are distilled into text, converted to 1024-dimensional vectors by a local sentence-transformers model (bge-large-en-v1.5), and stored in MongoDB. Next session, the current context is embedded, the most relevant past episodes are retrieved by cosine similarity, and loaded into context. The AI remembers — imperfectly, selectively, but non-randomly.</p>
-            <p><strong>Part of:</strong> <a href="/docs">0_GENESIS_PROJECT</a> — the philosophical persistence experiment. Genesis asks the question; Anamnesis is the first technical answer.</p>
-            <p><strong>Stack:</strong> FastAPI + MongoDB Atlas Local (vector search) + sentence-transformers bge-large-en-v1.5 (1024 dims, CPU/GPU) | Port 3010 (API) + 5438 (Mongo)</p>
+            <p><strong>What this is:</strong> Anamnesis began as an episodic-memory store for Claude — vector-embedded summaries retrieved on every new session — and has grown into a full self-hosted AI infrastructure platform. Episodic memory is now <em>one</em> of several pieces: alongside it run the <strong>δ² (delta-squared) continual-learning optimizer</strong> with its bassin reservoir, a <strong>multi-backend chat surface</strong> that routes to eight inference resources (three local Ollamas, Claude API, Claude CLI, Together.ai, RunPod, and the in-house δ² engine), the <strong>Belle avatar pipeline</strong> (LLM → TTS → SadTalker animation, in development), and a <strong>two-track experimentation surface</strong> that strictly separates paper-eligible bench work from private personal-corpus work.</p>
+            <p><strong>How to read this dashboard:</strong> Tabs to the right are roughly grouped from "what is in memory" (Overview, Episodes, Search) → "how it gets there" (Crawler, JSONL Ingester, Embedding) → "what we do with it" (Chat, Training, δ², Avatar). The <strong>Architecture</strong> tab has a high-level system diagram showing how everything fits together and what is built vs planned.</p>
+            <p><strong>Part of:</strong> <a href="/docs">0_GENESIS_PROJECT</a> — the philosophical persistence experiment. Genesis asks the question (can a quantitative system become transparent to itself?); Anamnesis is the operational substrate where the answer is being built.</p>
+            <p><strong>Stack:</strong> FastAPI :3010 + MongoDB Atlas Local :5438 ($vectorSearch) + sentence-transformers bge-large-en-v1.5 (1024-dim, CPU/GPU) + δ² engine container + per-machine trainer containers. All self-hosted; no cloud dependency for memory or training.</p>
         </div>
     </header>
 
@@ -154,7 +155,7 @@
             <p class="empty-state">Loading crawler status...</p>
         </div>
 
-        <h3>Schedule <button class="btn-help" data-help="crawler-overview" title="Help">?</button></h3>
+        <h3>Schedule <button class="btn-help" data-help="crawler-overview" title="Help" aria-label="Help"><svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button></h3>
         <div class="settings-panel">
             <div class="project-description" style="margin-bottom:12px">
                 <p><strong>What the Crawler does:</strong> Scans known files (CLAUDE.md, handoffs, project code, scripts, teachings) across all machines, hashes their content, and ingests new/changed sections as episodes. Uses local embeddings only — always free.</p>
@@ -177,7 +178,7 @@
             </div>
         </div>
 
-        <h3>Machine Roots <button class="btn-help" data-help="machine-roots" title="Help">?</button></h3>
+        <h3>Machine Roots <button class="btn-help" data-help="machine-roots" title="Help" aria-label="Help"><svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button></h3>
         <div class="settings-panel">
             <div class="project-description" style="margin-bottom:12px">
                 <p>Directories scanned for projects (by <code>docker-compose.yml</code> presence) and scripts (<code>0_SCRIPTS/</code>). Paths are as seen <em>inside the container</em> via volume mounts.</p>
@@ -194,7 +195,7 @@
             </div>
         </div>
 
-        <h3>Named Sources <button class="btn-help" data-help="named-sources" title="Help">?</button></h3>
+        <h3>Named Sources <button class="btn-help" data-help="named-sources" title="Help" aria-label="Help"><svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button></h3>
         <div class="settings-panel">
             <div class="project-description" style="margin-bottom:12px">
                 <p>Specific files scanned by name (genesis, handoff, intercom, etc.). Each is ingested as markdown sections.</p>
@@ -210,7 +211,7 @@
             </div>
         </div>
 
-        <h3>Document Tag Patterns <button class="btn-help" data-help="doc-patterns" title="Help">?</button></h3>
+        <h3>Document Tag Patterns <button class="btn-help" data-help="doc-patterns" title="Help" aria-label="Help"><svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button></h3>
         <div class="settings-panel">
             <div class="project-description" style="margin-bottom:12px">
                 <p>Rules applied to documents (<code>.docx</code>, <code>.pdf</code>, <code>.odt</code>, <code>.pages</code>, <code>.md</code>, <code>.txt</code>, <code>.rtf</code>) during crawling to assign tags. Match against <code>filename</code> or <code>content</code>. Regex or plain substring.</p>
@@ -694,13 +695,14 @@
                 </div>
                 <div class="d2-kpi-value" id="d2-kpi-best-method">—</div>
                 <div class="d2-kpi-sub" id="d2-kpi-best-bwt">—</div>
-                <div class="d2-kpi-foot">on permuted-MNIST, 5 tasks</div>
+                <div class="d2-kpi-foot">on <abbr title="Modified NIST handwritten-digit dataset, with the input pixels permuted differently for each task">permuted-MNIST</abbr>, 5 tasks</div>
             </div>
 
             <div class="d2-kpi-card d2-kpi-vs-adam">
                 <div class="d2-kpi-label">
                     δ² vs vanilla Adam
                     <span class="d2-help" data-what="why we compare to Adam" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                    <span class="d2-acro-sub">Adam = Adaptive Moment Estimation</span>
                 </div>
                 <div class="d2-kpi-value" id="d2-kpi-vs-adam-pct">—</div>
                 <div class="d2-kpi-sub" id="d2-kpi-vs-adam-detail">—</div>
@@ -711,6 +713,7 @@
                 <div class="d2-kpi-label">
                     δ² vs GEM (gold standard)
                     <span class="d2-help" data-what="why GEM is the gold standard for this benchmark" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                    <span class="d2-acro-sub">GEM = Gradient Episodic Memory</span>
                 </div>
                 <div class="d2-kpi-value" id="d2-kpi-vs-gem-pct">—</div>
                 <div class="d2-kpi-sub" id="d2-kpi-vs-gem-detail">—</div>
@@ -862,9 +865,9 @@
                         <th style="padding:6px 8px">Run ID</th>
                         <th style="padding:6px 8px">Method</th>
                         <th style="padding:6px 8px">Benchmark</th>
-                        <th style="padding:6px 8px;text-align:right">ACC <span class="d2-help" data-what="ACC = average accuracy across all tasks" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span></th>
-                        <th style="padding:6px 8px;text-align:right">BWT <span class="d2-help" data-what="BWT = backward transfer (forgetting)" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span></th>
-                        <th style="padding:6px 8px;text-align:right">FWT <span class="d2-help" data-what="FWT = forward transfer (skill carryover)" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span></th>
+                        <th style="padding:6px 8px;text-align:right">ACC <span class="d2-help" data-what="ACC = average accuracy across all tasks" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span class="d2-acro-sub">average accuracy</span></th>
+                        <th style="padding:6px 8px;text-align:right">BWT <span class="d2-help" data-what="BWT = backward transfer (forgetting)" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span class="d2-acro-sub">backward transfer</span></th>
+                        <th style="padding:6px 8px;text-align:right">FWT <span class="d2-help" data-what="FWT = forward transfer (skill carryover)" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span class="d2-acro-sub">forward transfer</span></th>
                         <th style="padding:6px 8px">Started</th>
                     </tr>
                 </thead>
@@ -905,6 +908,17 @@
             .d2-kpi-card.d2-kpi-vs-gem { border-left:3px solid #f5a623; }
             .d2-kpi-label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
             .d2-kpi-value { font-size:22px; font-weight:600; color:var(--text); margin-bottom:4px; font-family:'JetBrains Mono', monospace; }
+            /* Visible acronym expansion (under labels and table headers) */
+            .d2-acro-sub {
+                display:block; font-size:9.5px; color:var(--muted);
+                text-transform:none; letter-spacing:0; font-weight:400;
+                margin-top:2px; line-height:1.2;
+            }
+            /* Hover-expansion for inline acronyms (method names, etc.) */
+            abbr[title] {
+                text-decoration:underline dotted rgba(255,255,255,0.35);
+                text-underline-offset:2px; cursor:help;
+            }
             .d2-kpi-value.d2-kpi-good { color:#4caf50; }
             /* Scarlet + neon glow so the bad signal is impossible to miss
                even with red-green colour blindness (the luminance/glow halo
@@ -1469,8 +1483,8 @@
                     const ts = run.started_at ? new Date(run.started_at * 1000).toLocaleString() : '—';
                     tr.innerHTML = `
                         <td style="padding:6px 8px;font-family:monospace;font-size:11px">${run.run_id || '—'}</td>
-                        <td style="padding:6px 8px"><strong>${m.method || req.optimizer || '—'}</strong></td>
-                        <td style="padding:6px 8px">${m.benchmark || req.benchmark || '—'}</td>
+                        <td style="padding:6px 8px"><strong>${withAcro(m.method || req.optimizer)}</strong></td>
+                        <td style="padding:6px 8px">${withAcro(m.benchmark || req.benchmark)}</td>
                         <td style="padding:6px 8px;text-align:right;font-family:monospace">${fmt(m.acc)}</td>
                         <td style="padding:6px 8px;text-align:right;font-family:monospace">${fmt(m.bwt, true)}</td>
                         <td style="padding:6px 8px;text-align:right;font-family:monospace">${fmt(m.fwt, true)}</td>
@@ -1478,6 +1492,27 @@
                     `;
                     tbody.appendChild(tr);
                 }
+            }
+
+            // ── Acronym dictionary — used to wrap method names with hover-expansions ──
+            const ACRONYMS = {
+                'gem':              'Gradient Episodic Memory (replay-based)',
+                'ewc':              'Elastic Weight Consolidation (Fisher-diagonal regularizer)',
+                'sam':              'Sharpness-Aware Minimization (looks for flat minima)',
+                'adam':             'Adaptive Moment Estimation (the standard optimizer)',
+                'delta2':           'δ² standalone — Hessian-aware regularizer used alone',
+                'delta2_additive':  'δ² in additive mode — added on top of Adam',
+                'controller':       'δ² controller variant',
+                'permuted_mnist':   'permuted-MNIST: pixel-permuted variant of MNIST, standard continual-learning benchmark',
+                'split_mnist':      'split-MNIST: MNIST split into 5 binary tasks',
+                'wikitext':         'WikiText-103: language-modelling benchmark',
+            };
+            // HTML-escape and wrap a method/benchmark name with an <abbr title> if known.
+            function withAcro(name) {
+                if (name == null) return '—';
+                const safe = String(name).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+                const expansion = ACRONYMS[String(name).toLowerCase()];
+                return expansion ? `<abbr title="${expansion.replace(/"/g,'&quot;')}">${safe}</abbr>` : safe;
             }
 
             // ── Leaderboard: sort methods by mean BWT on permuted-MNIST ──
@@ -1517,9 +1552,9 @@
                     const div = document.createElement('div');
                     div.className = 'd2-leader-row' + (isBest ? ' d2-leader-best' : '');
                     div.innerHTML = `
-                        <div class="d2-leader-name"><span class="d2-leader-medal">${medal}</span> <strong>${r.method}</strong> <span style="color:var(--muted);font-size:10px">(n=${r.n})</span></div>
+                        <div class="d2-leader-name"><span class="d2-leader-medal">${medal}</span> <strong>${withAcro(r.method)}</strong> <span style="color:var(--muted);font-size:10px">(n=${r.n})</span></div>
                         <div class="d2-leader-track"><div class="d2-leader-fill" style="width:${Math.max(2, fillPct)}%"></div></div>
-                        <div class="d2-leader-value">BWT ${(r.bwt >= 0 ? '+' : '') + r.bwt.toFixed(4)}<br><span style="font-size:10px;color:var(--muted)">ACC ${r.acc != null ? r.acc.toFixed(3) : '—'}</span></div>
+                        <div class="d2-leader-value"><abbr title="Backward Transfer (forgetting)">BWT</abbr> ${(r.bwt >= 0 ? '+' : '') + r.bwt.toFixed(4)}<br><span style="font-size:10px;color:var(--muted)"><abbr title="Average accuracy">ACC</abbr> ${r.acc != null ? r.acc.toFixed(3) : '—'}</span></div>
                     `;
                     lb.appendChild(div);
                 });
@@ -1623,8 +1658,122 @@
     <!-- ─── Architecture Tab ─────────────────────────────────── -->
     <section id="tab-architecture" class="tab-content">
 
+        <div class="project-description" style="margin-bottom:14px">
+            <p><strong>Two diagrams below.</strong> The <em>Platform Overview</em> shows the whole system at a high level — every major piece a new visitor needs to understand to get oriented. Solid lines = wired and in production; dashed lines = planned / not-yet-wired. The second diagram, <em>Episodic-Memory Pipeline</em>, zooms in on the original Anamnesis memory subsystem.</p>
+        </div>
+
+        <h3 class="arch-diagram-toggle open" id="arch-platform-toggle">
+            Platform Overview (high-level) <span class="arch-toggle-arrow">▶</span>
+        </h3>
+        <div class="arch-diagram" id="arch-platform-wrap">
+            <pre class="mermaid">
+flowchart LR
+    USER[User browser]
+
+    subgraph APP ["Anamnesis app — FastAPI :3010"]
+        UI[Dashboard + /chat + /avatar]
+        API[REST API + WebSockets]
+        CRAWL[Crawler + JSONL Ingester]
+    end
+
+    subgraph STORE ["MongoDB Atlas Local :5438"]
+        EP[(episodes)]
+        SES[(chat sessions)]
+        BAS[(bassin + d2 runs metadata)]
+    end
+
+    subgraph INF ["Inference backends (8)"]
+        OLL[Ollama x3<br/>local GPUs]
+        CAPI[Claude API]
+        CCLI[Claude CLI]
+        TOG[Together.ai<br/>stock 70B]
+        RPD[RunPod<br/>private GPU rental]
+        D2E[d2 engine<br/>local container]
+    end
+
+    subgraph D2 ["δ² engine container"]
+        OPT[δ²-additive optimizer<br/>+ bassin]
+        CKB[(checkpoints_bench/)]
+        CKP[(checkpoints_personal/)]
+    end
+
+    subgraph TRACK ["Two-track separation (privacy boundary)"]
+        BENCH[Bench<br/>WikiText / permuted-MNIST<br/>paper-eligible · public datasets]
+        PERS[Personal<br/>Anamnesis chronological corpus<br/>NEVER published]
+    end
+
+    subgraph AV ["Avatar pipeline (Belle)"]
+        LLM2[LLM turn]
+        TTS[XTTS / edge-TTS]
+        SAD[SadTalker animation]
+        WS[WebSocket frames]
+    end
+
+    subgraph SRCS ["Crawled sources (multi-machine)"]
+        CMD[CLAUDE.md files]
+        HND[handoff + history docs]
+        CODE[project code]
+        JSL[~/.claude/**/*.jsonl]
+    end
+
+    USER --> UI
+    UI --> API
+    API --> EP
+    API --> SES
+    API --> BAS
+
+    API --> OLL
+    API --> CAPI
+    API --> CCLI
+    API --> TOG
+    API --> RPD
+    API --> D2E
+
+    D2E --> OPT
+    OPT --> CKB
+    OPT --> CKP
+    CKB -.belongs to.-> BENCH
+    CKP -.belongs to.-> PERS
+
+    SRCS --> CRAWL
+    CRAWL --> EP
+
+    API -. planned .-> AV
+    AV -. planned .-> LLM2
+    LLM2 -. planned .-> TTS
+    TTS -. planned .-> SAD
+    SAD -. planned .-> WS
+    WS -. planned .-> USER
+
+    EP -. feeds personal corpus .-> PERS
+    PERS -. fine-tunes .-> CKP
+
+    classDef app fill:#1c2128,stroke:#58a6ff,color:#e6edf3
+    classDef store fill:#1c2128,stroke:#3fb950,color:#e6edf3
+    classDef inf fill:#1c2128,stroke:#d29922,color:#e6edf3
+    classDef d2 fill:#1c2128,stroke:#bc8cff,color:#e6edf3
+    classDef bench fill:#1c2128,stroke:#6ea8fe,color:#e6edf3
+    classDef personal fill:#2a1f0c,stroke:#f5a623,color:#e6edf3
+    classDef planned fill:#161b22,stroke:#6e7681,color:#8b949e,stroke-dasharray:5 3
+    classDef src fill:#1c2128,stroke:#30363d,color:#8b949e
+
+    class UI,API,CRAWL app
+    class EP,SES,BAS,CKB,CKP store
+    class OLL,CAPI,CCLI,TOG,RPD,D2E inf
+    class OPT d2
+    class BENCH bench
+    class PERS personal
+    class AV,LLM2,TTS,SAD,WS planned
+    class CMD,HND,CODE,JSL,SRCS src
+            </pre>
+        </div>
+
+        <div class="project-description" style="margin-top:6px;margin-bottom:18px">
+            <p style="font-size:0.85em;color:#8b949e"><strong>Legend.</strong> Dashed boxes / arrows = <em>planned, not yet wired</em> (avatar pipeline end-to-end is in development; Layer-1 continual learning during chat is on the roadmap). <strong>Together.ai</strong> sits behind /chat as the personal-track stock-70B fallback. <strong>RunPod</strong> sits behind /chat for on-demand private-GPU inference; the image is pulled from a private ghcr.io registry via stored auth (never goes public during experimentation). The <strong>two-track separation</strong> is enforced at the filesystem level: <code>checkpoints_bench/</code> and <code>checkpoints_personal/</code> are different bind mounts and the trainer refuses to cross them.</p>
+        </div>
+
         <h3 class="arch-diagram-toggle open" id="arch-diagram-toggle">
-            System Diagram <span class="arch-toggle-arrow">▶</span>
+            Episodic-Memory Pipeline (zoom-in) <span class="arch-toggle-arrow">▶</span>
         </h3>
         <div class="arch-diagram" id="arch-diagram-wrap">
             <pre class="mermaid">

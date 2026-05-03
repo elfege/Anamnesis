@@ -1612,6 +1612,7 @@ textarea.match-input {
     border-color: var(--accent);
     color: var(--accent);
 }
+.btn-help svg { display: block; width: 11px; height: 11px; }
 
 .help-modal-overlay {
     position: fixed;
