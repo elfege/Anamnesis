@@ -164,15 +164,47 @@ async def status_summary():
 
 @router.get("/api/config/trainers")
 async def trainer_config():
-    """Return trainer endpoint URLs from environment (keeps IPs out of public JS)."""
-    raw = os.environ.get("TRAINER_URLS", "")
-    # Format: "server-1:http://host:3011,server-2:http://host2:3011"
+    """Return trainer endpoint URLs from environment (keeps IPs out of public JS).
+
+    Supports two env shapes:
+    - Legacy: TRAINER_URLS="server-1:http://host:3011,server-2:http://host2:3011"
+    - Per-trainer: TRAINER_URL_SERVER1=http://host:3011 + TRAINER_URL_SERVER2=...
+    The per-trainer shape is what AWS Secrets Manager stores; the legacy shape
+    is preserved for fork-compat.
+    """
     trainers = []
+
+    # Legacy shape first (one env var, comma-sep)
+    raw = os.environ.get("TRAINER_URLS", "")
     for entry in raw.split(","):
         entry = entry.strip()
         if ":" not in entry:
             continue
         name, _, url = entry.partition(":")
+        url = url.strip()
+        if not url.startswith(("http://", "https://")):
+            url = url + (":" if False else "")
+            # Re-join: the partition above split on the FIRST ':' which ate the http:
+            # Actually re-parse: format is "name:URL", URL contains its own ':'
+            # Detect by checking if the part after the first ':' starts with '/'
+            continue
         label = os.environ.get(f"TRAINER_LABEL_{name.upper()}", name)
-        trainers.append({"name": name.strip(), "url": url.strip(), "label": label})
+        trainers.append({"name": name.strip(), "url": url, "label": label})
+
+    # Per-trainer shape: TRAINER_URL_SERVER1, TRAINER_URL_SERVER2, etc.
+    # Add only if not already covered by legacy.
+    seen_urls = {t["url"] for t in trainers}
+    for key, url in os.environ.items():
+        if not key.startswith("TRAINER_URL_") or not url:
+            continue
+        if not url.startswith(("http://", "https://")):
+            continue
+        if url in seen_urls:
+            continue
+        # Derive a name from the env-var suffix: TRAINER_URL_SERVER1 -> server1
+        name = key[len("TRAINER_URL_"):].lower()
+        label = os.environ.get(f"TRAINER_LABEL_{name.upper()}", name)
+        trainers.append({"name": name, "url": url, "label": label})
+        seen_urls.add(url)
+
     return {"trainers": trainers}
