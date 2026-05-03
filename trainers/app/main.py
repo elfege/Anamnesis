@@ -1,4 +1,6 @@
 import os
+import socket
+import time
 
 from fastapi import FastAPI, Query
 from fastapi.responses import StreamingResponse
@@ -14,6 +16,7 @@ import inference
 app = FastAPI(title="Anamnesis Trainer API")
 
 AUTO_LOAD_MODEL = os.environ.get("AUTO_LOAD_MODEL", "true").lower() == "true"
+_SERVICE_START_TS = time.time()
 
 
 @app.on_event("startup")
@@ -34,6 +37,56 @@ async def health():
         "machine": config.MACHINE_NAME,
         "gpu_type": config.GPU_TYPE,
     }
+
+
+@app.get("/host")
+async def host_info():
+    """Honest host introspection probe — used by Anamnesis /api/machines."""
+    info: dict = {
+        "service": "trainer-sidecar",
+        "hostname": socket.gethostname(),
+        "machine_label": config.MACHINE_NAME,
+        "gpu_type_hint": config.GPU_TYPE,
+        "uptime_s": int(time.time() - _SERVICE_START_TS),
+        "ip": None,
+        "gpus": [],
+        "roles": ["trainer-sidecar"],
+    }
+    # Outbound IP discovery (UDP-trick, no packet sent)
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            info["ip"] = s.getsockname()[0]
+        finally:
+            s.close()
+    except Exception:
+        pass
+    # GPU stats — reuse gpu.get_gpu_stats which already handles rocm/cuda
+    try:
+        stats = await gpu.get_gpu_stats(config.GPU_TYPE)
+        if stats:
+            info["gpus"].append({
+                "name": config.GPU_TYPE,
+                "vram_total_mib": int(stats.get("vram_total_mb") or 0),
+                "vram_used_mib":  int(stats.get("vram_used_mb") or 0),
+                "vram_free_mib":  max(
+                    0,
+                    int((stats.get("vram_total_mb") or 0) - (stats.get("vram_used_mb") or 0)),
+                ),
+                "util_pct": int(stats.get("gpu_pct") or 0),
+                "temp_c":   int(stats.get("temp_c") or 0),
+                "power_w":  int(stats.get("power_w") or 0),
+            })
+    except Exception as e:
+        info["gpu_probe_error"] = f"{type(e).__name__}: {str(e)[:120]}"
+    # Active-training hint (cheap)
+    try:
+        if trainer.is_running():
+            info["active_training"] = {"running": True}
+    except Exception:
+        pass
+    return info
 
 
 @app.get("/status")

@@ -59,12 +59,16 @@ import asyncio
 import json
 import logging
 import os
+import socket
 import subprocess
 import sys
 import time
 import uuid
 from pathlib import Path
 from typing import Optional
+
+# Service start time — used by /host to report uptime.
+_SERVICE_START_TS = time.time()
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
@@ -299,6 +303,96 @@ async def health():
         "bassin_size": bassin_size,
         "current_run_id": ServiceState.current_run_id,
     }
+
+
+# ============================================================================
+# /host — host/machine introspection probe
+# ============================================================================
+#
+# Returned by the unified Machines panel on the Anamnesis dashboard. Honest,
+# best-effort: every field is optional, missing fields surface as null on
+# the UI rather than as fake zeros. No external calls — only local probes.
+
+@app.get("/host")
+async def host_info():
+    """
+    Hostname, basic GPU info, role hint, and uptime for this δ² container.
+
+    The Anamnesis app's /api/machines endpoint calls this to populate one
+    card in the Machines tab. It deliberately does NOT include training
+    metrics (those live in /train/status) or model state (/health).
+    """
+    info: dict = {
+        "service": "d2-engine",
+        "service_version": "0.1.0",
+        "hostname": socket.gethostname(),
+        "uptime_s": int(time.time() - _SERVICE_START_TS),
+        "torch_available": HAS_TORCH,
+        "ip": None,
+        "gpus": [],
+        "roles": ["d2-engine"],
+    }
+
+    # Best-effort: outbound IP via UDP-trick (does NOT actually send a packet)
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            info["ip"] = s.getsockname()[0]
+        finally:
+            s.close()
+    except Exception:
+        pass
+
+    # GPU probe — nvidia-smi, fallback to nothing
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "nvidia-smi",
+            "--query-gpu=name,memory.total,memory.free,utilization.gpu,temperature.gpu",
+            "--format=csv,noheader,nounits",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=2.0)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            stdout = b""
+        for line in stdout.decode(errors="replace").strip().splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 5:
+                try:
+                    info["gpus"].append({
+                        "name": parts[0],
+                        "vram_total_mib": int(float(parts[1])),
+                        "vram_free_mib":  int(float(parts[2])),
+                        "util_pct":       int(float(parts[3])),
+                        "temp_c":         int(float(parts[4])),
+                    })
+                except ValueError:
+                    pass
+    except FileNotFoundError:
+        info["gpu_probe_error"] = "nvidia-smi not in PATH"
+    except Exception as e:
+        info["gpu_probe_error"] = f"{type(e).__name__}: {str(e)[:120]}"
+
+    # Active training run (if any) — surface run id + status from ServiceState
+    try:
+        if ServiceState.training_proc is not None:
+            running = ServiceState.training_proc.poll() is None
+            info["active_training"] = {
+                "run_id": ServiceState.current_run_id,
+                "status": "running" if running else (
+                    "completed" if ServiceState.training_proc.returncode == 0 else "failed"
+                ),
+            }
+    except Exception:
+        pass
+
+    return info
 
 
 # ============================================================================

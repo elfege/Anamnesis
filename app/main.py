@@ -26,6 +26,7 @@ from routes.anamnesis_d2 import router as anamnesis_d2_router
 from routes.d2_training import router as d2_training_router
 from routes.runpod import router as runpod_router
 from routes.resources import router as resources_router
+from training_catalog import router as training_catalog_router
 from crawler import load_crawler_config, run_crawl_cycle
 from jsonl_ingester import run_jsonl_ingestion, initialize_ingester, load_jsonl_source_roots
 from scheduler import (
@@ -157,6 +158,7 @@ app.include_router(anamnesis_d2_router)
 app.include_router(d2_training_router)
 app.include_router(runpod_router)
 app.include_router(resources_router)
+app.include_router(training_catalog_router)
 
 
 @app.get("/health")

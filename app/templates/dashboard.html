@@ -662,15 +662,71 @@
     <!-- ─── Training Tab ────────────────────────────────────── -->
     <section id="tab-training" class="tab-content">
         <div class="project-description" style="margin-bottom:16px">
-            <p><strong>What this is:</strong> Each card represents a GPU machine running a trainer container. Training metrics are refreshed every 10 seconds (parsed from the training log). GPU health metrics refresh every 0.5 seconds from a lightweight sidecar endpoint — no log parsing involved, so the polling cost is negligible.</p>
+            <p><strong>What this is:</strong> The Training Catalog below lists every kind of training this project can fire — bench sweeps on permuted-MNIST, the WikiText-103 LM bench, and the personal-corpus LoRA arm — with one-click Start, Re-run last, and a Live Status link. Cards show last-run age, run count, target host, and an honest wall-time + cost estimate.</p>
             <p style="margin-top:6px;color:var(--muted)">
-                <strong>Start</strong> — launch the training script on that machine (uses the last checkpoint if one exists). &nbsp;
-                <strong>Stop</strong> — send SIGTERM; training saves a checkpoint before exiting. &nbsp;
-                <strong>Show Log</strong> — tail the last 60 lines of the training log.
+                <strong>Start</strong> — fire the task on its target host (with confirmation, conflict + duplicate protection). &nbsp;
+                <strong>Re-run last</strong> — same hyperparameters as the most recent run. &nbsp;
+                <strong>View results</strong> — jump to the Personal Benchmarks panel or the run's output dir. &nbsp;
+                <strong>?</strong> — short help on what each task tests.
             </p>
         </div>
 
-        <div id="training-machines"></div>
+        <!-- ── Catalog grid ─────────────────────────────────────── -->
+        <div class="d2-section" id="training-catalog-section">
+            <div class="d2-section-header">
+                <h3>Training Catalog
+                    <span class="d2-help" data-what="the Training Catalog — what each card means, how Start / Re-run differ, and what conflict + duplicate protection guarantees" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                </h3>
+                <span id="training-catalog-state" style="font-size:11px;color:var(--muted);font-family:monospace">loading…</span>
+            </div>
+            <div id="training-catalog-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;margin-top:10px"></div>
+            <div id="training-catalog-toast" style="margin-top:10px;font-size:12px;color:var(--muted);min-height:18px"></div>
+            <p style="margin-top:10px;font-size:11px;color:var(--muted)">
+                Backend: <code>GET /api/training/catalog</code> ·
+                <code>POST /api/training/catalog/{task_id}/start</code> ·
+                <code>POST /api/training/catalog/{task_id}/rerun</code> ·
+                duplicate window 60 s · conflict scope = target host + GPU container.
+            </p>
+        </div>
+
+        <template id="tpl-catalog-card">
+            <div class="catalog-card" style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--card);display:flex;flex-direction:column;gap:6px">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
+                    <strong class="cc-title" style="color:var(--accent);font-size:13px"></strong>
+                    <span class="cc-help d2-help" aria-label="help" role="button" tabindex="0" title="">
+                        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                    </span>
+                </div>
+                <div class="cc-purpose" style="font-size:11.5px;color:var(--muted);line-height:1.45;min-height:34px"></div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px;font-size:10.5px;color:var(--muted);font-family:monospace">
+                    <span class="cc-resource" style="border:1px solid var(--border);padding:1px 6px;border-radius:3px"></span>
+                    <span class="cc-host" style="border:1px solid var(--border);padding:1px 6px;border-radius:3px"></span>
+                    <span class="cc-eta" style="border:1px solid var(--border);padding:1px 6px;border-radius:3px"></span>
+                    <span class="cc-cost" style="border:1px solid var(--border);padding:1px 6px;border-radius:3px"></span>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:2px">
+                    <span class="cc-status-badge" style="font-size:10.5px;font-family:monospace;padding:2px 8px;border-radius:10px;background:#444;color:#ddd">loading…</span>
+                    <a class="cc-view-results" href="#tab-d2" style="font-size:11px;color:var(--accent);text-decoration:none">View results →</a>
+                </div>
+                <div style="display:flex;gap:6px;margin-top:6px">
+                    <button class="cc-btn-start d2-launch-btn" type="button" style="flex:1;font-size:11.5px;padding:6px 10px">▶ Start</button>
+                    <button class="cc-btn-rerun d2-launch-btn" type="button" style="flex:1;font-size:11.5px;padding:6px 10px;background:#444" disabled>↻ Re-run last</button>
+                </div>
+            </div>
+        </template>
+
+        <!-- ── Trainer sidecars (legacy) ────────────────────────── -->
+        <div class="d2-section">
+            <div class="d2-section-header">
+                <h3>Trainer sidecars (legacy)
+                    <span class="d2-help" data-what="why the trainer sidecar cards are kept around even though the d² engine is the new canonical training path" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                </h3>
+            </div>
+            <p style="font-size:12px;color:var(--muted);line-height:1.5;margin:0 0 10px 0">
+                These predate the d² engine; not what new runs use. Each card is a per-machine trainer container with live GPU telemetry and its own Start/Stop. Kept around because some long-running historical jobs still feed metrics through this path.
+            </p>
+            <div id="training-machines"></div>
+        </div>
 
         <template id="tpl-trainer-card">
             <div class="trainer-card">
@@ -716,6 +772,162 @@
                 </div>
             </div>
         </template>
+
+        <!-- ── Training Catalog client-side glue ───────────────── -->
+        <script>
+        (function(){
+            // Catalog UI: renders the catalog grid, wires Start / Re-run with
+            // confirm() prompts, displays toast messages, and refreshes the
+            // status badge + run count every 15s while the Training tab is
+            // open. Conflict / duplicate protection happens server-side; the
+            // UI just surfaces 409 errors as toast text.
+            const fmtMin = (m) => {
+                if (m == null) return '— min';
+                if (m < 60) return `~${m} min`;
+                const h = Math.floor(m / 60), r = m % 60;
+                return r ? `~${h}h ${r}m` : `~${h}h`;
+            };
+            const fmtAge = (s) => {
+                if (s == null) return 'never run';
+                if (s < 60) return `${s}s ago`;
+                if (s < 3600) return `${Math.floor(s/60)}m ago`;
+                if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+                return `${Math.floor(s/86400)}d ago`;
+            };
+            const fmtCost = (usd) => {
+                if (usd == null || usd === 0) return '$0';
+                return '$' + usd.toFixed(2);
+            };
+            function badgeStyle(state) {
+                switch (state) {
+                    case 'running': return 'background:#3a3;color:#fff';
+                    case 'last':    return 'background:#444;color:#ddd';
+                    case 'never':   return 'background:#222;color:#888';
+                    default:        return 'background:#553;color:#fc6';
+                }
+            }
+            function badgeLabel(item) {
+                const s = item.status || {};
+                if (s.state === 'running') return 'running now';
+                if (s.state === 'never')   return 'never run';
+                if (s.state === 'unknown') return 'host unreachable';
+                if (s.state === 'last') {
+                    return `ran ${fmtAge(s.last_run_age_s)} (${s.run_count} runs)`;
+                }
+                return s.state || '—';
+            }
+            async function loadCatalog() {
+                const grid = document.getElementById('training-catalog-grid');
+                const stateEl = document.getElementById('training-catalog-state');
+                if (!grid || !stateEl) return;
+                stateEl.textContent = 'loading…';
+                try {
+                    const r = await fetch('/api/training/catalog');
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    const data = await r.json();
+                    grid.innerHTML = '';
+                    const tpl = document.getElementById('tpl-catalog-card');
+                    (data.items || []).forEach(item => {
+                        const node = tpl.content.firstElementChild.cloneNode(true);
+                        node.querySelector('.cc-title').textContent = item.title;
+                        node.querySelector('.cc-purpose').textContent = item.purpose;
+                        node.querySelector('.cc-resource').textContent = item.resource;
+                        node.querySelector('.cc-host').textContent = item.target_host;
+                        node.querySelector('.cc-eta').textContent = fmtMin(item.estimated_minutes);
+                        node.querySelector('.cc-cost').textContent = fmtCost(item.estimated_cost_usd);
+                        const badge = node.querySelector('.cc-status-badge');
+                        badge.textContent = badgeLabel(item);
+                        badge.setAttribute('style', badge.getAttribute('style').replace(/background:[^;]+;color:[^;]+;?/, '') + ';' + badgeStyle(item.status?.state));
+                        const help = node.querySelector('.cc-help');
+                        help.title = item.help_text || '';
+                        help.setAttribute('data-what', item.help_text || item.title);
+                        const btnStart = node.querySelector('.cc-btn-start');
+                        const btnRerun = node.querySelector('.cc-btn-rerun');
+                        if (item.status?.state === 'running') {
+                            btnStart.disabled = true;
+                            btnStart.title = 'A run is already active on this host';
+                        }
+                        if ((item.history_count || 0) > 0) {
+                            btnRerun.disabled = false;
+                            btnRerun.style.background = '';
+                        }
+                        btnStart.addEventListener('click', () => fireTask(item, 'start'));
+                        btnRerun.addEventListener('click', () => fireTask(item, 'rerun'));
+                        // View results link — points to bench/personal panel as appropriate
+                        const view = node.querySelector('.cc-view-results');
+                        if (item.delegate_kind === 'personal' || item.id.startsWith('personal_')) {
+                            view.href = '#tab-d2';
+                            view.title = 'Jump to δ² tab → Personal Benchmarks panel';
+                        } else {
+                            view.href = '#tab-d2';
+                            view.title = 'Jump to δ² tab → Historical runs / leaderboard';
+                        }
+                        grid.appendChild(node);
+                    });
+                    const dupWin = data.duplicate_window_seconds || 60;
+                    stateEl.textContent = `${(data.items||[]).length} tasks · dup window ${dupWin}s · refreshed ${new Date().toLocaleTimeString()}`;
+                } catch (e) {
+                    stateEl.textContent = 'load failed: ' + (e.message || e);
+                    grid.innerHTML = `<div style="padding:14px;color:var(--muted);font-size:12px">Catalog load failed: ${e.message || e}</div>`;
+                }
+            }
+            async function fireTask(item, action) {
+                const verb = action === 'rerun' ? 'Re-run' : 'Start';
+                const msg = (
+                    `${verb} task: ${item.title}\n\n` +
+                    `• Purpose: ${item.purpose}\n` +
+                    `• Target: ${item.target_host} · ${item.resource}\n` +
+                    `• Wall time: ${fmtMin(item.estimated_minutes)}\n` +
+                    `• Cost: ${fmtCost(item.estimated_cost_usd)}\n\n` +
+                    `Continue?`
+                );
+                if (!confirm(msg)) return;
+                const toast = document.getElementById('training-catalog-toast');
+                toast.style.color = '';
+                toast.textContent = `queueing ${item.id}…`;
+                try {
+                    const url = `/api/training/catalog/${encodeURIComponent(item.id)}/${action}`;
+                    const r = await fetch(url, {
+                        method: 'POST',
+                        headers: {'Content-Type':'application/json'},
+                        body: JSON.stringify({dry_run: false, confirmation_token: 'START'}),
+                    });
+                    const data = await r.json();
+                    if (!r.ok) {
+                        toast.style.color = 'var(--danger, #f66)';
+                        toast.textContent = `✗ ${data.detail || ('HTTP ' + r.status)}`;
+                    } else {
+                        toast.textContent = `✓ ${data.run_id} queued — see Live Training Status (δ² tab) for progress`;
+                        // Refresh badges quickly so the user sees "running now"
+                        setTimeout(loadCatalog, 5000);
+                        setTimeout(loadCatalog, 15000);
+                    }
+                } catch (e) {
+                    toast.style.color = 'var(--danger, #f66)';
+                    toast.textContent = '✗ ' + (e.message || String(e));
+                }
+            }
+            // Polling lifecycle: only poll while the Training tab is active.
+            let pollT = null;
+            function startPoll() {
+                loadCatalog();
+                if (pollT) clearInterval(pollT);
+                pollT = setInterval(loadCatalog, 15000);
+            }
+            function stopPoll() {
+                if (pollT) { clearInterval(pollT); pollT = null; }
+            }
+            const trainingBtn = document.querySelector('.tab[data-tab="training"]');
+            if (trainingBtn) trainingBtn.addEventListener('click', startPoll);
+            document.querySelectorAll('.tab').forEach(btn => {
+                if (btn.dataset.tab && btn.dataset.tab !== 'training') {
+                    btn.addEventListener('click', stopPoll);
+                }
+            });
+            const activeTab = document.querySelector('.tab.active');
+            if (activeTab && activeTab.dataset.tab === 'training') startPoll();
+        })();
+        </script>
 
     </section>
 
