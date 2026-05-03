@@ -31,10 +31,19 @@ services:
     environment:
       D2_SERVICE_PORT: "3015"
       D2_RUNS_DIR: /workspace/runs
+      # Two-track checkpoint directories (CANONICAL — never mix):
+      #   _bench    = public datasets only (WikiText, MNIST). Reproducible.
+      #   _personal = personal corpus only (Anamnesis episodes). NEVER published.
+      # Legacy /workspace/checkpoints kept for back-compat; new code reads _bench/_personal directly.
+      D2_CHECKPOINTS_DIR: /workspace/checkpoints
+      D2_CHECKPOINTS_BENCH_DIR: /workspace/checkpoints_bench
+      D2_CHECKPOINTS_PERSONAL_DIR: /workspace/checkpoints_personal
     volumes:
-      # Persist benchmark outputs across container restarts
       - ./d2_runs:/workspace/runs
-      # Hot-reload code edits (dev convenience — drop in production)
+      # Bind-mount BOTH tracks so they survive container restarts AND stay segregated on the host
+      - ./d2_checkpoints:/workspace/checkpoints                         # legacy (back-compat with current /generate)
+      - ./d2_checkpoints_bench:/workspace/checkpoints_bench             # public-data track (paper-eligible)
+      - ./d2_checkpoints_personal:/workspace/checkpoints_personal       # personal-corpus track (private only)
       - .:/app/d2
     deploy:
       resources:
@@ -59,11 +68,13 @@ services:
     environment:
       D2_SERVICE_PORT: "3015"
       D2_RUNS_DIR: /workspace/runs
+      D2_CHECKPOINTS_DIR: /workspace/checkpoints
       # ROCm-specific: HSA_OVERRIDE_GFX_VERSION sometimes needed for
       # consumer cards (RX 6800 is gfx1030); set if torch can't detect.
       HSA_OVERRIDE_GFX_VERSION: "10.3.0"
     volumes:
       - ./d2_runs:/workspace/runs
+      - ./d2_checkpoints:/workspace/checkpoints
       - .:/app/d2
     devices:
       - /dev/kfd

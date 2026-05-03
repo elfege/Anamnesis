@@ -281,6 +281,10 @@ async def chat_ws(ws: WebSocket):
             if data.get("type") == "stop":
                 if current_task and not current_task.done():
                     current_task.cancel()
+                # Also kill any SadTalker subprocess on the workers — the
+                # local cancel only stops the HTTP awaiter, not the remote
+                # GPU job. Fire-and-forget; don't block the WS.
+                asyncio.create_task(pipeline._sadtalker.cancel_all())
                 continue
 
             # Cancel any previous in-flight run before starting a new one
@@ -290,6 +294,7 @@ async def chat_ws(ws: WebSocket):
                     await current_task
                 except (asyncio.CancelledError, Exception):
                     pass
+                asyncio.create_task(pipeline._sadtalker.cancel_all())
 
             current_task = asyncio.create_task(run_pipeline(data))
             # Don't await here — next iteration immediately listens for more messages
@@ -299,6 +304,8 @@ async def chat_ws(ws: WebSocket):
         logger.info("Avatar WS disconnected")
         if current_task and not current_task.done():
             current_task.cancel()
+        # User closed the avatar page — make sure the worker GPU job dies.
+        asyncio.create_task(pipeline._sadtalker.cancel_all())
     except Exception as e:
         logger.exception("Avatar WS error")
         try:

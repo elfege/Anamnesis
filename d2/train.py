@@ -41,8 +41,13 @@ import json
 import logging
 import math
 import os
+import sys
 import time
 from pathlib import Path
+
+# Allow `from neural_network import …` whether invoked as `python d2/train.py`
+# or `python -m d2.train`. Mirrors d2/experiments/continual.py:142.
+sys.path.insert(0, str(Path(__file__).parent))
 
 import torch
 
@@ -222,8 +227,11 @@ def create_optimizer(model: Transformer, config: TrainingConfig):
             clip_value=config.d2_clip_value,
             w_bar_mode=config.d2_w_bar_mode,
             w_bar_ema_decay=config.d2_w_bar_ema_decay,
+            additive_mode=config.d2_additive_mode,
+            base_lr=config.d2_base_lr,
         )
-        logger.info("Using optimizer: DeltaSquared (δ²)")
+        mode = "additive (path B)" if config.d2_additive_mode else "standalone (path A — falsified)"
+        logger.info(f"Using optimizer: DeltaSquared (δ²) — mode={mode}, base_lr={config.d2_base_lr}, eta={config.d2_eta}")
 
     elif config.optimizer == 'controller':
         # ── Dialectical Controller (Adam ↔ δ² switching) ─────────────
@@ -437,8 +445,9 @@ def train(config: TrainingConfig):
                 # Log a compact summary
                 logger.info(
                     f"step {step:5d} | loss {accum_loss:.4f} | lr {lr:.2e} | "
-                    f"bassin mean={bassin_stats.get('abs_mean', 0):.6f} "
-                    f"max={bassin_stats.get('max', 0):.4f}"
+                    f"bassin abs_mean={bassin_stats.get('abs_mean', 0):.3e} "
+                    f"max={bassin_stats.get('max', 0):.3e} "
+                    f"nonzero={bassin_stats.get('nonzero_frac', 0):.4f}"
                 )
             else:
                 logger.info(
@@ -510,6 +519,15 @@ if __name__ == "__main__":
     parser.add_argument("--d2-gamma", type=float, default=None)
     parser.add_argument("--d2-eta", type=float, default=None)
     parser.add_argument("--d2-w-bar-mode", type=str, default=None)
+    parser.add_argument("--d2-additive-mode", type=str, default=None,
+                        choices=["true", "false", "True", "False", "1", "0"],
+                        help="Path B (additive, true) vs path A (standalone, false). Default: true (additive).")
+    parser.add_argument("--d2-base-lr", type=float, default=None,
+                        help="Gradient-descent step size when additive_mode=true.")
+    parser.add_argument("--output-dir", type=str, default=None,
+                        help="Override config.output_dir (where checkpoints/metrics are saved)")
+    parser.add_argument("--data-dir", type=str, default=None,
+                        help="Override config.data_dir (where prepared token .bin files live)")
 
     args = parser.parse_args()
 
@@ -524,7 +542,7 @@ if __name__ == "__main__":
 
     # Apply CLI overrides
     for key in ['max_steps', 'batch_size', 'n_layer', 'n_head', 'n_embd',
-                'block_size', 'dataset', 'device']:
+                'block_size', 'dataset', 'device', 'output_dir', 'data_dir']:
         cli_val = getattr(args, key.replace('-', '_'), None)
         if cli_val is not None:
             setattr(config, key, cli_val)
@@ -535,5 +553,9 @@ if __name__ == "__main__":
         config.d2_eta = args.d2_eta
     if args.d2_w_bar_mode is not None:
         config.d2_w_bar_mode = args.d2_w_bar_mode
+    if args.d2_additive_mode is not None:
+        config.d2_additive_mode = args.d2_additive_mode.lower() in ("true", "1")
+    if args.d2_base_lr is not None:
+        config.d2_base_lr = args.d2_base_lr
 
     train(config)

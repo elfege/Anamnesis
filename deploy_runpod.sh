@@ -58,9 +58,27 @@ command -v curl >/dev/null 2>&1 || { echo "Error: curl not installed."; exit 1; 
 
 # ── Configuration ──────────────────────────────────────────────────────────
 RUNPOD_API="https://api.runpod.io/graphql"
-DOCKER_IMAGE="${RUNPOD_DOCKER_IMAGE:-elfege/anamnesis-trainer:cuda-latest}"
+PROFILE="${RUNPOD_PROFILE:-trainer}"  # "trainer" (QLoRA, port 3011) | "d2" (δ² engine, port 3015)
 GPU_TYPE_DEFAULT="rtx3090"
 POD_STATE_FILE="$SCRIPT_DIR/.runpod_pod_id"  # tracks the active pod ID locally
+
+# Per-profile defaults (image + port). Override via RUNPOD_DOCKER_IMAGE / RUNPOD_PORT.
+case "$PROFILE" in
+    trainer)
+        DEFAULT_IMAGE="elfege/anamnesis-trainer:cuda-latest"
+        DEFAULT_PORT="3011"
+        ;;
+    d2)
+        DEFAULT_IMAGE="ghcr.io/elfege/anamnesis-d2:cuda-runpod"
+        DEFAULT_PORT="3015"
+        ;;
+    *)
+        echo "Error: unknown RUNPOD_PROFILE='$PROFILE'. Use 'trainer' or 'd2'."
+        exit 1
+        ;;
+esac
+DOCKER_IMAGE="${RUNPOD_DOCKER_IMAGE:-$DEFAULT_IMAGE}"
+SERVICE_PORT="${RUNPOD_PORT:-$DEFAULT_PORT}"
 
 # GPU type IDs (from RunPod's API — these change occasionally; check their docs)
 # We use the most cost-effective spot/community options.
@@ -105,11 +123,13 @@ start_pod() {
     #   - cloudType: COMMUNITY (cheaper, can be preempted) vs SECURE (stable, more expensive)
     #   - gpuTypeId: from the table above
     #   - dockerArgs: command to run on container start
-    #   - ports: which ports to expose (we expose 3011 for the trainer's HTTP API)
+    #   - ports: which port to expose (PROFILE-specific: 3011 for trainer, 3015 for d²)
     #   - volumeInGb: persistent storage (model checkpoints survive across restarts)
+    local pod_name="anamnesis-$PROFILE"
+    local ports_spec="$SERVICE_PORT/http"
     local mutation
-    mutation=$(jq -n --arg gpu "$gpu_id" --arg img "$DOCKER_IMAGE" '{
-        query: "mutation { podFindAndDeployOnDemand(input: { cloudType: COMMUNITY, gpuCount: 1, volumeInGb: 50, containerDiskInGb: 20, gpuTypeId: \"\($gpu)\", name: \"anamnesis-trainer\", imageName: \"\($img)\", ports: \"3011/http\", env: [{ key: \"AUTO_LOAD_MODEL\", value: \"true\" }] }) { id desiredStatus runtime { ports { ip publicPort privatePort isIpPublic } } } }"
+    mutation=$(jq -n --arg gpu "$gpu_id" --arg img "$DOCKER_IMAGE" --arg name "$pod_name" --arg ports "$ports_spec" '{
+        query: "mutation { podFindAndDeployOnDemand(input: { cloudType: COMMUNITY, gpuCount: 1, volumeInGb: 50, containerDiskInGb: 20, gpuTypeId: \"\($gpu)\", name: \"\($name)\", imageName: \"\($img)\", ports: \"\($ports)\", env: [{ key: \"AUTO_LOAD_MODEL\", value: \"true\" }] }) { id desiredStatus runtime { ports { ip publicPort privatePort isIpPublic } } } }"
     }')
 
     local response
@@ -224,9 +244,12 @@ register_worker() {
     local label="$2"
     # Append to .env so future container restarts pick it up.
     if [[ -f "$ENV_FILE" ]]; then
-        # Remove any prior NANOGPT_URLS_RUNPOD line, then append
-        grep -v '^NANOGPT_URLS_RUNPOD=' "$ENV_FILE" > "$ENV_FILE.tmp" || true
-        echo "NANOGPT_URLS_RUNPOD=$url" >> "$ENV_FILE.tmp"
+        # Remove any prior NANOGPT_URLS_RUNPOD / RUNPOD_ENDPOINT_URL lines,
+        # then append. RUNPOD_ENDPOINT_URL is read by app/routes/chat.py's
+        # _probe_runpod() so the chat dropdown sees the new pod immediately.
+        grep -v -e '^NANOGPT_URLS_RUNPOD=' -e '^RUNPOD_ENDPOINT_URL=' "$ENV_FILE" > "$ENV_FILE.tmp" || true
+        echo "NANOGPT_URLS_RUNPOD=$url"   >> "$ENV_FILE.tmp"
+        echo "RUNPOD_ENDPOINT_URL=$url"   >> "$ENV_FILE.tmp"
         mv "$ENV_FILE.tmp" "$ENV_FILE"
     fi
 
@@ -239,9 +262,9 @@ register_worker() {
 
 unregister_worker() {
     local pod_id="$1"
-    # Remove the NANOGPT_URLS_RUNPOD line from .env
+    # Remove the NANOGPT_URLS_RUNPOD + RUNPOD_ENDPOINT_URL lines from .env
     if [[ -f "$ENV_FILE" ]]; then
-        grep -v '^NANOGPT_URLS_RUNPOD=' "$ENV_FILE" > "$ENV_FILE.tmp" || true
+        grep -v -e '^NANOGPT_URLS_RUNPOD=' -e '^RUNPOD_ENDPOINT_URL=' "$ENV_FILE" > "$ENV_FILE.tmp" || true
         mv "$ENV_FILE.tmp" "$ENV_FILE"
     fi
 
@@ -257,6 +280,14 @@ case "${1:-}" in
     status) status_pod ;;
     *)
         echo "Usage: $0 {start [--gpu rtx3090|rtx4090|a100|h100] | stop | status}"
+        echo ""
+        echo "Profile selection (env var):"
+        echo "  RUNPOD_PROFILE=trainer  → QLoRA trainer image, port 3011 (default)"
+        echo "  RUNPOD_PROFILE=d2       → δ² engine image (ghcr.io/elfege/anamnesis-d2:cuda-runpod), port 3015"
+        echo ""
+        echo "Examples:"
+        echo "  RUNPOD_PROFILE=d2 ./deploy_runpod.sh start --gpu rtx3090"
+        echo "  RUNPOD_PROFILE=d2 ./deploy_runpod.sh status"
         exit 1
         ;;
 esac

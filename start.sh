@@ -183,15 +183,42 @@ do_env_prep() {
 
 	# AWS secrets
 	if command -v aws &>/dev/null && [[ -z "${SKIP_AWS_PULL:-}" ]]; then
-		start_spinner "" "${CYAN}Pulling secrets from AWS…${NC}"
+		# Source bash_utils so we can call the canonical vault helpers
+		# (ensure_profile + _mobius_vault_inject prompt for the MOBIUS.VAULT
+		# passphrase; aws_auth / pull_aws_secrets do the actual API calls).
+		# shellcheck disable=SC1090
+		[[ -f "$HOME/.bash_utils" ]] && source "$HOME/.bash_utils" >/dev/null 2>&1 || true
+
 		if [[ "$TEST" == "true" ]]; then
-			echo -e "${YELLOW}[TEST]${NC} would run: $SCRIPT_DIR/pull_env.sh 1"
+			echo -e "${YELLOW}[TEST]${NC} would prompt MOBIUS.VAULT passphrase + run pull_env.sh 1"
 		else
-			"$SCRIPT_DIR/pull_env.sh" 1 &>/dev/null || {
+			# Step 1: unlock vault (this is where the passphrase prompt MUST appear).
+			# stop_spinner first so the prompt is visible on the bare terminal.
+			# We do NOT redirect stderr here — the prompt is on stderr.
+			if declare -F ensure_profile >/dev/null 2>&1; then
 				stop_spinner
-				echo -e "${YELLOW}⚠ Could not pull ANAMNESIS-Secrets — using existing .env${NC}"
-			}
-			pull_aws_secrets ELFEGE-secrets 1 &>/dev/null && export ANTHROPIC_API_KEY || true
+				echo -e "${CYAN}Unlocking MOBIUS.VAULT for AWS access…${NC}"
+				if ! ensure_profile 1; then
+					echo -e "${YELLOW}⚠ Vault unlock failed/declined — using existing .env${NC}"
+				else
+					start_spinner "" "${CYAN}Pulling ANAMNESIS-Secrets from AWS…${NC}"
+					"$SCRIPT_DIR/pull_env.sh" 1 >/dev/null 2>&1 || {
+						stop_spinner
+						echo -e "${YELLOW}⚠ Could not pull ANAMNESIS-Secrets — using existing .env${NC}"
+					}
+					# Anthropic key from ELFEGE-secrets (silent — non-fatal if absent)
+					declare -F pull_aws_secrets >/dev/null 2>&1 && \
+						pull_aws_secrets ELFEGE-secrets 1 >/dev/null 2>&1 && \
+						export ANTHROPIC_API_KEY || true
+				fi
+			else
+				# bash_utils not available — fall back to direct call.
+				start_spinner "" "${CYAN}Pulling secrets from AWS…${NC}"
+				"$SCRIPT_DIR/pull_env.sh" 1 >/dev/null 2>&1 || {
+					stop_spinner
+					echo -e "${YELLOW}⚠ Could not pull ANAMNESIS-Secrets (no vault helper) — using existing .env${NC}"
+				}
+			fi
 		fi
 		stop_spinner
 	fi
@@ -324,13 +351,44 @@ action_d2() {
 			continue
 		fi
 
-		# RunPod: the d² container runs ON the pod, not via SSH from here.
-		# We rely on the pod's own startup (deploy_runpod.sh handles it).
-		# All we do is verify reachability via worker_registry and skip the
-		# `docker compose up`. Status check happens in action_d2_register.
+		# RunPod: the d² container runs ON the pod, not via SSH. start.sh OWNS
+		# pod lifecycle — if no pod is registered, prompt the user (cost
+		# disclosure) and call deploy_runpod.sh start. Idempotent: if a pod is
+		# already running and reachable, skip straight to registration.
 		if [[ "$where" == "runpod" ]]; then
-			echo -e "${DIM}  $handle: pod self-managed (deploy_runpod.sh start)${NC}"
-			started_any=true
+			local pod_state="$SCRIPT_DIR/.runpod_pod_id"
+			if [[ -f "$pod_state" ]] && host_available "runpod"; then
+				echo -e "${DIM}  $handle: existing pod $(cat "$pod_state" | head -c 12) reachable — skipping start${NC}"
+				started_any=true
+				continue
+			fi
+			# No pod (or pod state stale). Confirm cost before spending.
+			local gpu_pick="${RUNPOD_GPU:-rtx3090}"
+			local hourly
+			case "$gpu_pick" in
+				rtx3090) hourly="~\$0.30/hr" ;;
+				rtx4090) hourly="~\$0.45/hr" ;;
+				a100)    hourly="~\$1.19/hr" ;;
+				h100)    hourly="~\$2.69/hr" ;;
+				*)       hourly="(unknown)" ;;
+			esac
+			echo -e "${YELLOW}  RunPod pod will be created — billing starts immediately ($gpu_pick, $hourly).${NC}"
+			if [[ "${RUNPOD_NO_CONFIRM:-}" != "true" ]]; then
+				read -r -p "  Proceed? [y/N] " confirm
+				if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+					echo -e "${DIM}  $handle: skipped (user declined)${NC}"
+					continue
+				fi
+			fi
+			start_spinner "" "${CYAN}Spinning RunPod pod (gpu=$gpu_pick) — this can take 3-5 min${NC}"
+			if RUNPOD_PROFILE=d2 "$SCRIPT_DIR/deploy_runpod.sh" start --gpu "$gpu_pick"; then
+				stop_spinner
+				echo -e "${GREEN}  $handle: pod up + registered${NC}"
+				started_any=true
+			else
+				stop_spinner
+				echo -e "${RED}  $handle: pod creation FAILED — see deploy_runpod.sh output${NC}"
+			fi
 			continue
 		fi
 

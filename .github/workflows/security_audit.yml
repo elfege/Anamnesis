@@ -1,0 +1,74 @@
+# .github/workflows/security_audit.yml
+#
+# Runs the canonical security audit (scripts/security_audit.sh) on every push
+# and pull request. Server-side, cannot be bypassed by `git push --no-verify`.
+#
+# This is the THIRD layer of defense:
+#   1. .dockerignore — physically blocks sensitive paths from entering build contexts
+#   2. .git/hooks/pre-push (local) — blocks pushes locally when scripts/security_check.sh exists
+#   3. THIS workflow (server-side) — catches everything else, runs on every contributor's push
+#
+# Failure modes caught:
+#   - COPY of sensitive paths in any Dockerfile
+#   - Missing .dockerignore where a Dockerfile exists
+#   - Secret tokens (AWS, GitHub, RunPod, Anthropic, OpenAI, Together, HF, Slack, PEM, OpenSSH) in any file
+#   - Model weight files (.pt, .safetensors, .gguf, .ckpt) in git
+#
+# To extend: edit scripts/security_audit.sh — this workflow just runs it.
+
+name: security-audit
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  # Manual trigger so contributors can re-run after fixing
+  workflow_dispatch:
+
+# Don't grant any tokens — this is a read-only audit, no need for write perms
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel in-progress audits on a branch when a newer push lands
+  group: security-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Security audit (canonical rules)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the full history (audit needs git diff range)
+        uses: actions/checkout@v4
+        with:
+          # Need full history for `git diff HEAD~1..HEAD` and PR comparisons
+          fetch-depth: 0
+
+      - name: Make audit script executable
+        run: chmod +x scripts/security_audit.sh
+
+      - name: Show what will be scanned
+        run: |
+          echo "Repo: ${{ github.repository }}"
+          echo "Ref:  ${{ github.ref }}"
+          echo "Event: ${{ github.event_name }}"
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "PR base: ${{ github.event.pull_request.base.sha }}"
+            echo "PR head: ${{ github.event.pull_request.head.sha }}"
+          fi
+
+      - name: Run audit (full repo scope)
+        run: ./scripts/security_audit.sh --scope=all
+
+      - name: Run audit (PR diff scope, if applicable)
+        if: github.event_name == 'pull_request'
+        run: |
+          # Also run scoped to just the PR diff for a clearer failure location
+          ./scripts/security_audit.sh --scope=range:${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+
+      - name: Annotate failures (helpful PR comments)
+        if: failure()
+        run: |
+          echo "::error title=Security audit failed::See workflow logs above. Fix the violations or update scripts/security_audit.sh canonical rules with justification."

@@ -3,15 +3,46 @@ import asyncio
 import glob
 import logging
 import os
+import signal
 from pathlib import Path
 
 import config
 
 logger = logging.getLogger("worker.sadtalker")
 
+# In-flight subprocesses, so /sadtalker/cancel can kill them remotely.
+_running: set[asyncio.subprocess.Process] = set()
+
 
 async def is_ready() -> bool:
     return Path(config.SADTALKER_DIR).exists() and Path(config.SADTALKER_CHECKPOINT_DIR).exists()
+
+
+async def cancel_all() -> int:
+    """Kill every running SadTalker subprocess. Returns the count killed."""
+    procs = list(_running)
+    killed = 0
+    for proc in procs:
+        if proc.returncode is not None:
+            continue
+        try:
+            # SIGTERM the whole process group so torch/CUDA workers die too
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            killed += 1
+        except ProcessLookupError:
+            pass
+        except Exception as e:
+            logger.warning(f"SIGTERM pid={proc.pid} failed: {e}")
+    # Give them a moment, then SIGKILL stragglers
+    if killed:
+        await asyncio.sleep(0.5)
+        for proc in procs:
+            if proc.returncode is None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+    return killed
 
 
 async def animate(audio_path: str, image_path: str, output_dir: str) -> str:
@@ -56,11 +87,28 @@ async def animate(audio_path: str, image_path: str, output_dir: str) -> str:
         stderr=asyncio.subprocess.PIPE,
         env=env,
         cwd=output_dir,
+        # Own process group so cancel_all can SIGTERM the whole tree
+        # (python3 → torch helpers → ffmpeg) in one shot.
+        start_new_session=True,
     )
-    stdout, stderr = await proc.communicate()
+    _running.add(proc)
+    try:
+        stdout, stderr = await proc.communicate()
+    except asyncio.CancelledError:
+        # Host disconnected mid-request; reap so we don't leak GPU memory
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except Exception:
+            pass
+        raise
+    finally:
+        _running.discard(proc)
 
     if proc.returncode != 0:
         tail = stderr.decode()[-500:]
+        # -15 (SIGTERM) / -9 (SIGKILL) means we cancelled — surface a clear msg
+        if proc.returncode in (-signal.SIGTERM, -signal.SIGKILL):
+            raise RuntimeError(f"SadTalker cancelled (signal {-proc.returncode})")
         raise RuntimeError(f"SadTalker failed (rc={proc.returncode}): {tail}")
 
     mp4s = sorted(

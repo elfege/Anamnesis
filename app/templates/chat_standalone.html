@@ -206,8 +206,24 @@
             background: rgba(63,185,80,0.08);
         }
 
-        .backend-badge.claude { border-color: var(--purple); color: var(--purple); background: rgba(188,140,255,0.08); }
-        .backend-badge.cli    { border-color: var(--warning); color: var(--warning); background: rgba(210,153,34,0.08); }
+        .backend-badge.claude    { border-color: var(--purple); color: var(--purple); background: rgba(188,140,255,0.08); }
+        .backend-badge.cli       { border-color: var(--warning); color: var(--warning); background: rgba(210,153,34,0.08); }
+        .backend-badge.together  { border-color: var(--accent); color: var(--accent); background: rgba(88,166,255,0.08); }
+        .backend-badge.runpod    { border-color: var(--warning); color: var(--warning); background: rgba(210,153,34,0.08); }
+        .backend-badge.d2        { border-color: var(--purple); color: var(--purple); background: rgba(188,140,255,0.08); }
+
+        /* Resource selector — single dropdown listing every reachable backend */
+        #sc-resource-select { min-width: 240px; max-width: 340px; }
+        #sc-resource-select option:disabled { color: var(--text-dim); font-style: italic; }
+        .resource-summary {
+            font-size: 0.72em;
+            color: var(--text-dim);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 320px;
+        }
+        .resource-summary strong { color: var(--text); font-weight: 600; }
 
         select, input[type="text"] {
             background: var(--bg-card);
@@ -360,6 +376,71 @@
             text-decoration: none;
         }
         a.back-link:hover { color: var(--accent); }
+
+        /* ── Terminal panel (live inference state) ───────────────── */
+        .term-panel {
+            border-top: 1px solid var(--border);
+            background: #07090c;
+            color: var(--text-dim);
+            font-family: "JetBrains Mono", "Fira Code", Consolas, monospace;
+            font-size: 0.72em;
+            line-height: 1.45;
+            max-height: 140px;
+            min-height: 38px;
+            overflow-y: auto;
+            padding: 6px 12px;
+            transition: max-height 0.15s ease;
+        }
+        .term-panel.collapsed { max-height: 24px; min-height: 24px; padding: 4px 12px; overflow: hidden; }
+        .term-header {
+            display: flex; align-items: center; justify-content: space-between;
+            gap: 8px; cursor: pointer; user-select: none;
+            padding: 2px 0; opacity: 0.85;
+        }
+        .term-header strong { color: var(--text); font-size: 0.95em; letter-spacing: 0.04em; }
+        .term-toggle { color: var(--text-dim); font-size: 0.85em; }
+        .term-lines { padding: 4px 0 2px 0; }
+        .term-line { white-space: pre; opacity: 0.78; }
+        .term-line .ts { color: var(--text-dim); opacity: 0.55; margin-right: 6px; }
+        .term-line.ev-connected { color: var(--accent); opacity: 0.95; }
+        .term-line.ev-info      { color: var(--text-dim); }
+        .term-line.ev-generating { color: var(--success); opacity: 0.85; }
+        .term-line.ev-waiting    { color: var(--warning); opacity: 0.85; }
+        .term-line.ev-complete   { color: var(--accent); opacity: 0.95; }
+        .term-line.ev-error      { color: var(--danger); opacity: 1; }
+        .term-line.ev-warn       { color: var(--warning); opacity: 0.95; }
+
+        /* ── RunPod lifecycle controls (chat toolbar) ────────────── */
+        .runpod-ctl {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 2px 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg-card);
+            font-size: 0.78em;
+            color: var(--text-dim);
+        }
+        .runpod-ctl strong { color: var(--text); font-weight: 600; }
+        .runpod-ctl.live { border-color: var(--success); }
+        .runpod-ctl.live strong { color: var(--success); }
+        .runpod-ctl.busy { border-color: var(--warning); }
+        .runpod-ctl.busy strong { color: var(--warning); }
+        .runpod-ctl select {
+            padding: 1px 4px;
+            font-size: 0.92em;
+        }
+        .runpod-ctl .btn {
+            padding: 2px 8px;
+            font-size: 0.92em;
+        }
+        .runpod-ctl .meter {
+            font-family: "JetBrains Mono", "Fira Code", Consolas, monospace;
+            color: var(--text);
+            white-space: nowrap;
+        }
+        .runpod-ctl .meter .dim { color: var(--text-dim); }
     </style>
 </head>
 <body>
@@ -370,6 +451,9 @@
         <div class="chat-brand">ANAMNESIS<span>.CHAT</span></div>
     </div>
     <div class="header-controls">
+        <select id="sc-resource-select" title="Inference resource (where the model runs)">
+            <option value="">Loading resources…</option>
+        </select>
         <span id="sc-backend-badge" class="backend-badge">Ollama</span>
         <select id="sc-model-select"></select>
         <button class="btn" id="sc-btn-cli" title="Claude CLI (subscription, $0)">CLI $0</button>
@@ -397,8 +481,38 @@
         <div class="chat-toolbar" id="sc-toolbar">
             <span style="font-size:0.78em;color:var(--text-dim)" id="sc-session-label">New chat</span>
             <span id="sc-timer-badge" style="font-size:0.78em;color:var(--warning);display:none;"></span>
+            <span class="resource-summary" id="sc-resource-summary"></span>
+
+            <!-- ── RunPod lifecycle widget ────────────────────────── -->
+            <!-- Two states, mutually exclusive:
+                  · #rp-down: shown when no pod tracked. Has GPU dropdown + ▶ Spin button.
+                  · #rp-up:   shown when a pod is tracked. Live cost meter + ■ Stop button.
+                 The widget self-refreshes every 5s via /api/runpod/cost-meter. -->
+            <div class="runpod-ctl" id="rp-ctl" title="RunPod GPU pod lifecycle">
+                <span id="rp-down" style="display:flex;align-items:center;gap:6px">
+                    <strong>RunPod</strong>
+                    <span style="opacity:.7">·</span>
+                    <select id="rp-gpu" title="GPU type"></select>
+                    <button class="btn" id="rp-btn-start" title="Spin up a new pod">▶ Spin</button>
+                </span>
+                <span id="rp-up" style="display:none;align-items:center;gap:6px">
+                    <strong>RunPod up</strong>
+                    <span class="meter" id="rp-meter"><span class="dim">…</span></span>
+                    <button class="btn" id="rp-btn-stop" title="Terminate the pod (stops billing)">■ Stop</button>
+                </span>
+            </div>
         </div>
         <div class="messages" id="sc-messages"></div>
+
+        <!-- ── Live terminal: inference state from SSE heartbeats ── -->
+        <div class="term-panel collapsed" id="sc-terminal">
+            <div class="term-header" id="sc-term-header">
+                <strong>terminal</strong>
+                <span class="term-toggle" id="sc-term-toggle">▸ expand</span>
+            </div>
+            <div class="term-lines" id="sc-term-lines"></div>
+        </div>
+
         <div class="input-row">
             <textarea id="sc-input" rows="2" placeholder="Message Anamnesis… (Enter to send, Shift+Enter for newline)"></textarea>
             <button class="btn-send" id="sc-btn-send">Send</button>
@@ -410,6 +524,56 @@
 <script>
 $(function () {
 
+    // ── Terminal panel (live SSE state) ────────────────────────────
+    // Renders heartbeat events from /api/chat/stream as dim status lines.
+    // Auto-expands when activity starts; warns when no heartbeat for >5s.
+    var term = {
+        last_event_at: 0,
+        watchdog: null,
+        stream_started_at: 0,
+        lines_max: 200,
+    };
+    function term_pad(n) { return n < 10 ? "0" + n : "" + n; }
+    function term_ts() {
+        var d = new Date();
+        return term_pad(d.getHours()) + ":" + term_pad(d.getMinutes()) + ":" + term_pad(d.getSeconds());
+    }
+    function term_emit(kind, text) {
+        var $box = $("#sc-term-lines");
+        var line = $('<div class="term-line ev-' + kind + '"></div>')
+            .append('<span class="ts">[' + term_ts() + ']</span>')
+            .append(document.createTextNode(text));
+        $box.append(line);
+        // Trim
+        var lines = $box.children();
+        if (lines.length > term.lines_max) {
+            lines.slice(0, lines.length - term.lines_max).remove();
+        }
+        $box[0].scrollTop = $box[0].scrollHeight;
+        term.last_event_at = Date.now();
+    }
+    function term_expand() { $("#sc-terminal").removeClass("collapsed"); $("#sc-term-toggle").text("▾ collapse"); }
+    function term_collapse() { $("#sc-terminal").addClass("collapsed"); $("#sc-term-toggle").text("▸ expand"); }
+    function term_clear() { $("#sc-term-lines").empty(); }
+    function term_start_watchdog() {
+        if (term.watchdog) clearInterval(term.watchdog);
+        term.watchdog = setInterval(function () {
+            if (!state.streaming) return;
+            var quiet_ms = Date.now() - term.last_event_at;
+            if (quiet_ms > 5000) {
+                term_emit("warn", "no activity for " + (quiet_ms / 1000).toFixed(1) + "s — backend may be unresponsive");
+                // Reset to avoid spamming every tick
+                term.last_event_at = Date.now();
+            }
+        }, 2500);
+    }
+    function term_stop_watchdog() {
+        if (term.watchdog) { clearInterval(term.watchdog); term.watchdog = null; }
+    }
+    $("#sc-term-header").on("click", function () {
+        if ($("#sc-terminal").hasClass("collapsed")) { term_expand(); } else { term_collapse(); }
+    });
+
     // ── State ──────────────────────────────────────────────────────
     var state = {
         session_id: null,
@@ -419,6 +583,13 @@ $(function () {
         claude_enabled: false,
         cli_enabled: false,
         abort_controller: null,
+        // Inference-resource selector (Phase 7.2). When the user picks
+        // a specific resource from the dropdown, we pin the request to
+        // that worker — no failover. resource_id is the catalog row id;
+        // worker_url (when set) is sent in the chat-stream POST body.
+        resource_id: null,
+        worker_url: null,
+        resources: [],   // last-fetched catalog
     };
 
     // ── Helpers ────────────────────────────────────────────────────
@@ -482,46 +653,160 @@ $(function () {
         });
     }
 
-    // ── Models ─────────────────────────────────────────────────────
-    $.getJSON("/api/chat/models", function (data) {
+    // ── Resource selector + Models (Phase 7.2) ─────────────────────
+    // ONE dropdown lists every reachable inference target (ollama-server,
+    // ollama-office, runpod, together, claude API, claude CLI, d²).
+    // Picking a resource:
+    //   - sets state.backend = resource.kind
+    //   - sets state.worker_url = resource.url (so request pins to that worker)
+    //   - repopulates the model dropdown with that resource's models
+    //   - persists choice to localStorage so reloads remember it
+    //
+    // Backwards-compat: legacy /api/chat/models endpoint is still used as
+    // a fallback if the resources endpoint fails for any reason.
+    var LS_KEY = "anamnesis.chat.resource_id";
+
+    function update_resource_summary() {
+        var r = state.resources.find(function (x) { return x.id === state.resource_id; });
+        var $s = $("#sc-resource-summary");
+        if (!r) { $s.text(""); return; }
+        var status = r.reachable ? "✓" : "✗";
+        var note = r.note ? " · " + r.note : (r.error ? " · " + r.error : "");
+        $s.html("Resource: <strong>" + esc(r.label) + "</strong> " + status +
+                " · Model: <strong>" + esc(state.model || "(none)") + "</strong>" +
+                "<span style='color:var(--text-dim)'>" + esc(note) + "</span>");
+    }
+
+    function populate_models_for(resource) {
         var $sel = $("#sc-model-select");
         $sel.empty();
-        (data.models || []).forEach(function (m) {
-            var opt = $("<option>").val(m).text(m);
-            if (m === data.default) opt.prop("selected", true);
-            $sel.append(opt);
+        var models = (resource && resource.models) || [];
+        if (!models.length) {
+            $sel.append($("<option>").val("").text("(no models)"));
+            state.model = null;
+        } else {
+            models.forEach(function (m) {
+                $sel.append($("<option>").val(m).text(m));
+            });
+            state.model = models[0];
+        }
+        update_badge();
+        update_resource_summary();
+    }
+
+    function apply_resource(resource_id) {
+        var r = state.resources.find(function (x) { return x.id === resource_id; });
+        if (!r) return;
+        state.resource_id = r.id;
+        state.backend = r.kind;
+        state.worker_url = r.url || null;
+        populate_models_for(r);
+        try { localStorage.setItem(LS_KEY, r.id); } catch (e) {}
+    }
+
+    function load_resources() {
+        $.getJSON("/api/chat/inference-resources", function (data) {
+            state.resources = data.resources || [];
+            var $rs = $("#sc-resource-select");
+            $rs.empty();
+            state.resources.forEach(function (r) {
+                var label = r.label;
+                if (r.reachable) {
+                    label = "✓ " + label + " (" + (r.models || []).length + ")";
+                } else {
+                    label = "✗ " + label;
+                }
+                var $opt = $("<option>").val(r.id).text(label);
+                if (!r.reachable) {
+                    // Allow selection but visually grey it; tooltip shows note/err
+                    $opt.css("color", "var(--text-dim)");
+                }
+                if (r.note || r.error) {
+                    $opt.attr("title", r.note || r.error);
+                }
+                $rs.append($opt);
+            });
+
+            // Pick previous selection from localStorage, else first reachable.
+            var saved = null;
+            try { saved = localStorage.getItem(LS_KEY); } catch (e) {}
+            var pick = state.resources.find(function (x) { return x.id === saved; })
+                || state.resources.find(function (x) { return x.reachable; })
+                || state.resources[0];
+            if (pick) {
+                $rs.val(pick.id);
+                apply_resource(pick.id);
+            }
+        }).fail(function () {
+            // Fallback to legacy models endpoint
+            $.getJSON("/api/chat/models", function (data) {
+                var $sel = $("#sc-model-select");
+                $sel.empty();
+                (data.models || []).forEach(function (m) {
+                    var opt = $("<option>").val(m).text(m);
+                    if (m === data.default) opt.prop("selected", true);
+                    $sel.append(opt);
+                });
+                state.model = $sel.val();
+            });
+            $("#sc-resource-select").empty().append($("<option>").val("").text("(catalog unavailable — using ollama default)"));
         });
-        state.model = $sel.val();
+    }
+
+    $("#sc-resource-select").on("change", function () {
+        apply_resource($(this).val());
     });
 
-    $("#sc-model-select").on("change", function () { state.model = $(this).val(); });
+    $("#sc-model-select").on("change", function () {
+        state.model = $(this).val();
+        update_resource_summary();
+    });
 
     // ── Backend toggles ────────────────────────────────────────────
     function update_badge() {
         var $b = $("#sc-backend-badge");
-        if (state.backend === "claude_cli") {
+        var kind = state.backend;
+        $("#sc-btn-cli").removeClass("active");
+        $("#sc-btn-claude").removeClass("active");
+        if (kind === "claude_cli") {
             $b.attr("class", "backend-badge cli").text("Claude CLI");
             $("#sc-btn-cli").addClass("active");
-            $("#sc-btn-claude").removeClass("active");
-        } else if (state.backend === "claude") {
+        } else if (kind === "claude") {
             $b.attr("class", "backend-badge claude").text("Claude API");
             $("#sc-btn-claude").addClass("active");
-            $("#sc-btn-cli").removeClass("active");
+        } else if (kind === "together") {
+            $b.attr("class", "backend-badge together").text("Together.ai");
+        } else if (kind === "runpod") {
+            $b.attr("class", "backend-badge runpod").text("RunPod");
+        } else if (kind === "d2") {
+            $b.attr("class", "backend-badge d2").text("δ²");
         } else {
             $b.attr("class", "backend-badge").text("Ollama");
-            $("#sc-btn-claude").removeClass("active");
-            $("#sc-btn-cli").removeClass("active");
         }
     }
 
     $("#sc-btn-claude").on("click", function () {
-        state.backend = state.backend === "claude" ? "ollama" : "claude";
-        update_badge();
+        // Toggle to claude API; clear worker_url (claude API has no per-worker pin)
+        if (state.backend === "claude") {
+            // Re-apply current resource selection
+            apply_resource(state.resource_id);
+        } else {
+            state.backend = "claude";
+            state.worker_url = null;
+            update_badge();
+            update_resource_summary();
+        }
     });
 
     $("#sc-btn-cli").on("click", function () {
-        state.backend = state.backend === "claude_cli" ? "ollama" : "claude_cli";
-        update_badge();
+        if (state.backend === "claude_cli") {
+            apply_resource(state.resource_id);
+        } else {
+            state.backend = "claude_cli";
+            state.worker_url = null;
+            update_badge();
+            update_resource_summary();
+        }
     });
 
     // ── Sessions ───────────────────────────────────────────────────
@@ -661,6 +946,19 @@ $(function () {
         var stream_id = "sm-" + Date.now();
         append_msg("assistant", "▋", stream_id);
 
+        // Hoisted so finish() can read these even if the fetch rejects
+        // before the .then(resp) closure runs.
+        var accumulated = "";
+        var last_token_count_logged = 0;
+
+        // Reset terminal for this turn
+        term_clear();
+        term_expand();
+        term.stream_started_at = Date.now();
+        term.last_event_at = Date.now();
+        term_emit("info", "POST /api/chat/stream backend=" + state.backend + (state.model ? " model=" + state.model : ""));
+        term_start_watchdog();
+
         fetch("/api/chat/stream", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
@@ -670,39 +968,76 @@ $(function () {
                 backend: state.backend,
                 model: state.model,
                 session_id: state.session_id,
+                worker_url: state.worker_url || null,
                 top_k: 5,
             }),
         }).then(function (resp) {
             var reader = resp.body.getReader();
             var decoder = new TextDecoder();
             var buffer = "";
-            var accumulated = "";
 
             function read_chunk() {
                 reader.read().then(function (result) {
                     if (result.done) { finish(); return; }
                     buffer += decoder.decode(result.value, {stream: true});
+                    // SSE messages are separated by blank lines; parse line-by-line
                     var lines = buffer.split("\n");
                     buffer = lines.pop();
                     lines.forEach(function (line) {
+                        // event: lines describe the next data: payload's type
+                        // (we use them for `event: heartbeat`); tokens are just data:
                         if (!line.startsWith("data:")) return;
                         var raw = line.slice(5).trim();
                         if (!raw) return;
                         try {
                             var ev = JSON.parse(raw);
+                            if (ev.heartbeat) {
+                                var hb = ev.heartbeat;
+                                var elapsed_s = (hb.elapsed_ms / 1000).toFixed(1);
+                                if (hb.stage === "connected") {
+                                    term_emit("connected", "stream connected · backend=" + (hb.backend || "?") + (hb.model ? " model=" + hb.model : ""));
+                                } else if (hb.stage === "waiting") {
+                                    term_emit("waiting", "still waiting on backend… elapsed=" + elapsed_s + "s");
+                                } else if (hb.stage === "generating") {
+                                    term_emit("generating", "generating tokens (" + hb.tokens_seen + ") elapsed=" + elapsed_s + "s");
+                                } else if (hb.stage === "complete") {
+                                    term_emit("complete", "complete (" + hb.tokens_seen + " tokens, " + elapsed_s + "s)");
+                                } else if (hb.stage === "error") {
+                                    term_emit("error", "error stage · elapsed=" + elapsed_s + "s");
+                                } else {
+                                    term_emit("info", "heartbeat " + hb.stage + " elapsed=" + elapsed_s + "s");
+                                }
+                                term.last_event_at = Date.now();
+                                return;
+                            }
                             if (ev.token) {
                                 accumulated += ev.token;
                                 $("#" + stream_id + " .msg-bubble").text(accumulated + "▋");
                                 scroll_bottom();
+                                term.last_event_at = Date.now();
+                                // Periodic terminal echo so the user sees real-time progress
+                                var n = accumulated.length;
+                                if (n - last_token_count_logged >= 80) {
+                                    last_token_count_logged = n;
+                                    var elapsed_s = ((Date.now() - term.stream_started_at) / 1000).toFixed(1);
+                                    term_emit("generating", "streaming · " + n + " chars · elapsed=" + elapsed_s + "s");
+                                }
+                            } else if (ev.ollama_endpoint) {
+                                term_emit("info", "ollama endpoint=" + ev.ollama_endpoint);
+                            } else if (ev.cli_stats) {
+                                term_emit("info", "cli stats · turns=" + ev.cli_stats.turns + " cost=$" + (ev.cli_stats.cost_usd || 0));
                             } else if (ev.done) {
                                 $("#" + stream_id + " .msg-bubble").text(accumulated);
                                 if (ev.cost) {
                                     $("#" + stream_id).append('<div class="cost-badge">' + esc(ev.cost) + '</div>');
                                 }
+                                var total_s = ((Date.now() - term.stream_started_at) / 1000).toFixed(1);
+                                term_emit("complete", "done · " + accumulated.length + " chars · " + total_s + "s · " + (ev.cost || ""));
                                 finish();
                                 return;
                             } else if (ev.error) {
                                 $("#" + stream_id + " .msg-bubble").html('<span style="color:var(--danger)">' + esc(ev.error) + '</span>');
+                                term_emit("error", "error: " + ev.error);
                                 finish();
                                 return;
                             }
@@ -712,6 +1047,9 @@ $(function () {
                 }).catch(function (err) {
                     if (err.name === "AbortError") {
                         $("#" + stream_id + " .msg-bubble").text(accumulated || "(stopped)");
+                        term_emit("warn", "stream aborted by user");
+                    } else {
+                        term_emit("error", "stream error: " + err.message);
                     }
                     finish();
                 });
@@ -720,8 +1058,10 @@ $(function () {
         }).catch(function (e) {
             if (e.name === "AbortError") {
                 $("#" + stream_id + " .msg-bubble").text("(stopped)");
+                term_emit("warn", "request aborted");
             } else {
                 system_msg("Error: " + e.message);
+                term_emit("error", "fetch error: " + e.message);
             }
             finish();
         });
@@ -730,6 +1070,7 @@ $(function () {
             state.streaming = false;
             state.abort_controller = null;
             set_streaming_ui(false);
+            term_stop_watchdog();
             // Add feedback buttons if there's a response
             if (accumulated) {
                 add_feedback_buttons($("#" + stream_id), msg, accumulated);
@@ -746,9 +1087,206 @@ $(function () {
         if (e.key === "Escape" && state.streaming) { do_stop(); }
     });
 
+    // ── RunPod lifecycle controls ─────────────────────────────────
+    // Two-state widget in the chat toolbar:
+    //   - "down" view: GPU dropdown + ▶ Spin button (POST /api/runpod/start)
+    //   - "up"   view: live cost meter + ■ Stop button (POST /api/runpod/stop)
+    //
+    // Polls /api/runpod/cost-meter every 5s while a pod is up.
+    // During /start the SSE progress lines are streamed into the existing
+    // terminal panel via term_emit().
+    var rp_state = {
+        polling: null,    // setInterval handle for cost-meter
+        starting: false,  // true while a /start stream is in flight
+        stopping: false,
+    };
+
+    function rp_format_uptime(s) {
+        if (s == null || isNaN(s)) return "—";
+        var m = Math.floor(s / 60);
+        var sec = Math.floor(s % 60);
+        if (m < 60) return m + "m " + (sec < 10 ? "0" : "") + sec + "s";
+        var h = Math.floor(m / 60);
+        m = m % 60;
+        return h + "h " + (m < 10 ? "0" : "") + m + "m";
+    }
+
+    function rp_render_meter(c) {
+        if (!c || !c.active) {
+            $("#rp-meter").html('<span class="dim">$0/hr · 0s · $0</span>');
+            return;
+        }
+        var hourly = (c.hourly || 0).toFixed(3);
+        var uptime = rp_format_uptime(c.uptime_seconds || 0);
+        var total  = (c.total_so_far_usd || 0).toFixed(4);
+        $("#rp-meter").html(
+            "$" + hourly + "/hr <span class='dim'>·</span> " +
+            uptime + " <span class='dim'>·</span> $" + total + " spent"
+        );
+    }
+
+    function rp_show_down() {
+        $("#rp-down").css("display", "flex");
+        $("#rp-up").hide();
+        $("#rp-ctl").removeClass("live busy");
+    }
+
+    function rp_show_up() {
+        $("#rp-down").hide();
+        $("#rp-up").css("display", "flex");
+        $("#rp-ctl").removeClass("busy").addClass("live");
+    }
+
+    function rp_show_busy(msg) {
+        $("#rp-ctl").removeClass("live").addClass("busy");
+        if (msg) $("#rp-meter").text(msg);
+    }
+
+    function rp_load_gpus() {
+        $.getJSON("/api/runpod/gpu-aliases", function (data) {
+            var $sel = $("#rp-gpu");
+            $sel.empty();
+            (data.aliases || []).forEach(function (a) {
+                var opt = $("<option>").val(a.id).text(a.label);
+                if (a.id === data.default) opt.prop("selected", true);
+                $sel.append(opt);
+            });
+        }).fail(function () {
+            $("#rp-gpu").empty().append($("<option>").val("rtx3090").text("RTX 3090"));
+        });
+    }
+
+    function rp_poll_cost_once() {
+        return $.getJSON("/api/runpod/cost-meter").then(function (c) {
+            if (c && c.active) {
+                rp_show_up();
+                rp_render_meter(c);
+            } else {
+                rp_show_down();
+                if (rp_state.polling) {
+                    clearInterval(rp_state.polling);
+                    rp_state.polling = null;
+                }
+            }
+            return c;
+        });
+    }
+
+    function rp_start_polling() {
+        if (rp_state.polling) clearInterval(rp_state.polling);
+        rp_poll_cost_once();
+        rp_state.polling = setInterval(rp_poll_cost_once, 5000);
+    }
+
+    // Spin button
+    $("#rp-btn-start").on("click", function () {
+        if (rp_state.starting) return;
+        var gpu = $("#rp-gpu").val() || "rtx3090";
+        rp_state.starting = true;
+        $("#rp-btn-start").prop("disabled", true).text("⏳ Starting…");
+        rp_show_busy("provisioning…");
+
+        // Open terminal panel so the user sees progress
+        term_clear();
+        term_expand();
+        term_emit("info", "POST /api/runpod/start gpu=" + gpu + " profile=d2 — this takes 5-10 min");
+
+        fetch("/api/runpod/start", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({gpu: gpu, profile: "d2"}),
+        }).then(function (resp) {
+            if (!resp.ok) {
+                term_emit("error", "start request failed: HTTP " + resp.status);
+                rp_state.starting = false;
+                $("#rp-btn-start").prop("disabled", false).text("▶ Spin");
+                return;
+            }
+            var reader = resp.body.getReader();
+            var decoder = new TextDecoder();
+            var buffer = "";
+            function read_chunk() {
+                reader.read().then(function (r) {
+                    if (r.done) {
+                        rp_state.starting = false;
+                        $("#rp-btn-start").prop("disabled", false).text("▶ Spin");
+                        // Final state: refresh resources + cost meter
+                        rp_start_polling();
+                        if (typeof load_resources === "function") load_resources();
+                        return;
+                    }
+                    buffer += decoder.decode(r.value, {stream: true});
+                    var lines = buffer.split("\n");
+                    buffer = lines.pop();
+                    lines.forEach(function (line) {
+                        if (!line.startsWith("data:")) return;
+                        var raw = line.slice(5).trim();
+                        if (!raw) return;
+                        try {
+                            var ev = JSON.parse(raw);
+                            if (ev.error) {
+                                term_emit("error", "runpod: " + ev.error);
+                                rp_show_down();
+                            } else if (ev.stage === "complete") {
+                                term_emit("complete", "runpod ready · pod=" + ev.pod_id +
+                                          " · " + (ev.endpoint_url || "no url") +
+                                          (ev.reachable ? " ✓ reachable" : " (not yet reachable)"));
+                            } else if (ev.stage) {
+                                var kind = (ev.stage === "polling" || ev.stage === "health") ? "waiting" : "info";
+                                term_emit(kind, "runpod[" + ev.stage + "] " + (ev.msg || ""));
+                            }
+                        } catch (e) {}
+                    });
+                    read_chunk();
+                }).catch(function (err) {
+                    term_emit("error", "runpod stream error: " + err.message);
+                    rp_state.starting = false;
+                    $("#rp-btn-start").prop("disabled", false).text("▶ Spin");
+                });
+            }
+            read_chunk();
+        }).catch(function (e) {
+            term_emit("error", "runpod fetch error: " + e.message);
+            rp_state.starting = false;
+            $("#rp-btn-start").prop("disabled", false).text("▶ Spin");
+            rp_show_down();
+        });
+    });
+
+    // Stop button (with confirm)
+    $("#rp-btn-stop").on("click", function () {
+        if (rp_state.stopping) return;
+        if (!window.confirm("Stop the RunPod pod? Billing will halt within seconds.")) return;
+        rp_state.stopping = true;
+        $("#rp-btn-stop").prop("disabled", true).text("⏳ Stopping…");
+        rp_show_busy("terminating…");
+        term_emit("info", "POST /api/runpod/stop");
+        $.ajax({
+            url: "/api/runpod/stop",
+            method: "POST",
+            contentType: "application/json",
+        }).done(function (data) {
+            term_emit("complete", "runpod stopped · pod=" + (data.stopped_pod_id || "?"));
+            if (rp_state.polling) { clearInterval(rp_state.polling); rp_state.polling = null; }
+            rp_show_down();
+            if (typeof load_resources === "function") load_resources();
+        }).fail(function (xhr) {
+            term_emit("error", "stop failed: " + (xhr.responseText || xhr.status));
+        }).always(function () {
+            rp_state.stopping = false;
+            $("#rp-btn-stop").prop("disabled", false).text("■ Stop");
+        });
+    });
+
     // ── Init ───────────────────────────────────────────────────────
     new_session();
     load_sessions();
+    load_resources();
+    rp_load_gpus();
+    // Probe RunPod state once on load — if a pod is up, start polling.
+    rp_poll_cost_once().then(function (c) {
+        if (c && c.active) rp_start_polling();
+    });
     system_msg("Anamnesis memory online. What do you remember?");
 
 });

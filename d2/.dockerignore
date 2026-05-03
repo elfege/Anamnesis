@@ -1,0 +1,69 @@
+# .dockerignore — what NEVER enters a Docker build context.
+# Pre-push git hook also scans Dockerfiles for COPY of these patterns.
+
+# Secrets — categorical
+.env
+.env.*
+*.env
+*.pem
+*.key
+*.pfx
+*.p12
+secrets/
+vault/
+.aws/
+.ssh/
+credentials.json
+.runpod_pod_id
+
+# Trained model weights (could leak personal training data)
+d2/d2_checkpoints/
+d2/output/
+d2_checkpoints/
+checkpoints/
+*.pt
+*.bin
+*.safetensors
+*.ckpt
+*.gguf
+
+# Raw training data
+d2/data/
+data/wikitext/
+data/openwebtext/
+*.jsonl
+samples/
+
+# Operational/personal docs
+README_handoff.md
+README_project_history.md
+README_daily_standup_pitch.md
+docs/
+0_ANAMNESIS_SOURCES/
+
+# Build artifacts and caches
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+node_modules/
+
+# Local state
+.git/
+.gitignore
+.runpod_pod_id
+*.log
+mongo_data/
+model_cache/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+

@@ -43,3 +43,24 @@ class SadTalkerClient:
                 logger.warning(f"SadTalker worker {label} ({url}) failed: {e}")
                 last_err = e
         raise RuntimeError(f"No SadTalker worker reachable. Last error: {last_err}")
+
+    async def cancel_all(self) -> dict:
+        """Fire-and-forget cancel to every configured worker.
+
+        Called when the user clicks Stop or closes the avatar page — the
+        worker's SadTalker subprocess is otherwise detached from the HTTP
+        request lifecycle and would keep occupying the GPU until it finishes.
+        """
+        results: dict[str, str] = {}
+        for url, label in config.AVATAR_WORKER_ENDPOINTS:
+            try:
+                async with httpx.AsyncClient(timeout=5) as client:
+                    r = await client.post(f"{url}/sadtalker/cancel")
+                results[label] = (
+                    f"killed={r.json().get('killed', 0)}"
+                    if r.status_code == 200
+                    else f"http {r.status_code}"
+                )
+            except Exception as e:
+                results[label] = f"error: {e}"
+        return results

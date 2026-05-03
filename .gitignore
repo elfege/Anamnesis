@@ -45,3 +45,26 @@ docs/*.md
 
 # Avatar/persona samples — images + audio sources (may be copyright, large)
 samples/
+
+# ─── Docker security policy (see Dockerfile.example for rules) ────────────────
+# Actual Dockerfiles are gitignored — only `.example` templates are tracked.
+# This forces every clone to consciously copy the template, with the security
+# header front-and-center, before building. See scripts/security_check.sh too.
+Dockerfile
+Dockerfile.*
+!Dockerfile*.example
+!*.dockerignore   # .dockerignore files MUST stay tracked — they're the seatbelt
+
+# Trained model weights (personal-data-encoded — never publish via the runtime image)
+d2/d2_checkpoints/
+d2/output/
+d2_checkpoints/
+checkpoints/
+*.pt
+*.bin
+*.safetensors
+*.ckpt
+*.gguf
+
+# Pre-push security check script (intentionally untracked — easy to edit per machine)
+scripts/security_check.sh

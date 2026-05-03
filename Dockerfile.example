@@ -1,0 +1,57 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SECURITY POLICY (read before editing — this file is the public template)
+# ─────────────────────────────────────────────────────────────────────────────
+# This `.example` is TRACKED in git. The actual `Dockerfile` (without
+# `.example`) is GITIGNORED and built locally — copy this template to start.
+#
+# DO NOT add any of the following to this file or its untracked copy.
+# A pre-push git hook (scripts/security_check.sh) refuses pushes that contain
+# them, but the hook is local — discipline still matters:
+#
+#   COPY .env  /  COPY *.env*           ← never. .env is in .dockerignore.
+#   COPY *.key  /  COPY *.pem           ← never. credentials.
+#   COPY secrets/  /  COPY vault/       ← never. credential bundles.
+#   COPY d2/d2_checkpoints/             ← weights = learned representations
+#                                         of personal data. publish only via
+#                                         a separate model-release image with
+#                                         conscious intent.
+#   COPY d2/data/                       ← raw training data.
+#   COPY README_handoff.md              ← contains operational details.
+#   COPY README_project_history.md      ← same.
+#
+# ALLOWED:
+#   COPY d2/  (source code only — d2_checkpoints/, data/, output/ are in
+#              .dockerignore so this is safe)
+#   COPY app/ (anamnesis-app source)
+#   COPY trainers/ (trainer source)
+#   RUN pip install … (public PyPI)
+#   ENV NON_SECRET_VAR=value
+#
+# IF YOU NEED TO BAKE A CHECKPOINT INTO AN IMAGE FOR PUBLIC RELEASE:
+#   - Build a SEPARATE Dockerfile (e.g. Dockerfile.release-vN.example)
+#   - Make that image private OR confirm the checkpoint is intended public
+#   - Document the dataset + provenance in the image label
+# ─────────────────────────────────────────────────────────────────────────────
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# System dependencies for torch/sentence-transformers
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    build-essential \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install CPU-only torch first (saves ~1GB vs full torch)
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+# Then install the rest
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+COPY app/ /app/
+
+EXPOSE 8000
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

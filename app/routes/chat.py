@@ -20,6 +20,13 @@ from config import (
     CLAUDE_MODEL,
     CLAUDE_CLI_HOST,
     CLAUDE_CLI_PATH,
+    TOGETHER_API_KEY,
+    TOGETHER_BASE_URL,
+    RUNPOD_API_KEY,
+    RUNPOD_POD_ID,
+    RUNPOD_ENDPOINT_URL,
+    RUNPOD_DEFAULT_MODEL,
+    D2_ENDPOINT_URL,
 )
 from database import (
     get_episodes_collection, vector_search,
@@ -54,6 +61,12 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     top_k: int = 5
     attached_files: list[AttachedFile] = []
+    # Optional explicit worker URL (set by /chat dropdown when user picks
+    # a specific resource — pins the request to that worker, no failover).
+    # For backend="ollama" this overrides the OLLAMA_URL_N chain.
+    # For backend="runpod" / "together" / "d2" it's the OpenAI-compatible
+    # base URL (or the d² engine base, /api/d2/generate-style).
+    worker_url: Optional[str] = None
 
 
 # ─── Identity ─────────────────────────────────────────────────────
@@ -622,12 +635,35 @@ async def _find_ollama_endpoint() -> tuple[str, str, bool] | None:
 # ─── Ollama agentic streaming ──────────────────────────────────────
 
 async def _stream_ollama(
-    system: str, messages: list[dict], model: str, session_id: str, user_msg: str
+    system: str, messages: list[dict], model: str, session_id: str, user_msg: str,
+    pinned_worker_url: Optional[str] = None,
 ) -> AsyncIterator[str]:
-    endpoint = await _find_ollama_endpoint()
-    if not endpoint:
-        yield f"data: {json.dumps({'error': 'Cannot connect to any Ollama instance (tried office, server, dellserver)'})}\n\n"
-        return
+    # Explicit worker pin (from /chat dropdown) — single attempt, no failover.
+    if pinned_worker_url:
+        # Resolve label/has_gpu from the configured endpoints if it matches one.
+        label = "user-pinned"
+        has_gpu = True
+        for url_, lbl_, gpu_ in OLLAMA_ENDPOINTS:
+            if url_.rstrip("/") == pinned_worker_url.rstrip("/"):
+                label, has_gpu = lbl_, gpu_
+                break
+        # Probe the pinned URL once. If unreachable, surface a clean error
+        # — do NOT fall back. The user explicitly picked this worker.
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                r = await client.get(f"{pinned_worker_url.rstrip('/')}/api/tags")
+                if r.status_code != 200:
+                    yield f"data: {json.dumps({'error': f'Pinned Ollama worker {label} returned {r.status_code} — pick another resource'})}\n\n"
+                    return
+        except Exception as exc:
+            yield f"data: {json.dumps({'error': f'Pinned Ollama worker {label} ({pinned_worker_url}) unreachable: {exc}. Pick another resource.'})}\n\n"
+            return
+        endpoint = (pinned_worker_url.rstrip("/"), label, has_gpu)
+    else:
+        endpoint = await _find_ollama_endpoint()
+        if not endpoint:
+            yield f"data: {json.dumps({'error': 'Cannot connect to any Ollama instance (tried office, server, dellserver)'})}\n\n"
+            return
 
     base_url, label, has_gpu = endpoint
     url = f"{base_url}/api/chat"
@@ -826,6 +862,226 @@ async def _stream_claude_cli(
     yield f"data: {json.dumps({'done': True, 'session_id': session_id, 'backend': 'claude_cli', 'cost': '$0 (subscription)'})}\n\n"
 
 
+# ─── OpenAI-compatible streaming (Together.ai, RunPod vLLM) ──────
+# Both Together.ai and RunPod (when running vLLM with --served-model-name)
+# expose POST {base}/chat/completions accepting OpenAI's request shape
+# and emitting SSE deltas. We share one streamer.
+#
+# Tools are NOT wired here yet — these backends are for raw inference
+# benchmarking, not agentic use. Memory is still pre-injected via system
+# prompt (built by the caller). If tool-use is needed later, both APIs
+# support it via the same OpenAI shape, but it adds round-trip complexity
+# we don't need for the resource-selector MVP.
+
+async def _stream_openai_compat(
+    system: str, messages: list[dict], model: str, session_id: str, user_msg: str,
+    base_url: str, api_key: str, label: str, backend_tag: str,
+) -> AsyncIterator[str]:
+    if not base_url:
+        yield f"data: {json.dumps({'error': f'{label}: base URL not configured'})}\n\n"
+        return
+    if not api_key:
+        yield f"data: {json.dumps({'error': f'{label}: API key not configured'})}\n\n"
+        return
+
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "stream": True,
+        "messages": [{"role": "system", "content": system}] + list(messages),
+        "max_tokens": 2048,
+    }
+
+    full_response: list[str] = []
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream("POST", url, headers=headers, json=payload) as resp:
+                if resp.status_code != 200:
+                    body = await resp.aread()
+                    body_text = body.decode("utf-8", errors="replace")[:200]
+                    err_msg = f"{label} {resp.status_code}: {body_text}"
+                    yield f"data: {json.dumps({'error': err_msg})}\n\n"
+                    return
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if raw == "[DONE]":
+                        break
+                    try:
+                        ev = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = ev.get("choices", [])
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
+                    token = delta.get("content")
+                    if token:
+                        full_response.append(token)
+                        yield f"data: {json.dumps({'token': token})}\n\n"
+                    if choices[0].get("finish_reason"):
+                        break
+    except httpx.ConnectError as exc:
+        yield f"data: {json.dumps({'error': f'{label}: cannot connect ({exc})'})}\n\n"
+        return
+    except Exception as exc:
+        yield f"data: {json.dumps({'error': f'{label}: {exc}'})}\n\n"
+        return
+
+    reply = "".join(full_response)
+    _sessions[session_id].append({"role": "assistant", "content": reply})
+    _trim(session_id)
+    await _store_episode(session_id, user_msg, reply, f"{backend_tag}:{model}")
+    cost_label = "API (pay-per-token)" if backend_tag == "together" else f"$/hr (RunPod pod {label})"
+    yield f"data: {json.dumps({'done': True, 'session_id': session_id, 'backend': backend_tag, 'cost': cost_label})}\n\n"
+
+
+# ─── δ² engine streaming (research model) ─────────────────────────
+# The d² trainer's /generate endpoint is BLOCKING (returns full text).
+# We fake a single-token stream so the frontend behaves uniformly.
+
+async def _stream_d2(
+    system: str, messages: list[dict], session_id: str, user_msg: str,
+    base_url: str,
+) -> AsyncIterator[str]:
+    base = (base_url or D2_ENDPOINT_URL or "").rstrip("/")
+    if not base:
+        yield f"data: {json.dumps({'error': 'δ² engine URL not configured'})}\n\n"
+        return
+
+    # Build a minimal prompt — d² has no chat template, no system prompt
+    # support, no tool-use. Just raw text completion.
+    prompt = user_msg
+
+    body = {
+        "prompt": prompt,
+        "max_tokens": 256,
+        "temperature": 0.8,
+        "top_k": 200,
+        "enable_bassin_recall": True,
+        "stream": False,  # we want a single JSON response so r.json() works below
+    }
+
+    full_response: list[str] = []
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(f"{base}/generate", json=body)
+            if r.status_code != 200:
+                yield f"data: {json.dumps({'error': f'δ² engine {r.status_code}: {r.text[:200]}'})}\n\n"
+                return
+            data = r.json()
+            text = data.get("text") or data.get("output") or data.get("generated_text") or ""
+            if not text:
+                # Fallback: stringify the whole payload so user sees something
+                text = json.dumps(data)[:500]
+            # Stream it word-by-word so the UI feels live
+            for word in text.split(" "):
+                token = word + " "
+                full_response.append(token)
+                yield f"data: {json.dumps({'token': token})}\n\n"
+                await asyncio.sleep(0.01)
+    except httpx.RequestError as exc:
+        yield f"data: {json.dumps({'error': f'δ² engine unreachable: {exc}'})}\n\n"
+        return
+    except Exception as exc:
+        yield f"data: {json.dumps({'error': f'δ² engine error: {exc}'})}\n\n"
+        return
+
+    reply = "".join(full_response).rstrip()
+    _sessions[session_id].append({"role": "assistant", "content": reply})
+    _trim(session_id)
+    await _store_episode(session_id, user_msg, reply, "d2:engine")
+    yield f"data: {json.dumps({'done': True, 'session_id': session_id, 'backend': 'd2', 'cost': '$0 (research)'})}\n\n"
+
+
+# ─── Heartbeat middleware ─────────────────────────────────────────
+# Wraps any backend's SSE generator and injects periodic `heartbeat`
+# events so the frontend terminal panel can show real-time state.
+#
+# Heartbeats are emitted every `interval_s` seconds while the inner
+# generator is "quiet" — i.e. has not produced an event for a while.
+# The first heartbeat fires immediately ("connected") so the user
+# knows the stream is alive.
+#
+# Heartbeat shape:
+#   {"heartbeat": {"stage": "...", "elapsed_ms": int, "tokens_seen": int}}
+#
+# stage transitions: connected → waiting → generating → complete
+
+async def _heartbeat_wrap(
+    inner: AsyncIterator[str],
+    backend: str,
+    model: str | None,
+    interval_s: float = 1.0,
+) -> AsyncIterator[str]:
+    import time as _time
+
+    queue: asyncio.Queue = asyncio.Queue()
+    _SENTINEL = object()
+    state = {"tokens_seen": 0, "done": False, "stage": "connected"}
+    t0 = _time.time()
+
+    async def _producer():
+        try:
+            async for chunk in inner:
+                # Snoop the chunk to track stage transitions
+                if isinstance(chunk, str) and chunk.startswith("data:"):
+                    raw = chunk[5:].strip()
+                    if raw:
+                        try:
+                            ev = json.loads(raw)
+                            if ev.get("token"):
+                                state["tokens_seen"] += 1
+                                state["stage"] = "generating"
+                            elif ev.get("done"):
+                                state["stage"] = "complete"
+                            elif ev.get("error"):
+                                state["stage"] = "error"
+                        except Exception:
+                            pass
+                await queue.put(chunk)
+        finally:
+            await queue.put(_SENTINEL)
+
+    producer_task = asyncio.create_task(_producer())
+
+    # Emit "connected" heartbeat immediately
+    yield (
+        "event: heartbeat\n"
+        f"data: {json.dumps({'heartbeat': {'stage': 'connected', 'backend': backend, 'model': model, 'elapsed_ms': 0, 'tokens_seen': 0}})}\n\n"
+    )
+
+    try:
+        while True:
+            try:
+                chunk = await asyncio.wait_for(queue.get(), timeout=interval_s)
+            except asyncio.TimeoutError:
+                # No event in interval_s — emit a heartbeat reflecting state
+                stage = state["stage"]
+                if stage == "connected":
+                    stage = "waiting"
+                elapsed_ms = int((_time.time() - t0) * 1000)
+                yield (
+                    "event: heartbeat\n"
+                    f"data: {json.dumps({'heartbeat': {'stage': stage, 'backend': backend, 'model': model, 'elapsed_ms': elapsed_ms, 'tokens_seen': state['tokens_seen']}})}\n\n"
+                )
+                continue
+            if chunk is _SENTINEL:
+                break
+            yield chunk
+    finally:
+        producer_task.cancel()
+        try:
+            await producer_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+
 # ─── Endpoints ────────────────────────────────────────────────────
 
 @router.post("/api/chat/stream")
@@ -844,16 +1100,50 @@ async def chat_stream(req: ChatRequest):
     _sessions[session_id].append({"role": "user", "content": req.message})
     messages = list(_sessions[session_id])
 
+    chosen_model: str | None = None
     if req.backend == "claude":
+        chosen_model = CLAUDE_MODEL
         gen = _stream_claude(system, messages, session_id, req.message)
     elif req.backend == "claude_cli":
+        chosen_model = "claude-cli"
         gen = _stream_claude_cli(system, messages, session_id, req.message)
+    elif req.backend == "together":
+        chosen_model = req.model or "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+        gen = _stream_openai_compat(
+            system, messages, chosen_model, session_id, req.message,
+            base_url=(req.worker_url or TOGETHER_BASE_URL),
+            api_key=TOGETHER_API_KEY,
+            label="together.ai",
+            backend_tag="together",
+        )
+    elif req.backend == "runpod":
+        chosen_model = req.model or RUNPOD_DEFAULT_MODEL
+        # RunPod vLLM exposes OpenAI shape at <pod-url>/v1; treat worker_url
+        # as the full base (already includes /v1 if pod was set up that way).
+        gen = _stream_openai_compat(
+            system, messages, chosen_model, session_id, req.message,
+            base_url=(req.worker_url or RUNPOD_ENDPOINT_URL),
+            api_key=(RUNPOD_API_KEY or "EMPTY"),  # vLLM ignores key but header must exist
+            label=f"runpod ({RUNPOD_POD_ID or 'pod'})",
+            backend_tag="runpod",
+        )
+    elif req.backend == "d2":
+        chosen_model = req.model or "d2-engine"
+        gen = _stream_d2(
+            system, messages, session_id, req.message,
+            base_url=(req.worker_url or D2_ENDPOINT_URL),
+        )
     else:
-        model = req.model or OLLAMA_DEFAULT_MODEL
-        gen   = _stream_ollama(system, messages, model, session_id, req.message)
+        chosen_model = req.model or OLLAMA_DEFAULT_MODEL
+        gen = _stream_ollama(
+            system, messages, chosen_model, session_id, req.message,
+            pinned_worker_url=req.worker_url,
+        )
+
+    wrapped = _heartbeat_wrap(gen, backend=req.backend, model=chosen_model, interval_s=1.0)
 
     return StreamingResponse(
-        gen,
+        wrapped,
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -876,6 +1166,339 @@ async def list_ollama_models():
             return {"models": [], "default": OLLAMA_DEFAULT_MODEL, "error": f"Ollama {resp.status_code} on {label}"}
     except Exception as exc:
         return {"models": [], "default": OLLAMA_DEFAULT_MODEL, "error": str(exc)}
+
+
+# ─── Unified inference-resources catalog ──────────────────────────
+# One endpoint, live-probed in parallel, returns every reachable
+# inference target the user might want to test against. Drives the
+# resource-selector dropdown in /chat.
+#
+# Cordoned but live? We REPORT THE TRUTH (probe result wins), and
+# attach a `note` reflecting policy (e.g. office GPU isolation rule).
+# That way the UI can grey out + warn without lying about reachability.
+
+# Office GPU cordon — message attached to ollama-office regardless of
+# probe result. Ollama itself may still be running on the box because
+# the user starts it manually; the rule forbids unattended auto-load.
+_OFFICE_CORDON_NOTE = (
+    "office GPU under isolation rule (RX 6800 ROCm prone to kernel "
+    "panics under VRAM pressure). Ollama may answer but loading a new "
+    "model can crash the host. See README_isolation_rule_office_GPU…"
+)
+
+
+async def _probe_ollama(url: str, label: str, has_gpu: bool, note: str | None = None) -> dict:
+    import time as _t
+    rid = "ollama-" + label.split()[0].lower().replace("(", "").replace(")", "")
+    out = {
+        "id": rid,
+        "label": f"Ollama @ {label}",
+        "kind": "ollama",
+        "url": url,
+        "reachable": False,
+        "models": [],
+        "latency_ms": None,
+    }
+    if note:
+        out["note"] = note
+    if not has_gpu:
+        out["label"] += " — CPU-only (slow)"
+    t0 = _t.time()
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get(f"{url.rstrip('/')}/api/tags")
+            out["latency_ms"] = int((_t.time() - t0) * 1000)
+            if r.status_code == 200:
+                out["reachable"] = True
+                out["models"] = [m["name"] for m in r.json().get("models", [])]
+            else:
+                out["error"] = f"HTTP {r.status_code}"
+    except Exception as exc:
+        out["error"] = str(exc)[:120]
+    return out
+
+
+async def _probe_together() -> dict:
+    out = {
+        "id": "together-ai",
+        "label": "Together.ai (hosted, pay-per-token)",
+        "kind": "together",
+        "url": TOGETHER_BASE_URL,
+        "reachable": False,
+        "models": [],
+    }
+    if not TOGETHER_API_KEY:
+        out["note"] = "TOGETHER_AI_KEY not set in ANAMNESIS-Secrets — sign up at together.ai, generate an API key, then add as TOGETHER_AI_KEY field"
+        return out
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            r = await client.get(
+                f"{TOGETHER_BASE_URL.rstrip('/')}/models",
+                headers={"Authorization": f"Bearer {TOGETHER_API_KEY}"},
+            )
+            if r.status_code == 200:
+                out["reachable"] = True
+                data = r.json()
+                # Together returns either a list or {"data": [...]}.
+                items = data if isinstance(data, list) else data.get("data", [])
+                # Surface chat-capable models only; cap at a reasonable list.
+                names: list[str] = []
+                for m in items[:300]:
+                    name = m.get("id") or m.get("name")
+                    typ = m.get("type", "")
+                    if name and (typ == "chat" or "chat" in (m.get("display_type") or "").lower() or typ == ""):
+                        names.append(name)
+                out["models"] = names[:80]
+            else:
+                out["error"] = f"HTTP {r.status_code}: {r.text[:120]}"
+    except Exception as exc:
+        out["error"] = str(exc)[:120]
+    return out
+
+
+async def _probe_runpod() -> dict:
+    # Prefer the dynamically-tracked pod (started via /api/runpod/start) over
+    # the static RUNPOD_ENDPOINT_URL .env var. The dynamic state lives in
+    # MongoDB collection `runpod_state` (see app/routes/runpod.py).
+    base = ""
+    pod_label = RUNPOD_POD_ID or "no pod running"
+    try:
+        from database import get_db
+        db = get_db()
+        if db is not None:
+            active = await db["runpod_state"].find_one({"_id": "active_pod"})
+            if active and active.get("endpoint_url"):
+                base = active["endpoint_url"].rstrip("/")
+                pod_label = active.get("pod_id", pod_label)
+    except Exception as exc:
+        logger.debug(f"runpod_state lookup failed: {exc}")
+
+    if not base and RUNPOD_ENDPOINT_URL:
+        base = RUNPOD_ENDPOINT_URL.rstrip("/")
+
+    out = {
+        "id": "runpod-pod",
+        "label": f"RunPod ({pod_label})",
+        "kind": "runpod",
+        "url": base or None,
+        "reachable": False,
+        "models": [],
+    }
+    if not base:
+        out["note"] = (
+            "no RunPod pod currently running — start one via the ▶ Spin RunPod "
+            "button above (or POST /api/runpod/start)"
+        )
+        return out
+    # vLLM exposes /models on the OpenAI base
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            r = await client.get(
+                f"{base}/models",
+                headers={"Authorization": f"Bearer {RUNPOD_API_KEY or 'EMPTY'}"},
+            )
+            if r.status_code == 200:
+                out["reachable"] = True
+                data = r.json()
+                items = data if isinstance(data, list) else data.get("data", [])
+                out["models"] = [m.get("id") for m in items if m.get("id")] or [RUNPOD_DEFAULT_MODEL]
+            else:
+                out["error"] = f"HTTP {r.status_code}"
+    except Exception as exc:
+        out["error"] = str(exc)[:120]
+    return out
+
+
+async def _probe_claude_api() -> dict:
+    return {
+        "id": "claude-api",
+        "label": "Claude API (Anthropic, billed)",
+        "kind": "claude",
+        "reachable": bool(ANTHROPIC_API_KEY),
+        "models": [
+            "claude-opus-4-7",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5",
+        ] if ANTHROPIC_API_KEY else [],
+        "note": None if ANTHROPIC_API_KEY else "ANTHROPIC_API_KEY not set in .env",
+    }
+
+
+async def _probe_claude_cli() -> dict:
+    out = {
+        "id": "claude-cli",
+        "label": f"Claude CLI ($0 — subscription, via SSH→{CLAUDE_CLI_HOST})",
+        "kind": "claude_cli",
+        "reachable": False,
+        "models": ["opus", "sonnet", "haiku"],
+    }
+    # Cheap probe: SSH → claude --version with short timeout.
+    try:
+        from routes.files import _ssh_client
+        _u = os.environ.get("SSH_USER", os.environ.get("USER", "user"))
+        client = _ssh_client(CLAUDE_CLI_HOST, _u)
+        _, stdout, stderr = client.exec_command(f"{CLAUDE_CLI_PATH} --version", timeout=2)
+        rc = stdout.channel.recv_exit_status()
+        client.close()
+        out["reachable"] = (rc == 0)
+        if rc != 0:
+            out["error"] = stderr.read().decode("utf-8", errors="replace")[:120]
+    except Exception as exc:
+        out["error"] = str(exc)[:120]
+    return out
+
+
+async def _list_d2_lm_experiments(base: str) -> list[str]:
+    """Helper — fetch all LM experiment names from a d² engine.
+
+    Returns list of experiment names (dedup, preserves first-seen order).
+    Caller filters by `personal_` prefix to split bench vs personal track.
+    """
+    experiments: list[str] = []
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            rr = await client.get(f"{base}/runs", timeout=3.0)
+            if rr.status_code != 200:
+                return experiments
+            runs = rr.json().get("runs", [])
+            seen: set[str] = set()
+            for run in runs:
+                req = (run.get("request") or {})
+                exp = req.get("experiment")
+                rid = run.get("run_id", "")
+                if exp and exp not in seen and rid.startswith("lm-"):
+                    experiments.append(exp)
+                    seen.add(exp)
+    except Exception:
+        pass
+    return experiments
+
+
+async def _probe_d2_personal() -> dict:
+    """Probe for personal-corpus δ² fine-tunes.
+
+    Same engine as `_probe_d2`, but lists ONLY experiments whose name
+    starts with `personal_` — the convention for runs trained on the
+    user's Anamnesis episodes (private corpus, never published).
+    Checkpoints live under `d2/d2_checkpoints_personal/` on the host
+    side; the server treats them like any other experiment subdir.
+    """
+    base = D2_ENDPOINT_URL.rstrip("/") if D2_ENDPOINT_URL else ""
+    out = {
+        "id": "d2-personal",
+        "label": "δ² Personal — Real-Life Corpus",
+        "kind": "d2",
+        "url": base or None,
+        "reachable": False,
+        "models": [],
+        "note": "fine-tuned on your Anamnesis episodes (private — never published)",
+    }
+    if not base:
+        out["error"] = "D2_ENDPOINT_URL not configured"
+        return out
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(f"{base}/health")
+            if r.status_code != 200:
+                out["error"] = f"HTTP {r.status_code}"
+                return out
+            out["reachable"] = True
+        all_exps = await _list_d2_lm_experiments(base)
+        personal = [e for e in all_exps if e.startswith("personal_")]
+        out["models"] = personal or ["(no personal checkpoints yet)"]
+        if not personal:
+            out["note"] = (
+                "fine-tuned on your Anamnesis episodes (private — never published) "
+                "· no personal_* checkpoints yet — kick off Tier-1 fine-tune first"
+            )
+    except Exception as exc:
+        out["error"] = str(exc)[:120]
+    return out
+
+
+async def _probe_d2() -> dict:
+    base = D2_ENDPOINT_URL.rstrip("/") if D2_ENDPOINT_URL else ""
+    out = {
+        "id": "d2-engine",
+        "label": "δ² engine (research model — server)",
+        "kind": "d2",
+        "url": base or None,
+        "reachable": False,
+        "models": [],
+        "note": (
+            "research / benchmark model — trained from scratch on a public "
+            "dataset (WikiText-103). Used to compare δ² against Adam, EWC, "
+            "GEM, SAM. Reproducible by anyone."
+        ),
+    }
+    if not base:
+        out["error"] = "D2_ENDPOINT_URL not configured"
+        return out
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(f"{base}/health")
+            if r.status_code != 200:
+                out["error"] = f"HTTP {r.status_code}"
+                return out
+            out["reachable"] = True
+            health = r.json()
+            out["model_loaded"] = health.get("model_loaded", False)
+
+            # Pull the actual list of trained checkpoints (experiment names),
+            # not training run IDs. Filter to BENCH-only — anything starting
+            # with `personal_` belongs to the personal track and is exposed
+            # via _probe_d2_personal() instead. Two-track split: see
+            # README_canonical_two_tracks.md.
+            all_exps = await _list_d2_lm_experiments(base)
+            experiments = [e for e in all_exps if not e.startswith("personal_")]
+
+            out["models"] = experiments or ["(no LM checkpoints yet)"]
+            if not out["model_loaded"] and not experiments:
+                out["note"] = (out.get("note") or "") + " · train one first via POST /api/d2/train/lm/start"
+            elif not out["model_loaded"]:
+                out["note"] = (out.get("note") or "") + " · checkpoint will lazy-load on first /generate"
+    except Exception as exc:
+        out["error"] = str(exc)[:120]
+    return out
+
+
+@router.get("/api/chat/inference-resources")
+async def inference_resources():
+    """Live-probed catalog of every backend the chat UI can target.
+
+    Probes run in parallel via asyncio.gather, ~2-4s timeout each,
+    so total wall clock is ~4s worst case. Nothing is cached — the
+    user wants the freshest reachability info each time they open
+    the dropdown.
+    """
+    ollama_probes: list = []
+    for url, label, has_gpu in OLLAMA_ENDPOINTS:
+        # Office gets the cordon note attached regardless of reachability.
+        note = _OFFICE_CORDON_NOTE if "office" in label.lower() else None
+        ollama_probes.append(_probe_ollama(url, label, has_gpu, note=note))
+
+    results = await asyncio.gather(
+        *ollama_probes,
+        _probe_together(),
+        _probe_runpod(),
+        _probe_claude_api(),
+        _probe_claude_cli(),
+        # Display order: personal δ² appears ABOVE the research/bench δ² so
+        # "talk to my own model" surfaces first in the dropdown.
+        _probe_d2_personal(),
+        _probe_d2(),
+        return_exceptions=True,
+    )
+    resources: list[dict] = []
+    for r in results:
+        if isinstance(r, Exception):
+            logger.warning(f"inference-resources probe raised: {r}")
+            continue
+        resources.append(r)
+    return {
+        "resources": resources,
+        "probed_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @router.get("/api/chat/balance")

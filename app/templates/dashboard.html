@@ -27,7 +27,7 @@
         <button class="tab" data-tab="search">Search</button>
         <button class="tab" data-tab="crawler">Crawler</button>
         <button class="tab" data-tab="jsonl">JSONL Ingester</button>
-        <button class="tab" data-tab="chat">Chat</button>
+        <a class="tab" href="/chat" style="text-decoration:none;display:inline-flex;align-items:center;">Chat ↗</a>
         <button class="tab" data-tab="embedding">Embedding</button>
         <button class="tab" data-tab="training">Training</button>
         <button class="tab" data-tab="d2">δ²</button>
@@ -456,9 +456,10 @@
         <!-- Toolbar -->
         <div class="chat-toolbar">
             <div class="chat-backend-group">
-                <span class="chat-backend-label">Backend:</span>
+                <span class="chat-backend-label">Resource:</span>
+                <select id="chat-resource-select" title="Inference resource (where the model runs)" style="min-width:240px;max-width:340px"></select>
                 <span class="chat-backend-badge ollama-badge" id="chat-backend-badge">Ollama</span>
-                <select id="chat-model-select" title="Ollama model"></select>
+                <select id="chat-model-select" title="Model on the selected resource"></select>
                 <button id="btn-claude-cli-toggle" class="btn-claude-off" title="Use Claude CLI (subscription, $0 per message)">
                     Claude CLI ($0)
                 </button>
@@ -661,149 +662,736 @@
 
     <!-- ─── δ² Tab — continual-learning research ────────────── -->
     <section id="tab-d2" class="tab-content">
-        <div class="project-description" style="margin-bottom:16px">
-            <p><strong>What this is:</strong> Live status and historical results of the δ² engine — a continual-learning optimizer that retains structured negatives in a tension reservoir (bassin) instead of discarding them. Compared head-to-head with EWC and GEM on standard benchmarks.</p>
-            <p style="margin-top:6px;color:var(--muted)">
-                <strong>Status</strong> — δ² trainer container reachability + current optimizer + bassin size. Refreshes every 5s. &nbsp;
-                <strong>Bassin</strong> — distribution of retained tensions across the four Hegelian negation types and across model layers. &nbsp;
-                <strong>Runs</strong> — historical benchmark results (ACC / BWT / FWT) for adam, ewc, gem, delta2, controller.
+
+        <!-- ── Hero summary: what this thing is, in one paragraph ── -->
+        <div class="d2-hero" style="background:linear-gradient(135deg, rgba(110,168,254,0.08), rgba(110,168,254,0.02));border:1px solid var(--border);border-radius:8px;padding:16px 20px;margin-bottom:16px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px">
+                <h3 style="margin:0;font-size:15px;color:var(--text)">δ² — A Continual-Learning Optimizer with Structured Memory of Past Contradictions</h3>
+                <button class="d2-explain-btn" data-what="the δ² project as a whole" data-audience="dummy" data-context='{"section":"hero"}'>
+                    <span class="d2-explain-icon">💬</span> Explain
+                </button>
+            </div>
+            <p style="margin:0 0 8px 0;color:var(--muted);font-size:13px;line-height:1.5">
+                Most ML optimizers (Adam, SGD) <em>throw away</em> the gradient signal at every step.
+                δ² <em>keeps the strongest contradictions</em> in a memory called the <strong>bassin</strong>,
+                classified into four Hegelian negation types, and uses them to nudge future training.
+                Goal: less <em>catastrophic forgetting</em> when learning new tasks shouldn't erase old ones.
+                <span class="d2-help" data-what="catastrophic forgetting in continual learning" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
             </p>
-            <p style="margin-top:6px;color:var(--muted);font-size:11px">
-                Reference: <a href="https://github.com/elfege/Anamnesis/blob/main/d2/README.md" target="_blank" style="color:var(--accent)">d2/README.md</a> ·
-                Theory: <a href="https://github.com/elfege/Anamnesis/blob/main/docs/bitter_lesson/_README_on_the_bitter_lesson.md" target="_blank" style="color:var(--accent)">bitter-lesson reference</a>
+            <p style="margin:0;color:var(--muted);font-size:11px">
+                Reference: <a href="https://github.com/elfege/Anamnesis/blob/main/d2/README.md" target="_blank" style="color:var(--accent)">d2/README.md</a>
+                · Theory: <a href="https://github.com/elfege/Anamnesis/blob/main/docs/bitter_lesson/_README_on_the_bitter_lesson.md" target="_blank" style="color:var(--accent)">bitter-lesson reference</a>
+                · Paper: <code>~/0_ACADEMICS/_reference/_ml/paper_draft/structured_negative_retention.md</code>
             </p>
         </div>
 
-        <!-- ── Status panel ─────────────────────────────────── -->
-        <div class="d2-status-card" style="background:var(--card);border-radius:6px;padding:14px 16px;margin-bottom:16px;border:1px solid var(--border)">
-            <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+        <!-- ── Hero KPI strip — 3 big-number cards ─────────────── -->
+        <div class="d2-kpi-strip" id="d2-kpi-strip">
+            <div class="d2-kpi-card d2-kpi-best">
+                <div class="d2-kpi-label">
+                    Best result so far
+                    <span class="d2-help" data-what="what 'best result' means in a continual-learning benchmark" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                </div>
+                <div class="d2-kpi-value" id="d2-kpi-best-method">—</div>
+                <div class="d2-kpi-sub" id="d2-kpi-best-bwt">—</div>
+                <div class="d2-kpi-foot">on permuted-MNIST, 5 tasks</div>
+            </div>
+
+            <div class="d2-kpi-card d2-kpi-vs-adam">
+                <div class="d2-kpi-label">
+                    δ² vs vanilla Adam
+                    <span class="d2-help" data-what="why we compare to Adam" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                </div>
+                <div class="d2-kpi-value" id="d2-kpi-vs-adam-pct">—</div>
+                <div class="d2-kpi-sub" id="d2-kpi-vs-adam-detail">—</div>
+                <div class="d2-kpi-foot">backward transfer improvement</div>
+            </div>
+
+            <div class="d2-kpi-card d2-kpi-vs-gem">
+                <div class="d2-kpi-label">
+                    δ² vs GEM (gold standard)
+                    <span class="d2-help" data-what="why GEM is the gold standard for this benchmark" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                </div>
+                <div class="d2-kpi-value" id="d2-kpi-vs-gem-pct">—</div>
+                <div class="d2-kpi-sub" id="d2-kpi-vs-gem-detail">—</div>
+                <div class="d2-kpi-foot">forgetting ratio · less is better</div>
+            </div>
+        </div>
+
+        <!-- ── Two tracks: bench vs personal ───────────────────── -->
+        <div class="d2-section" id="d2-two-tracks">
+            <div class="d2-section-header">
+                <h3>Two tracks
+                    <span class="d2-help" data-what="two-track architecture" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                </h3>
+                <button class="d2-explain-btn" data-what="two-track architecture" data-audience="dummy" data-context='{"section":"two-tracks"}'>
+                    <span class="d2-explain-icon">💬</span> Explain
+                </button>
+            </div>
+            <p class="d2-section-blurb">
+                δ² ships in two completely separate pipelines so personal data
+                never contaminates published numbers and benchmark code never
+                leaks personal patterns:
+            </p>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px">
+                <div style="border:1px solid var(--border);border-radius:6px;padding:12px;background:rgba(110,168,254,0.04)">
+                    <div style="font-weight:600;color:var(--accent);margin-bottom:4px">Bench track</div>
+                    <div style="font-size:12px;color:var(--muted);line-height:1.5">
+                        WikiText-103, permuted-MNIST. Checkpoints under
+                        <code>d2/d2_checkpoints_bench/</code>. Reproducible
+                        by anyone. Powers the leaderboard below.
+                    </div>
+                </div>
+                <div style="border:1px solid var(--border);border-radius:6px;padding:12px;background:rgba(245,166,35,0.04)">
+                    <div style="font-weight:600;color:#f5a623;margin-bottom:4px">Personal track</div>
+                    <div style="font-size:12px;color:var(--muted);line-height:1.5">
+                        Anamnesis episodes (your conversations). Checkpoints
+                        under <code>d2/d2_checkpoints_personal/</code>. Private,
+                        never published. Surfaced in the chat resource picker
+                        as <code>δ² Personal — Real-Life Corpus</code>.
+                    </div>
+                </div>
+            </div>
+            <p style="margin:10px 0 0 0;font-size:11px;color:var(--muted)">
+                See <code>README_canonical_two_tracks.md</code> at the project root for the full rationale.
+            </p>
+        </div>
+
+        <!-- ── Comparison panel: methods ranked by BWT ─────────── -->
+        <div class="d2-section">
+            <div class="d2-section-header">
+                <h3>Continual-learning leaderboard
+                    <span class="d2-help" data-what="how to read this leaderboard / what BWT measures" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                </h3>
+                <button class="d2-explain-btn" data-what="the leaderboard for the δ² continual-learning benchmark" data-audience="dummy" data-context-source="leaderboard">
+                    <span class="d2-explain-icon">💬</span> Explain these results
+                </button>
+            </div>
+            <p class="d2-section-blurb">
+                Each bar shows how well a method <strong>kept</strong> what it learned from earlier tasks
+                after being trained on later ones. Bars closer to the right = less forgetting (better).
+                The numbers in parentheses are BWT (backward transfer): a value of <code>0</code> means
+                "no forgetting at all"; <code>−1</code> would mean "forgot everything."
+            </p>
+            <div id="d2-leaderboard"></div>
+        </div>
+
+        <!-- ── Bassin distribution ─────────────────────────────── -->
+        <div class="d2-section">
+            <div class="d2-section-header">
+                <h3>Bassin — the memory of past contradictions
+                    <span class="d2-help" data-what="what the bassin is and what the four negation types mean" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                </h3>
+                <button class="d2-explain-btn" data-what="the current bassin negation-type distribution" data-audience="dummy" data-context-source="bassin">
+                    <span class="d2-explain-icon">💬</span> Explain
+                </button>
+            </div>
+            <p class="d2-section-blurb">
+                Live state of the bassin (the tension reservoir) inside the active training process.
+                Empty between runs — the bassin is in-RAM and gets discarded when training ends.
+                <span class="d2-help" data-what="why the bassin is empty when no training is running" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+            </p>
+            <div id="d2-bassin-bars" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:8px">
+                <div class="d2-bar-card" data-type="inessential_difference">
+                    <div class="d2-bar-label">Inessential difference
+                        <span class="d2-help" data-what="the negation type 'inessential difference' in the δ² classifier" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                    </div>
+                    <div class="d2-bar-track"><div class="d2-bar-fill" style="background:#777"></div></div>
+                    <div class="d2-bar-count">—</div>
+                </div>
+                <div class="d2-bar-card" data-type="essential_difference">
+                    <div class="d2-bar-label">Essential difference
+                        <span class="d2-help" data-what="the negation type 'essential difference' in the δ² classifier" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                    </div>
+                    <div class="d2-bar-track"><div class="d2-bar-fill" style="background:#5a8"></div></div>
+                    <div class="d2-bar-count">—</div>
+                </div>
+                <div class="d2-bar-card" data-type="opposition">
+                    <div class="d2-bar-label">Opposition
+                        <span class="d2-help" data-what="the negation type 'opposition' in the δ² classifier" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                    </div>
+                    <div class="d2-bar-track"><div class="d2-bar-fill" style="background:#e80"></div></div>
+                    <div class="d2-bar-count">—</div>
+                </div>
+                <div class="d2-bar-card" data-type="annihilation">
+                    <div class="d2-bar-label">Annihilation
+                        <span class="d2-help" data-what="the negation type 'annihilation' in the δ² classifier" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                    </div>
+                    <div class="d2-bar-track"><div class="d2-bar-fill" style="background:#c44"></div></div>
+                    <div class="d2-bar-count">—</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Status panel (collapsed by default) ─────────────── -->
+        <details class="d2-section">
+            <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:10px">
+                <h3 style="margin:0">Live trainer status (technical)
+                    <span class="d2-help" data-what="what the live trainer status panel is showing" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                </h3>
                 <span class="d2-status-dot" id="d2-status-dot" style="width:10px;height:10px;border-radius:50%;background:#888;display:inline-block"></span>
-                <strong id="d2-status-label" style="font-size:14px">checking…</strong>
-                <span id="d2-status-endpoint" style="color:var(--muted);font-size:12px;font-family:monospace"></span>
+            </summary>
+            <div style="padding-top:10px">
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;font-size:12px">
+                    <strong id="d2-status-label">checking…</strong>
+                    <span id="d2-status-endpoint" style="color:var(--muted);font-family:monospace"></span>
+                </div>
+                <div id="d2-status-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;font-size:12px">
+                    <div>Optimizer: <strong id="d2-current-optimizer">—</strong></div>
+                    <div>Training: <strong id="d2-training-status">—</strong></div>
+                    <div>Model loaded: <strong id="d2-model-loaded">—</strong></div>
+                    <div>Bassin size: <strong id="d2-bassin-size">—</strong></div>
+                    <div>Run id: <strong id="d2-run-id" style="font-family:monospace;font-size:11px">—</strong></div>
+                </div>
             </div>
-            <div id="d2-status-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;font-size:12px">
-                <div>Optimizer: <strong id="d2-current-optimizer">—</strong></div>
-                <div>Training: <strong id="d2-training-status">—</strong></div>
-                <div>Model loaded: <strong id="d2-model-loaded">—</strong></div>
-                <div>Bassin size: <strong id="d2-bassin-size">—</strong></div>
-                <div>Run id: <strong id="d2-run-id" style="font-family:monospace;font-size:11px">—</strong></div>
+        </details>
+
+        <!-- ── Historical runs table ───────────────────────────── -->
+        <div class="d2-section">
+            <div class="d2-section-header">
+                <h3>Historical benchmark runs
+                    <span class="d2-help" data-what="what the historical runs table shows and how to read it" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                </h3>
+                <button class="d2-explain-btn" data-what="the trend in historical runs (which methods improved over which sweep)" data-audience="dummy" data-context-source="runs">
+                    <span class="d2-explain-icon">💬</span> Explain trend
+                </button>
+            </div>
+            <table id="d2-runs-table" style="width:100%;border-collapse:collapse;margin-top:8px;font-size:12px">
+                <thead>
+                    <tr style="border-bottom:1px solid var(--border);text-align:left">
+                        <th style="padding:6px 8px">Run ID</th>
+                        <th style="padding:6px 8px">Method</th>
+                        <th style="padding:6px 8px">Benchmark</th>
+                        <th style="padding:6px 8px;text-align:right">ACC <span class="d2-help" data-what="ACC = average accuracy across all tasks" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span></th>
+                        <th style="padding:6px 8px;text-align:right">BWT <span class="d2-help" data-what="BWT = backward transfer (forgetting)" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span></th>
+                        <th style="padding:6px 8px;text-align:right">FWT <span class="d2-help" data-what="FWT = forward transfer (skill carryover)" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span></th>
+                        <th style="padding:6px 8px">Started</th>
+                    </tr>
+                </thead>
+                <tbody id="d2-runs-tbody">
+                    <tr><td colspan="7" style="padding:14px;text-align:center;color:var(--muted)">loading…</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- ── Help / Explain modal (shared) ───────────────────── -->
+        <div id="d2-explain-modal" class="d2-modal-backdrop" style="display:none">
+            <div class="d2-modal">
+                <div class="d2-modal-header">
+                    <h3 id="d2-modal-title">Explanation</h3>
+                    <button class="d2-modal-close" onclick="document.getElementById('d2-explain-modal').style.display='none'">✕</button>
+                </div>
+                <div id="d2-modal-body" class="d2-modal-body">loading…</div>
+                <div class="d2-modal-footer" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                    <span id="d2-modal-cached" style="color:var(--muted);font-size:11px">Generated by Claude (CLI). May take 10-30 seconds.</span>
+                    <button id="d2-modal-regen" class="d2-tooltip-regen" title="Regenerate — bypass cache and ask Claude again" style="display:none">↻ Regenerate</button>
+                </div>
             </div>
         </div>
 
-        <!-- ── Bassin distribution ─────────────────────────── -->
-        <h3 style="margin-top:20px;font-size:14px">Bassin — negation type distribution</h3>
-        <div id="d2-bassin-bars" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:8px">
-            <div class="d2-bar-card" data-type="inessential_difference">
-                <div class="d2-bar-label">Inessential difference</div>
-                <div class="d2-bar-track"><div class="d2-bar-fill" style="background:#777"></div></div>
-                <div class="d2-bar-count">—</div>
-            </div>
-            <div class="d2-bar-card" data-type="essential_difference">
-                <div class="d2-bar-label">Essential difference</div>
-                <div class="d2-bar-track"><div class="d2-bar-fill" style="background:#5a8"></div></div>
-                <div class="d2-bar-count">—</div>
-            </div>
-            <div class="d2-bar-card" data-type="opposition">
-                <div class="d2-bar-label">Opposition</div>
-                <div class="d2-bar-track"><div class="d2-bar-fill" style="background:#e80"></div></div>
-                <div class="d2-bar-count">—</div>
-            </div>
-            <div class="d2-bar-card" data-type="annihilation">
-                <div class="d2-bar-label">Annihilation</div>
-                <div class="d2-bar-track"><div class="d2-bar-fill" style="background:#c44"></div></div>
-                <div class="d2-bar-count">—</div>
-            </div>
-        </div>
+        <!-- ── Tooltip pop-up (for (?) icons) ──────────────────── -->
+        <div id="d2-tooltip" class="d2-tooltip" style="display:none"></div>
 
-        <!-- ── Historical runs ─────────────────────────────── -->
-        <h3 style="margin-top:24px;font-size:14px">Historical benchmark runs</h3>
-        <table id="d2-runs-table" style="width:100%;border-collapse:collapse;margin-top:8px;font-size:12px">
-            <thead>
-                <tr style="border-bottom:1px solid var(--border);text-align:left">
-                    <th style="padding:6px 8px">Run ID</th>
-                    <th style="padding:6px 8px">Method</th>
-                    <th style="padding:6px 8px">Benchmark</th>
-                    <th style="padding:6px 8px;text-align:right">ACC</th>
-                    <th style="padding:6px 8px;text-align:right">BWT</th>
-                    <th style="padding:6px 8px;text-align:right">FWT</th>
-                    <th style="padding:6px 8px">Started</th>
-                </tr>
-            </thead>
-            <tbody id="d2-runs-tbody">
-                <tr><td colspan="7" style="padding:14px;text-align:center;color:var(--muted)">no runs yet</td></tr>
-            </tbody>
-        </table>
-
-        <p style="margin-top:18px;color:var(--muted);font-size:11px">
-            ACC = average accuracy across all tasks at end of training (higher better) ·
-            BWT = backward transfer (close to 0 = no forgetting; negative = catastrophic forgetting) ·
-            FWT = forward transfer (positive = generalization across tasks)
-        </p>
-
-        <!-- ── Inline styles for the bars ───────────────────── -->
         <style>
-            .d2-bar-card {
+            /* ── KPI strip ── */
+            .d2-kpi-strip { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:18px; }
+            .d2-kpi-card {
                 background:var(--card); border:1px solid var(--border);
-                border-radius:6px; padding:10px;
+                border-radius:8px; padding:14px 16px; min-height:120px;
+                display:flex; flex-direction:column;
             }
+            .d2-kpi-card.d2-kpi-best { border-left:3px solid #4caf50; }
+            .d2-kpi-card.d2-kpi-vs-adam { border-left:3px solid #6ea8fe; }
+            .d2-kpi-card.d2-kpi-vs-gem { border-left:3px solid #f5a623; }
+            .d2-kpi-label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
+            .d2-kpi-value { font-size:22px; font-weight:600; color:var(--text); margin-bottom:4px; font-family:'JetBrains Mono', monospace; }
+            .d2-kpi-value.d2-kpi-good { color:#4caf50; }
+            /* Scarlet + neon glow so the bad signal is impossible to miss
+               even with red-green colour blindness (the luminance/glow halo
+               carries information the hue alone doesn't). */
+            .d2-kpi-value.d2-kpi-bad  {
+                color:#ff1744;
+                text-shadow:0 0 6px rgba(255,23,68,0.65), 0 0 14px rgba(255,23,68,0.35);
+            }
+            .d2-kpi-sub { font-size:13px; color:var(--text-dim, var(--muted)); margin-bottom:auto; }
+            .d2-kpi-foot { font-size:10px; color:var(--muted); margin-top:8px; }
+
+            /* ── Sections ── */
+            .d2-section { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:14px 16px; margin-bottom:14px; }
+            .d2-section-header { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px; }
+            .d2-section-header h3 { margin:0; font-size:14px; color:var(--text); }
+            .d2-section-blurb { color:var(--muted); font-size:12px; margin:6px 0 12px 0; line-height:1.5; }
+
+            /* ── Help icon (?) — SVG question mark in a circle ── */
+            .d2-help {
+                display:inline-flex; align-items:center; justify-content:center;
+                cursor:help; color:var(--accent);
+                width:16px; height:16px;
+                margin-left:4px; padding:0; border:0; background:transparent;
+                vertical-align:-3px;
+                opacity:0.65; transition:opacity 0.15s;
+            }
+            .d2-help svg { display:block; width:14px; height:14px; }
+            .d2-help:hover, .d2-help:focus-visible { opacity:1; outline:none; }
+
+            /* ── Explain button ── */
+            .d2-explain-btn {
+                background:transparent; border:1px solid var(--border);
+                color:var(--accent); padding:6px 12px;
+                border-radius:5px; font-size:12px; cursor:pointer;
+                display:inline-flex; align-items:center; gap:6px;
+                transition:all 0.15s;
+            }
+            .d2-explain-btn:hover { background:rgba(110,168,254,0.08); border-color:var(--accent); }
+            .d2-explain-icon { font-size:14px; }
+
+            /* ── Modal ── */
+            .d2-modal-backdrop {
+                position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:100;
+                display:flex; align-items:center; justify-content:center; padding:20px;
+            }
+            .d2-modal {
+                background:var(--surface); border:1px solid var(--border);
+                border-radius:10px; max-width:680px; width:100%; max-height:80vh;
+                display:flex; flex-direction:column;
+                box-shadow:0 20px 50px rgba(0,0,0,0.5);
+            }
+            .d2-modal-header {
+                padding:14px 18px; border-bottom:1px solid var(--border);
+                display:flex; align-items:center; justify-content:space-between;
+            }
+            .d2-modal-header h3 { margin:0; font-size:14px; }
+            .d2-modal-close {
+                background:none; border:none; color:var(--muted); cursor:pointer;
+                font-size:18px; line-height:1; padding:4px 8px;
+            }
+            .d2-modal-close:hover { color:var(--text); }
+            .d2-modal-body {
+                padding:18px; overflow-y:auto; line-height:1.6; font-size:13px;
+                color:var(--text); white-space:pre-wrap;
+            }
+            .d2-modal-body code { background:var(--card); padding:1px 4px; border-radius:3px; font-size:12px; }
+            .d2-modal-body strong { color:var(--accent); }
+            .d2-modal-footer { padding:10px 18px; border-top:1px solid var(--border); }
+            .d2-modal-loading::before {
+                content:''; display:inline-block; width:14px; height:14px;
+                border:2px solid var(--accent); border-top-color:transparent;
+                border-radius:50%; animation:d2-spin 0.7s linear infinite;
+                margin-right:8px; vertical-align:middle;
+            }
+            @keyframes d2-spin { to { transform:rotate(360deg); } }
+
+            /* ── Tooltip — sticky modal-style, scrollable, dismissed via × or Escape ── */
+            .d2-tooltip {
+                position:fixed;
+                background:#0d1117;                          /* solid hex; no transparency */
+                border:1px solid var(--border);
+                border-radius:6px;
+                padding:12px 14px;
+                max-width:360px;
+                max-height:70vh;
+                display:flex; flex-direction:column;
+                font-size:12px; line-height:1.5;
+                color:var(--text);
+                z-index:1000;                                 /* above other panels */
+                box-shadow:0 6px 24px rgba(0,0,0,0.5);
+                pointer-events:auto;                          /* allow clicking buttons */
+            }
+            .d2-tooltip-body {
+                white-space:pre-wrap;
+                overflow-y:auto;
+                max-height:calc(70vh - 60px);                 /* leave room for actions row */
+                padding-right:6px;                            /* breathing room next to scrollbar */
+                scrollbar-width:thin;
+                scrollbar-color:rgba(255,255,255,0.18) transparent;
+            }
+            .d2-tooltip-body::-webkit-scrollbar { width:6px; }
+            .d2-tooltip-body::-webkit-scrollbar-track { background:transparent; }
+            .d2-tooltip-body::-webkit-scrollbar-thumb {
+                background:rgba(255,255,255,0.18); border-radius:3px;
+            }
+            .d2-tooltip-body::-webkit-scrollbar-thumb:hover { background:rgba(255,255,255,0.32); }
+            .d2-tooltip-actions {
+                display:flex; gap:6px; justify-content:flex-end; align-items:center;
+                margin-top:8px; padding-top:8px;
+                border-top:1px solid var(--border);
+                flex-shrink:0;
+            }
+            .d2-tooltip-regen, .d2-tooltip-close {
+                background:transparent; border:1px solid var(--border);
+                color:var(--muted); cursor:pointer; padding:2px 8px;
+                border-radius:4px; font-size:11px; line-height:1;
+                display:inline-flex; align-items:center; gap:4px;
+            }
+            .d2-tooltip-regen:hover { color:var(--accent); border-color:var(--accent); }
+            .d2-tooltip-close { padding:2px 7px; font-size:13px; }
+            .d2-tooltip-close:hover { color:#d4556e; border-color:#d4556e; }
+            .d2-tooltip-cached {
+                font-size:10px; color:var(--muted); opacity:0.7;
+                margin-right:auto;
+            }
+            .d2-tooltip-loading::after { content:'…'; animation:d2-dots 1s infinite; }
+            @keyframes d2-dots { 0%,33% { content:'.'; } 34%,66% { content:'..'; } 67%,100% { content:'…'; } }
+
+            /* ── Leaderboard bars ── */
+            .d2-leader-row {
+                display:grid; grid-template-columns:140px 1fr 110px;
+                align-items:center; gap:10px; padding:6px 0;
+                border-bottom:1px solid rgba(255,255,255,0.04);
+            }
+            .d2-leader-row.d2-leader-best { background:rgba(76,175,80,0.06); border-radius:4px; padding:6px 8px; }
+            .d2-leader-row .d2-leader-name { font-size:12px; font-weight:500; }
+            .d2-leader-row .d2-leader-track {
+                background:rgba(255,255,255,0.05); height:14px; border-radius:7px;
+                overflow:hidden; position:relative;
+            }
+            .d2-leader-row .d2-leader-fill {
+                height:100%; transition:width 0.3s;
+                background:linear-gradient(90deg, var(--accent), #4caf50);
+            }
+            .d2-leader-row .d2-leader-value {
+                font-family:'JetBrains Mono', monospace; font-size:12px;
+                text-align:right; color:var(--text-dim, var(--muted));
+            }
+            .d2-leader-medal { display:inline-block; width:18px; }
+
+            /* ── Bar cards (existing) ── */
+            .d2-bar-card { background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:10px; }
             .d2-bar-label { font-size:11px; color:var(--muted); margin-bottom:6px; }
-            .d2-bar-track {
-                background:rgba(255,255,255,0.05); height:8px; border-radius:4px;
-                overflow:hidden;
-            }
-            .d2-bar-fill {
-                height:100%; width:0%;
-                transition: width 0.3s;
-            }
-            .d2-bar-count {
-                font-size:13px; font-weight:600; margin-top:4px;
-                font-family:monospace;
-            }
+            .d2-bar-track { background:rgba(255,255,255,0.05); height:8px; border-radius:4px; overflow:hidden; }
+            .d2-bar-fill { height:100%; width:0%; transition:width 0.3s; }
+            .d2-bar-count { font-size:13px; font-weight:600; margin-top:4px; font-family:monospace; }
         </style>
 
-        <!-- ── JS for the d² tab ─────────────────────────────── -->
         <script>
         (function(){
-            // Poll /api/d2/status every 5 seconds while this tab is active.
-            // We don't bother polling when the tab is hidden — saves load on
-            // both the orchestrator and the trainer.
-            let pollTimer = null;
+            // ── Shared explain helper ──────────────────────────────────
+            // Used by both the (?) tooltip icons and the "Explain" buttons.
+            // POSTs to /api/d2/explain → returns Claude's interpretation.
+            const d2State = {
+                runs: [],            // pulled from /api/d2/runs
+                bassinStats: {},     // pulled from /api/d2/bassin/stats
+                statusData: {},      // pulled from /api/d2/status
+                pollTimer: null,
+                explainCache: {},    // memoize repeat explanations
+            };
 
+            // Returns: {explanation, cached, generated_at, model, elapsed_ms}
+            // Server-side cache lives in MongoDB; this also keeps a session
+            // memo so re-hovering the same (?) doesn't make a network round-trip.
+            async function fetchExplain(what, values, context, audience='dummy', force=false) {
+                const cacheKey = JSON.stringify({what, values, context, audience});
+                if (!force && d2State.explainCache[cacheKey]) {
+                    return d2State.explainCache[cacheKey];
+                }
+                const r = await fetch('/api/d2/explain', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        what, values, context, audience,
+                        max_words: audience === 'dummy' ? 180 : 250,
+                        force_regenerate: !!force,
+                    }),
+                });
+                if (!r.ok) {
+                    const text = await r.text();
+                    throw new Error(`HTTP ${r.status}: ${text.slice(0, 200)}`);
+                }
+                const data = await r.json();
+                const result = {
+                    explanation: data.explanation,
+                    cached: !!data.cached,
+                    generated_at: data.generated_at,
+                    model: data.model,
+                    elapsed_ms: data.elapsed_ms,
+                };
+                d2State.explainCache[cacheKey] = result;
+                return result;
+            }
+
+            // Build context based on data-context-source attr
+            function buildContext(srcName) {
+                if (srcName === 'leaderboard') {
+                    // Average BWT per method from completed runs
+                    const byMethod = {};
+                    for (const r of d2State.runs) {
+                        if (!r.completed) continue;
+                        const m = r.metrics || {};
+                        const method = m.method || r.request?.optimizer || '?';
+                        const bench = m.benchmark || r.request?.benchmark || '?';
+                        if (bench !== 'permuted_mnist') continue;  // focus on one bench
+                        if (!byMethod[method]) byMethod[method] = [];
+                        if (m.bwt !== undefined) byMethod[method].push(m.bwt);
+                    }
+                    const summary = {};
+                    for (const [k, vs] of Object.entries(byMethod)) {
+                        summary[k] = {mean_bwt: vs.reduce((a,b)=>a+b,0)/vs.length, n_runs: vs.length};
+                    }
+                    return {benchmark: 'permuted_mnist', summary};
+                }
+                if (srcName === 'bassin') {
+                    return d2State.bassinStats;
+                }
+                if (srcName === 'runs') {
+                    const counts = {};
+                    for (const r of d2State.runs) {
+                        const k = (r.metrics?.method || r.request?.optimizer || '?') + '/' + (r.metrics?.benchmark || r.request?.benchmark || '?');
+                        counts[k] = (counts[k] || 0) + 1;
+                    }
+                    return {total_runs: d2State.runs.length, runs_per_method_benchmark: counts};
+                }
+                return {};
+            }
+
+            // ── Modal (for "Explain" buttons) ──────────────────────────
+            const modal = document.getElementById('d2-explain-modal');
+            const modalTitle = document.getElementById('d2-modal-title');
+            const modalBody = document.getElementById('d2-modal-body');
+            const modalCached = document.getElementById('d2-modal-cached');
+            const modalRegen = document.getElementById('d2-modal-regen');
+
+            // Hold the args of whatever the modal is currently showing so
+            // the regenerate button can replay it with force_regenerate=true.
+            let _modalCurrent = null;
+
+            function _formatGeneratedAt(iso) {
+                if (!iso) return '';
+                try {
+                    const d = new Date(iso);
+                    return d.toLocaleString();
+                } catch { return iso; }
+            }
+
+            function renderModalResult(result) {
+                modalBody.className = 'd2-modal-body';
+                modalBody.textContent = result.explanation;
+                if (result.cached) {
+                    modalCached.textContent = 'Cached — generated ' + _formatGeneratedAt(result.generated_at) + ' (' + (result.model || 'claude-cli') + ')';
+                } else {
+                    modalCached.textContent = 'Fresh from Claude (' + (result.elapsed_ms ? (result.elapsed_ms / 1000).toFixed(1) + 's' : 'just now') + '). Cached for next time.';
+                }
+                modalRegen.style.display = 'inline-flex';
+            }
+
+            function openExplainModal(what, values, context, audience) {
+                _modalCurrent = {what, values, context, audience};
+                modalTitle.textContent = 'Explain: ' + (what || 'this');
+                modalBody.className = 'd2-modal-body d2-modal-loading';
+                modalBody.textContent = 'Asking Claude…';
+                modalCached.textContent = 'Generated by Claude (CLI). May take 10-30 seconds.';
+                modalRegen.style.display = 'none';
+                modal.style.display = 'flex';
+                fetchExplain(what, values, context, audience, false)
+                    .then(renderModalResult)
+                    .catch(err => {
+                        modalBody.className = 'd2-modal-body';
+                        modalBody.textContent = 'Could not get an explanation.\n\nError: ' + err.message;
+                    });
+            }
+
+            // Regenerate button — bypass cache, ask Claude again, overwrite.
+            modalRegen.addEventListener('click', () => {
+                if (!_modalCurrent) return;
+                const {what, values, context, audience} = _modalCurrent;
+                modalBody.className = 'd2-modal-body d2-modal-loading';
+                modalBody.textContent = 'Re-asking Claude (forcing fresh generation)…';
+                modalCached.textContent = 'Regenerating — please wait';
+                modalRegen.style.display = 'none';
+                fetchExplain(what, values, context, audience, true)
+                    .then(renderModalResult)
+                    .catch(err => {
+                        modalBody.className = 'd2-modal-body';
+                        modalBody.textContent = 'Regenerate failed.\n\nError: ' + err.message;
+                        modalRegen.style.display = 'inline-flex';
+                    });
+            });
+
+            // Close modal on backdrop click
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) modal.style.display = 'none';
+            });
+            // Close on ESC
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && modal.style.display !== 'none') {
+                    modal.style.display = 'none';
+                }
+            });
+
+            // Wire up all "Explain" buttons (delegated)
+            document.addEventListener('click', (e) => {
+                const btn = e.target.closest('.d2-explain-btn');
+                if (!btn) return;
+                e.preventDefault();
+                const what = btn.dataset.what || 'this';
+                const audience = btn.dataset.audience || 'dummy';
+                let context = {};
+                try { if (btn.dataset.context) context = JSON.parse(btn.dataset.context); } catch {}
+                if (btn.dataset.contextSource) {
+                    context = {...context, ...buildContext(btn.dataset.contextSource)};
+                }
+                openExplainModal(what, null, context, audience);
+            });
+
+            // ── Tooltip (for (?) icons) ────────────────────────────────
+            // Shows a Claude explanation on hover. Stays visible while the
+            // pointer is over either the icon or the tooltip itself, so the
+            // user can click the regenerate (↻) button.
+            const tooltip = document.getElementById('d2-tooltip');
+            let tooltipCurrent = null;   // {what, audience, anchorEl}
+
+            function _positionTooltip(anchor) {
+                const rect = anchor.getBoundingClientRect();
+                let x = rect.right + 8;
+                let y = rect.top - 4;
+                // Keep within viewport
+                const ttRect = tooltip.getBoundingClientRect();
+                const w = ttRect.width || 360;
+                const h = ttRect.height || 120;
+                if (x + w > window.innerWidth - 8) x = Math.max(8, rect.left - w - 8);
+                if (y + h > window.innerHeight - 8) y = Math.max(8, window.innerHeight - h - 8);
+                tooltip.style.left = x + 'px';
+                tooltip.style.top = y + 'px';
+            }
+
+            function showTooltipLoading(anchor) {
+                tooltip.innerHTML = '';
+                const span = document.createElement('span');
+                span.className = 'd2-tooltip-loading';
+                span.textContent = 'asking claude';
+                tooltip.appendChild(span);
+                tooltip.style.display = 'flex';
+                _positionTooltip(anchor);
+            }
+
+            function showTooltipResult(anchor, result) {
+                tooltip.innerHTML = '';
+                const body = document.createElement('div');
+                body.className = 'd2-tooltip-body';
+                body.textContent = result.explanation || '';
+                tooltip.appendChild(body);
+
+                const actions = document.createElement('div');
+                actions.className = 'd2-tooltip-actions';
+
+                const meta = document.createElement('span');
+                meta.className = 'd2-tooltip-cached';
+                meta.textContent = result.cached
+                    ? 'cached · ' + _formatGeneratedAt(result.generated_at)
+                    : 'fresh' + (result.elapsed_ms ? ' · ' + (result.elapsed_ms/1000).toFixed(1) + 's' : '');
+                actions.appendChild(meta);
+
+                const btn = document.createElement('button');
+                btn.className = 'd2-tooltip-regen';
+                btn.title = 'Regenerate — bypass cache and ask Claude again';
+                btn.innerHTML = '<span aria-hidden="true">↻</span> regen';
+                btn.addEventListener('click', (ev) => {
+                    ev.stopPropagation();
+                    if (!tooltipCurrent) return;
+                    const {what, audience, anchorEl} = tooltipCurrent;
+                    showTooltipLoading(anchorEl || anchor);
+                    fetchExplain(what, null, {mode: 'tooltip'}, audience, true)
+                        .then(r => {
+                            if (tooltipCurrent && tooltipCurrent.what === what) {
+                                showTooltipResult(anchorEl || anchor, r);
+                            }
+                        })
+                        .catch(err => {
+                            if (tooltip.style.display !== 'none') {
+                                tooltip.innerHTML = '';
+                                const e = document.createElement('div');
+                                e.className = 'd2-tooltip-body';
+                                e.textContent = '(regen failed: ' + err.message + ')';
+                                tooltip.appendChild(e);
+                            }
+                        });
+                });
+                actions.appendChild(btn);
+
+                const closeBtn = document.createElement('button');
+                closeBtn.className = 'd2-tooltip-close';
+                closeBtn.title = 'Close (Esc)';
+                closeBtn.setAttribute('aria-label', 'Close');
+                closeBtn.textContent = '×';
+                closeBtn.addEventListener('click', (ev) => { ev.stopPropagation(); hideTooltip(); });
+                actions.appendChild(closeBtn);
+
+                tooltip.appendChild(actions);
+                tooltip.style.display = 'flex';
+                _positionTooltip(anchor);
+            }
+
+            function showTooltipError(anchor, err) {
+                tooltip.innerHTML = '';
+                const body = document.createElement('div');
+                body.className = 'd2-tooltip-body';
+                body.textContent = '(Claude unavailable: ' + err.message + ')';
+                tooltip.appendChild(body);
+                tooltip.style.display = 'flex';
+                _positionTooltip(anchor);
+            }
+
+            function hideTooltip() {
+                tooltip.style.display = 'none';
+                tooltipCurrent = null;
+            }
+
+            // Sticky modal behaviour: tooltip stays open until × or Escape.
+            document.addEventListener('keydown', (ev) => {
+                if (ev.key === 'Escape' && tooltip.style.display !== 'none') hideTooltip();
+            });
+
+            // (?) hover: load explanation lazily, cache, show in tooltip
+            document.addEventListener('mouseenter', (e) => {
+                const help = e.target.closest && e.target.closest('.d2-help');
+                if (!help) return;
+                const what = help.dataset.what || 'this';
+                const audience = help.dataset.audience || 'dummy';
+                tooltipCurrent = {what, audience, anchorEl: help};
+                const memoKey = JSON.stringify({what, values: null, context: {mode: 'tooltip'}, audience});
+                if (d2State.explainCache[memoKey]) {
+                    showTooltipResult(help, d2State.explainCache[memoKey]);
+                    return;
+                }
+                showTooltipLoading(help);
+                fetchExplain(what, null, {mode: 'tooltip'}, audience)
+                    .then(result => {
+                        if (tooltipCurrent && tooltipCurrent.what === what) {
+                            showTooltipResult(help, result);
+                        }
+                    })
+                    .catch(err => {
+                        if (tooltipCurrent && tooltipCurrent.what === what) {
+                            showTooltipError(help, err);
+                        }
+                    });
+            }, true);
+
+            // ── Status panel ───────────────────────────────────────────
             function setStatusDot(state) {
-                // state: "ok" (reachable + model loaded), "warn" (reachable but no model),
-                //        "err" (unreachable or unconfigured), "checking"
                 const dot = document.getElementById('d2-status-dot');
                 const colors = { ok:'#4caf50', warn:'#f5a623', err:'#d4556e', checking:'#888' };
                 dot.style.background = colors[state] || '#888';
-                if (state === 'checking') dot.style.animation = 'pulse 1s infinite';
-                else dot.style.animation = '';
             }
-
             async function refreshD2Status() {
                 try {
                     const r = await fetch('/api/d2/status');
                     const data = await r.json();
+                    d2State.statusData = data;
                     const label = document.getElementById('d2-status-label');
                     const endpoint = document.getElementById('d2-status-endpoint');
-
                     if (!data.configured) {
-                        setStatusDot('err');
-                        label.textContent = 'not configured';
+                        setStatusDot('err'); label.textContent = 'not configured';
                         endpoint.textContent = '(set D2_ENDPOINT_URL in .env)';
                     } else if (!data.reachable) {
-                        setStatusDot('err');
-                        label.textContent = 'unreachable';
+                        setStatusDot('err'); label.textContent = 'unreachable';
                         endpoint.textContent = data.endpoint || '';
                     } else if (!data.model_loaded) {
-                        setStatusDot('warn');
-                        label.textContent = 'reachable, model not loaded';
+                        setStatusDot('warn'); label.textContent = 'reachable, model not loaded';
                         endpoint.textContent = data.endpoint || '';
                     } else {
-                        setStatusDot('ok');
-                        label.textContent = 'live';
+                        setStatusDot('ok'); label.textContent = 'live';
                         endpoint.textContent = data.endpoint || '';
                     }
-
                     document.getElementById('d2-current-optimizer').textContent = data.current_optimizer || '—';
                     document.getElementById('d2-training-status').textContent = data.training_status || '—';
                     document.getElementById('d2-model-loaded').textContent = data.model_loaded === true ? 'yes' : data.model_loaded === false ? 'no' : '—';
@@ -812,7 +1400,6 @@
                 } catch (e) {
                     setStatusDot('err');
                     document.getElementById('d2-status-label').textContent = 'fetch failed';
-                    document.getElementById('d2-status-endpoint').textContent = String(e).slice(0, 80);
                 }
             }
 
@@ -821,6 +1408,7 @@
                     const r = await fetch('/api/d2/bassin/stats');
                     if (!r.ok) return;
                     const data = await r.json();
+                    d2State.bassinStats = data;
                     const counts = data.negation_type_counts || {};
                     const total = Object.values(counts).reduce((a,b) => a + b, 0) || 1;
                     document.querySelectorAll('.d2-bar-card').forEach(card => {
@@ -828,79 +1416,206 @@
                         const n = counts[type] || 0;
                         const pct = (n / total) * 100;
                         card.querySelector('.d2-bar-fill').style.width = pct + '%';
-                        card.querySelector('.d2-bar-count').textContent =
-                            `${n.toLocaleString()} (${pct.toFixed(1)}%)`;
+                        card.querySelector('.d2-bar-count').textContent = `${n.toLocaleString()} (${pct.toFixed(1)}%)`;
                     });
-                } catch (e) { /* trainer not reachable; leave as-is */ }
+                } catch (e) { /* trainer not reachable */ }
             }
 
+            // ── KPI strip + leaderboard + runs table — all driven by /api/d2/runs ──
             async function refreshD2Runs() {
                 try {
                     const r = await fetch('/api/d2/runs');
                     if (!r.ok) return;
                     const data = await r.json();
-                    const tbody = document.getElementById('d2-runs-tbody');
-                    const runs = data.runs || [];
-                    if (!runs.length) {
-                        tbody.innerHTML = '<tr><td colspan="7" style="padding:14px;text-align:center;color:var(--muted)">no runs yet</td></tr>';
-                        return;
-                    }
-                    tbody.innerHTML = '';
-                    for (const run of runs) {
-                        const m = run.metrics || {};
-                        const req = run.request || {};
-                        const tr = document.createElement('tr');
-                        tr.style.borderBottom = '1px solid var(--border)';
-                        const fmt = (v, sign) => v == null ? '—' : (sign ? (v >= 0 ? '+' : '') : '') + v.toFixed(4);
-                        const ts = run.started_at ? new Date(run.started_at * 1000).toLocaleString() : '—';
-                        tr.innerHTML = `
-                            <td style="padding:6px 8px;font-family:monospace;font-size:11px">${run.run_id || '—'}</td>
-                            <td style="padding:6px 8px"><strong>${m.method || req.optimizer || '—'}</strong></td>
-                            <td style="padding:6px 8px">${m.benchmark || req.benchmark || '—'}</td>
-                            <td style="padding:6px 8px;text-align:right;font-family:monospace">${fmt(m.acc)}</td>
-                            <td style="padding:6px 8px;text-align:right;font-family:monospace">${fmt(m.bwt, true)}</td>
-                            <td style="padding:6px 8px;text-align:right;font-family:monospace">${fmt(m.fwt, true)}</td>
-                            <td style="padding:6px 8px;color:var(--muted);font-size:11px">${ts}</td>
-                        `;
-                        tbody.appendChild(tr);
-                    }
-                } catch (e) { /* trainer not reachable; leave as-is */ }
+                    let runs = data.runs || [];
+                    // Each run from /runs is the META; we need to also fetch the metrics for completed runs.
+                    // Optimization: only fetch detail for the first time we see a completed run; cache after.
+                    if (!d2State.metricsCache) d2State.metricsCache = {};
+                    const fetches = runs.filter(r => r.completed && !d2State.metricsCache[r.run_id])
+                                        .map(async r => {
+                                            try {
+                                                const dr = await fetch(`/api/d2/runs/${r.run_id}`);
+                                                if (dr.ok) {
+                                                    const det = await dr.json();
+                                                    d2State.metricsCache[r.run_id] = det.metrics || {};
+                                                }
+                                            } catch {}
+                                        });
+                    await Promise.all(fetches);
+                    // Annotate
+                    runs = runs.map(r => ({...r, metrics: d2State.metricsCache[r.run_id] || r.metrics || {}}));
+                    d2State.runs = runs;
+                    renderRunsTable(runs);
+                    renderLeaderboard(runs);
+                    renderKPIStrip(runs);
+                } catch (e) { console.error('runs fetch failed', e); }
             }
 
-            function refreshAll() {
-                refreshD2Status();
-                refreshD2Bassin();
-                refreshD2Runs();
+            function renderRunsTable(runs) {
+                const tbody = document.getElementById('d2-runs-tbody');
+                if (!runs.length) {
+                    tbody.innerHTML = '<tr><td colspan="7" style="padding:14px;text-align:center;color:var(--muted)">no runs yet</td></tr>';
+                    return;
+                }
+                // Sort by start time, most recent first
+                const sorted = [...runs].sort((a,b) => (b.started_at||0) - (a.started_at||0));
+                tbody.innerHTML = '';
+                for (const run of sorted) {
+                    const m = run.metrics || {};
+                    const req = run.request || {};
+                    const tr = document.createElement('tr');
+                    tr.style.borderBottom = '1px solid rgba(255,255,255,0.04)';
+                    const fmt = (v, sign) => v == null ? '—' : (sign ? (v >= 0 ? '+' : '') : '') + v.toFixed(4);
+                    const ts = run.started_at ? new Date(run.started_at * 1000).toLocaleString() : '—';
+                    tr.innerHTML = `
+                        <td style="padding:6px 8px;font-family:monospace;font-size:11px">${run.run_id || '—'}</td>
+                        <td style="padding:6px 8px"><strong>${m.method || req.optimizer || '—'}</strong></td>
+                        <td style="padding:6px 8px">${m.benchmark || req.benchmark || '—'}</td>
+                        <td style="padding:6px 8px;text-align:right;font-family:monospace">${fmt(m.acc)}</td>
+                        <td style="padding:6px 8px;text-align:right;font-family:monospace">${fmt(m.bwt, true)}</td>
+                        <td style="padding:6px 8px;text-align:right;font-family:monospace">${fmt(m.fwt, true)}</td>
+                        <td style="padding:6px 8px;color:var(--muted);font-size:11px">${ts}</td>
+                    `;
+                    tbody.appendChild(tr);
+                }
             }
 
-            // Wire to tab activation. The dashboard.js tab switcher fires
-            // "click" on .tab buttons; we just listen on our own button.
-            // Also start polling immediately if our tab is already active
-            // on page load (e.g. user refreshed while viewing the tab).
+            // ── Leaderboard: sort methods by mean BWT on permuted-MNIST ──
+            function renderLeaderboard(runs) {
+                const lb = document.getElementById('d2-leaderboard');
+                // Aggregate mean BWT and ACC per method on permuted-MNIST
+                const byMethod = {};
+                for (const r of runs) {
+                    if (!r.completed) continue;
+                    const m = r.metrics || {};
+                    if (m.benchmark !== 'permuted_mnist') continue;
+                    const k = m.method || '?';
+                    if (!byMethod[k]) byMethod[k] = {bwts: [], accs: []};
+                    if (m.bwt !== undefined) byMethod[k].bwts.push(m.bwt);
+                    if (m.acc !== undefined) byMethod[k].accs.push(m.acc);
+                }
+                const rows = Object.entries(byMethod).map(([method, d]) => ({
+                    method,
+                    bwt: d.bwts.length ? d.bwts.reduce((a,b)=>a+b,0)/d.bwts.length : null,
+                    acc: d.accs.length ? d.accs.reduce((a,b)=>a+b,0)/d.accs.length : null,
+                    n: d.bwts.length,
+                })).filter(r => r.bwt !== null);
+                rows.sort((a,b) => b.bwt - a.bwt);  // Closer to 0 = better
+                if (!rows.length) {
+                    lb.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px">No completed runs on permuted-MNIST yet.</div>';
+                    return;
+                }
+                // Scale: BWT ranges from ~-0.15 (worst) to 0 (best)
+                const minBwt = Math.min(-0.15, ...rows.map(r => r.bwt));
+                const maxBwt = 0;
+                lb.innerHTML = '';
+                rows.forEach((r, idx) => {
+                    const isBest = idx === 0;
+                    const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : '  ';
+                    // Bar fill: longer = better (closer to 0)
+                    const fillPct = ((r.bwt - minBwt) / (maxBwt - minBwt)) * 100;
+                    const div = document.createElement('div');
+                    div.className = 'd2-leader-row' + (isBest ? ' d2-leader-best' : '');
+                    div.innerHTML = `
+                        <div class="d2-leader-name"><span class="d2-leader-medal">${medal}</span> <strong>${r.method}</strong> <span style="color:var(--muted);font-size:10px">(n=${r.n})</span></div>
+                        <div class="d2-leader-track"><div class="d2-leader-fill" style="width:${Math.max(2, fillPct)}%"></div></div>
+                        <div class="d2-leader-value">BWT ${(r.bwt >= 0 ? '+' : '') + r.bwt.toFixed(4)}<br><span style="font-size:10px;color:var(--muted)">ACC ${r.acc != null ? r.acc.toFixed(3) : '—'}</span></div>
+                    `;
+                    lb.appendChild(div);
+                });
+            }
+
+            // ── KPI strip ──
+            function renderKPIStrip(runs) {
+                const completed = runs.filter(r => r.completed && r.metrics?.benchmark === 'permuted_mnist');
+                if (!completed.length) return;
+
+                // Mean BWT per method (averaging across seeds — single outliers shouldn't dominate)
+                const byMethod = {};
+                for (const r of completed) {
+                    const k = r.metrics.method;
+                    (byMethod[k] = byMethod[k] || []).push(r.metrics.bwt);
+                }
+                const meanBwt = (k) => byMethod[k]?.length ? byMethod[k].reduce((a,b)=>a+b,0)/byMethod[k].length : null;
+                const countOf = (k) => byMethod[k]?.length || 0;
+
+                // BEST: pick method with highest mean BWT (closest to 0 = least forgetting), exclude failed-to-learn
+                // (delta2 standalone has BWT +0.000 because it never moved — that's not "best", it's "broken")
+                const validMethods = Object.keys(byMethod).filter(k => {
+                    const acc = completed.filter(r => r.metrics.method === k).map(r => r.metrics.acc).reduce((a,b)=>a+b,0) / countOf(k);
+                    return acc > 0.5;  // model actually learned
+                });
+                if (validMethods.length) {
+                    const sortedByBwt = validMethods.map(k => [k, meanBwt(k)]).sort((a,b) => b[1] - a[1]);
+                    const [bestMethod, bestMean] = sortedByBwt[0];
+                    const bestEl = document.getElementById('d2-kpi-best-method');
+                    bestEl.textContent = bestMethod;
+                    bestEl.classList.toggle('d2-kpi-good', bestMean >= -0.02);
+                    bestEl.classList.toggle('d2-kpi-bad',  bestMean < -0.05);
+                    document.getElementById('d2-kpi-best-bwt').textContent =
+                        `BWT ${bestMean.toFixed(4)} (mean of ${countOf(bestMethod)} run${countOf(bestMethod)>1?'s':''})`;
+                }
+
+                const adam = meanBwt('adam');
+                const gem = meanBwt('gem');
+                const d2add = meanBwt('delta2_additive') ?? meanBwt('controller');
+
+                if (adam !== null && d2add !== null) {
+                    // δ² less forgetting than Adam → improvement is good
+                    const improvementPct = (1 - Math.abs(d2add) / Math.abs(adam)) * 100;
+                    const adamEl = document.getElementById('d2-kpi-vs-adam-pct');
+                    // Wording: "−40% forgetting" reads more clearly than "+40% improvement"
+                    if (improvementPct >= 0) {
+                        adamEl.textContent = `−${improvementPct.toFixed(0)}% forgetting`;
+                    } else {
+                        adamEl.textContent = `+${(-improvementPct).toFixed(0)}% MORE forgetting`;
+                    }
+                    adamEl.classList.toggle('d2-kpi-good', improvementPct > 0);
+                    adamEl.classList.toggle('d2-kpi-bad',  improvementPct < 0);
+                    document.getElementById('d2-kpi-vs-adam-detail').textContent = `δ² ${d2add.toFixed(3)} · Adam ${adam.toFixed(3)} · less negative is better`;
+                }
+                if (gem !== null && d2add !== null) {
+                    // Big value = percentage gap (signed); sub = plain-language interpretation.
+                    const gapPct = ((Math.abs(d2add) - Math.abs(gem)) / Math.abs(gem)) * 100;
+                    const ratio  = Math.abs(d2add) / Math.abs(gem);
+                    const gemEl  = document.getElementById('d2-kpi-vs-gem-pct');
+                    gemEl.textContent = `${gapPct >= 0 ? '+' : ''}${gapPct.toFixed(0)}% gap`;
+                    if (ratio < 0.99) {
+                        gemEl.classList.add('d2-kpi-good');
+                        gemEl.classList.remove('d2-kpi-bad');
+                    } else if (ratio < 1.5) {
+                        gemEl.classList.remove('d2-kpi-good', 'd2-kpi-bad');
+                    } else {
+                        gemEl.classList.add('d2-kpi-bad');
+                        gemEl.classList.remove('d2-kpi-good');
+                    }
+
+                    let prose;
+                    if (ratio < 0.99)      prose = `δ² beats GEM (${ratio.toFixed(2)}× its forgetting)`;
+                    else if (ratio < 1.5)  prose = `δ² roughly matches GEM (${ratio.toFixed(2)}× its forgetting)`;
+                    else                   prose = `δ² forgets ${ratio.toFixed(1)}× more than GEM`;
+                    document.getElementById('d2-kpi-vs-gem-detail').textContent =
+                        `${prose} · δ² ${d2add.toFixed(3)} vs GEM ${gem.toFixed(3)}`;
+                }
+            }
+
+            // ── Polling lifecycle ──────────────────────────────────────
+            function refreshAll() { refreshD2Status(); refreshD2Bassin(); refreshD2Runs(); }
             function startPolling() {
                 refreshAll();
-                if (pollTimer) clearInterval(pollTimer);
-                pollTimer = setInterval(refreshAll, 5000);
+                if (d2State.pollTimer) clearInterval(d2State.pollTimer);
+                d2State.pollTimer = setInterval(refreshAll, 5000);
             }
             function stopPolling() {
-                if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+                if (d2State.pollTimer) { clearInterval(d2State.pollTimer); d2State.pollTimer = null; }
             }
-
             const d2Btn = document.querySelector('.tab[data-tab="d2"]');
-            if (d2Btn) {
-                d2Btn.addEventListener('click', startPolling);
-            }
-            // Other tabs stop our polling
+            if (d2Btn) d2Btn.addEventListener('click', startPolling);
             document.querySelectorAll('.tab').forEach(btn => {
-                if (btn.dataset.tab && btn.dataset.tab !== 'd2') {
-                    btn.addEventListener('click', stopPolling);
-                }
+                if (btn.dataset.tab && btn.dataset.tab !== 'd2') btn.addEventListener('click', stopPolling);
             });
-            // Auto-start if d² is the active tab on load
             const activeTab = document.querySelector('.tab.active');
-            if (activeTab && activeTab.dataset.tab === 'd2') {
-                startPolling();
-            }
+            if (activeTab && activeTab.dataset.tab === 'd2') startPolling();
         })();
         </script>
     </section>

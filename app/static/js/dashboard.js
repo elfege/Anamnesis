@@ -812,6 +812,9 @@ $(function () {
         session_id: localStorage.getItem(CHAT_SESSION_KEY) || null,
         backend: "ollama",
         model: null,
+        worker_url: null,            // pinned worker (when user picks a specific resource)
+        resource_id: localStorage.getItem("anamnesis_chat_resource") || null,
+        resources: [],               // populated from /api/chat/inference-resources
         claude_enabled: false,
         claude_cli_enabled: false,
         anamnesis_enabled: false,
@@ -862,9 +865,74 @@ $(function () {
     // Load Ollama models when Chat tab opens
     $(".tab[data-tab='chat']").on("click", function () {
         load_ollama_models();
+        load_inference_resources();
         if (!chat_state.session_id) {
             new_chat_session();
         }
+    });
+
+    // ── Inference resource selector (Together.ai / RunPod / local Ollamas / d² / Claude) ─
+    function load_inference_resources() {
+        $.getJSON("/api/chat/inference-resources", function (data) {
+            chat_state.resources = data.resources || [];
+            var $sel = $("#chat-resource-select");
+            $sel.empty();
+            chat_state.resources.forEach(function (r) {
+                var label = r.label + (r.reachable ? " ✓" : " ✗");
+                if (r.latency_ms != null && r.reachable) label += " (" + r.latency_ms + "ms)";
+                var $opt = $("<option>").val(r.id).text(label);
+                if (!r.reachable) {
+                    $opt.prop("disabled", true);
+                    if (r.note) $opt.attr("title", r.note);
+                }
+                $sel.append($opt);
+            });
+            // Restore prior selection or pick first reachable
+            var pick = chat_state.resource_id;
+            var avail_ids = chat_state.resources.filter(function (r) { return r.reachable; }).map(function (r) { return r.id; });
+            if (!pick || avail_ids.indexOf(pick) === -1) {
+                pick = avail_ids[0] || (chat_state.resources[0] && chat_state.resources[0].id) || "";
+            }
+            $sel.val(pick);
+            apply_resource_pick(pick);
+        }).fail(function () {
+            $("#chat-resource-select").empty().append(
+                $("<option>").val("").text("(catalog unavailable)")
+            );
+        });
+    }
+
+    function apply_resource_pick(resource_id) {
+        var r = chat_state.resources.filter(function (x) { return x.id === resource_id; })[0];
+        if (!r) return;
+        chat_state.resource_id = r.id;
+        chat_state.backend = r.kind;
+        chat_state.worker_url = r.url || null;
+        localStorage.setItem("anamnesis_chat_resource", r.id);
+
+        // Repopulate model dropdown with this resource's models
+        var $msel = $("#chat-model-select");
+        $msel.empty();
+        if (r.models && r.models.length) {
+            r.models.forEach(function (m) {
+                $msel.append($("<option>").val(m).text(m));
+            });
+            chat_state.model = $msel.val();
+            $msel.show();
+        } else {
+            $msel.hide();
+            chat_state.model = null;
+        }
+
+        // Update the badge to reflect the picked backend
+        var $b = $("#chat-backend-badge");
+        $b.text(r.kind).removeClass("ollama-badge claude-badge");
+        if (r.kind === "claude" || r.kind === "claude_cli") $b.addClass("claude-badge");
+        else $b.addClass("ollama-badge");
+    }
+
+    $("#chat-resource-select").on("change", function () {
+        apply_resource_pick($(this).val());
     });
 
     function new_chat_session() {
@@ -1202,6 +1270,7 @@ $(function () {
             message: msg,
             backend: chat_state.backend,
             model: chat_state.model || undefined,
+            worker_url: chat_state.worker_url || undefined,
             session_id: chat_state.session_id,
             top_k: 3,
             attached_files: attached_files.map(function (f) {

@@ -584,6 +584,7 @@
 
     // WebSocket
     let ws = null, currentAssistantEl = null, reconnectTimer = null;
+    let pageClosing = false;
     function connect() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       ws = new WebSocket(`${proto}://${location.host}/api/avatar/ws`);
@@ -594,6 +595,7 @@
       };
       ws.onmessage = (event) => handleMessage(JSON.parse(event.data));
       ws.onclose = () => {
+        if (pageClosing) return;
         backendInfo.textContent = 'disconnected — reconnecting…';
         sendBtn.disabled = true;
         stopBtn.style.display = 'none';
@@ -601,6 +603,20 @@
       };
       ws.onerror = () => ws.close();
     }
+
+    // Page unload: tell the backend to stop and kill any in-flight worker
+    // job before the browser tears the WS down. Without this, SadTalker
+    // keeps occupying GPU until it finishes on its own.
+    window.addEventListener('pagehide', () => {
+      pageClosing = true;
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      try {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'stop' }));
+          ws.close();
+        }
+      } catch {}
+    });
 
     function handleMessage(msg) {
       switch (msg.type) {

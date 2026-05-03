@@ -390,3 +390,268 @@ async def get_run(run_id: str):
             return r.json()
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Trainer unreachable: {e}")
+
+
+# ============================================================================
+# /explain — Claude CLI–powered interpretation of any KPI / panel / result
+# ============================================================================
+#
+# WHAT THIS DOES, FOR THE DUMMIES:
+# Every help icon (?) and "Explain these results" button in the δ² dashboard
+# tab POSTs here. The endpoint shells out to Claude CLI (running on the host
+# via SSH from inside the container) with a prompt that includes:
+#   - what the user clicked
+#   - the current value of the relevant KPI(s)
+#   - context (which optimizer, which benchmark, what's "good")
+# Claude returns a plain-English explanation, written for someone who has
+# never seen a continual-learning paper. The endpoint returns it as plain
+# text or JSON.
+#
+# WHY CLAUDE CLI not the Anthropic API:
+# CLAUDE_CLI_HOST + CLAUDE_CLI_PATH are already wired (see app/routes/chat.py).
+# CLI uses your existing subscription; no API key needed in .env.
+
+class ExplainRequest(BaseModel):
+    """What the dashboard sends to /explain."""
+    # What is the user looking at? Free-form, e.g. "BWT", "controller_stats",
+    # "the runs table", "the bassin distribution", "the status panel".
+    what: str
+    # Optional: the actual current values, as JSON-serializable dict.
+    # Example: {"adam": -0.106, "delta2_additive": -0.063, "gem": -0.017}
+    values: dict | None = None
+    # Optional: extra context the dashboard wants to pass through (e.g.
+    # "method=controller", "benchmark=permuted_mnist").
+    context: dict | None = None
+    # Audience hint — affects how technical the answer is.
+    # "dummy" → write for a 7-year-old as the user requested
+    # "engineer" → ML-literate but new to this codebase
+    # "researcher" → assumes familiarity with the literature
+    audience: str = "dummy"
+    # Length cap — keep responses snappy
+    max_words: int = 200
+    # If True: skip the MongoDB cache, run Claude CLI fresh, overwrite cache.
+    force_regenerate: bool = False
+
+
+def _explain_cache_key(req: ExplainRequest) -> str:
+    """Stable SHA-256 over canonical JSON of the request inputs.
+
+    `force_regenerate` is intentionally NOT part of the key — it's a
+    control flag, not an input that should fork the cache.
+    """
+    import hashlib
+    import json as _json
+    payload = {
+        "what": req.what,
+        "values": req.values,
+        "context": req.context,
+        "audience": req.audience,
+        "max_words": req.max_words,
+    }
+    canonical = _json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+@router.post("/explain")
+async def explain(req: ExplainRequest):
+    """
+    Generate a plain-English explanation of a δ² dashboard element.
+
+    Caching:
+        - On first call with a given (what, values, context, audience, max_words)
+          tuple, runs Claude CLI (~10s) and stores the result in MongoDB
+          (collection: d2_explanations).
+        - Subsequent calls with the same inputs return the cached entry
+          immediately (`cached: true` in response).
+        - Pass `force_regenerate=true` to bypass the cache, run Claude
+          fresh, and overwrite the cached entry.
+
+    Returns: {
+        "explanation": "...",
+        "model": "claude-cli",
+        "elapsed_ms": ...,
+        "audience": "...",
+        "cached": bool,
+        "cache_key": "...",
+        "generated_at": "ISO-8601"
+    }
+    """
+    import json as _json
+    import shlex
+    import subprocess
+    import time
+    from datetime import datetime, timezone
+
+    cache_key = _explain_cache_key(req)
+
+    # ── Cache lookup (unless force_regenerate) ────────────────────
+    try:
+        from database import get_d2_explanations_collection
+        cache_col = get_d2_explanations_collection()
+    except Exception as e:
+        cache_col = None
+        logger.warning(f"d2 explain cache unavailable: {e}")
+
+    if cache_col is not None and not req.force_regenerate:
+        cached = await cache_col.find_one({"cache_key": cache_key})
+        if cached and cached.get("explanation"):
+            generated_at = cached.get("generated_at")
+            return {
+                "explanation": cached["explanation"],
+                "model": cached.get("model", "claude-cli"),
+                "elapsed_ms": 0,
+                "audience": req.audience,
+                "cached": True,
+                "cache_key": cache_key,
+                "generated_at": generated_at.isoformat() if hasattr(generated_at, "isoformat") else generated_at,
+            }
+
+    # Build the prompt. Heavily steered: short, dummy-grade, no jargon
+    # without immediate translation.
+    audience_directive = {
+        "dummy": (
+            "Write at a level a curious 12-year-old (or a busy adult who has "
+            "never read an ML paper) can follow. No undefined jargon. If you "
+            "must use a technical term, give a one-clause translation right "
+            "after it. No equations. Use concrete analogies."
+        ),
+        "engineer": (
+            "Write for an ML-literate engineer new to this codebase. Use "
+            "standard terminology. No equations unless essential."
+        ),
+        "researcher": (
+            "Write for a researcher familiar with continual-learning "
+            "literature. Cite related work briefly."
+        ),
+    }.get(req.audience, "Be clear and concrete.")
+
+    parts = [
+        "You are explaining one element of a research dashboard for the "
+        "δ² project — a continual-learning optimizer that retains structured "
+        "negatives (gradient frictions classified into 4 Hegelian negation "
+        "types) in a 'tension reservoir' (bassin) instead of discarding them.",
+        "",
+        f"The user is looking at: **{req.what}**.",
+        "",
+    ]
+    if req.values:
+        parts.append("Current values:")
+        parts.append("```json")
+        parts.append(_json.dumps(req.values, indent=2)[:1500])
+        parts.append("```")
+        parts.append("")
+    if req.context:
+        parts.append("Context:")
+        parts.append("```json")
+        parts.append(_json.dumps(req.context, indent=2)[:1500])
+        parts.append("```")
+        parts.append("")
+    parts += [
+        f"Audience: {audience_directive}",
+        f"Length: {req.max_words} words MAX. Aim for less.",
+        "",
+        "Tell the user, in plain language:",
+        "1. What this thing IS (one sentence).",
+        "2. What the value(s) MEAN concretely (is it good? bad? compared to what?).",
+        "3. What action the user could take if they cared.",
+        "",
+        "Skip preamble. Start with the answer.",
+    ]
+    prompt = "\n".join(parts)
+
+    # Invoke claude CLI on the host (via SSH from inside the container).
+    # This mirrors the pattern in routes/chat.py:_stream_claude_cli.
+    cli_path = os.environ.get("CLAUDE_CLI_PATH", "claude")
+    cli_host = os.environ.get("CLAUDE_CLI_HOST", "host.docker.internal")
+    cli_user = os.environ.get("SSH_USER", os.environ.get("USER", "elfege"))
+
+    # Use -p (print) flag, no --output-format so we get plain text
+    # --tools "" to disable tool use (we just want a direct answer)
+    cmd_remote = f'{cli_path} -p --tools ""'
+
+    explanation_text: str | None = None
+    elapsed_ms: int = 0
+
+    try:
+        # Try local execution first (when running directly on the host).
+        # Otherwise fall back to SSH (when running inside the container).
+        local_available = os.path.exists(cli_path) or subprocess.run(
+            ["which", cli_path], capture_output=True, text=True
+        ).returncode == 0
+
+        if local_available:
+            t0 = time.time()
+            result = subprocess.run(
+                [cli_path, "-p", "--tools", ""],
+                input=prompt,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            elapsed_ms = int((time.time() - t0) * 1000)
+            if result.returncode != 0:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Claude CLI failed: {result.stderr[:200]}",
+                )
+            explanation_text = result.stdout.strip()
+        else:
+            # SSH fallback (inside container)
+            from routes.files import _ssh_client
+            client = _ssh_client(cli_host, cli_user)
+            t0 = time.time()
+            stdin, stdout, stderr = client.exec_command(cmd_remote, timeout=60)
+            stdin.write(prompt.encode("utf-8"))
+            stdin.channel.shutdown_write()
+            out = stdout.read().decode("utf-8", errors="replace")
+            err = stderr.read().decode("utf-8", errors="replace")
+            elapsed_ms = int((time.time() - t0) * 1000)
+            if not out.strip():
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Claude CLI returned empty. stderr: {err[:200]}",
+                )
+            explanation_text = out.strip()
+
+    except subprocess.TimeoutExpired:
+        raise HTTPException(
+            status_code=504,
+            detail="Claude CLI timed out after 60s",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("explain endpoint failed")
+        raise HTTPException(status_code=500, detail=f"explain failed: {e}")
+
+    # ── Persist to MongoDB cache (best-effort) ────────────────────
+    generated_at = datetime.now(timezone.utc)
+    if cache_col is not None and explanation_text:
+        try:
+            await cache_col.update_one(
+                {"cache_key": cache_key},
+                {"$set": {
+                    "cache_key": cache_key,
+                    "what": req.what,
+                    "values": req.values,
+                    "context": req.context,
+                    "audience": req.audience,
+                    "max_words": req.max_words,
+                    "explanation": explanation_text,
+                    "model": "claude-cli",
+                    "generated_at": generated_at,
+                }},
+                upsert=True,
+            )
+        except Exception as e:
+            logger.warning(f"d2 explain cache write failed: {e}")
+
+    return {
+        "explanation": explanation_text,
+        "model": "claude-cli",
+        "elapsed_ms": elapsed_ms,
+        "audience": req.audience,
+        "cached": False,
+        "cache_key": cache_key,
+        "generated_at": generated_at.isoformat(),
+    }

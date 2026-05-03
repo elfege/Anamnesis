@@ -1,0 +1,91 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SECURITY POLICY (read before editing — this file is the public template)
+# ─────────────────────────────────────────────────────────────────────────────
+# This `.example` is TRACKED in git. The actual `Dockerfile` (without
+# `.example`) is GITIGNORED and built locally — copy this template to start.
+#
+# DO NOT add any of the following to this file or its untracked copy.
+# A pre-push git hook (scripts/security_check.sh) refuses pushes that contain
+# them, but the hook is local — discipline still matters:
+#
+#   COPY .env  /  COPY *.env*           ← never. .env is in .dockerignore.
+#   COPY *.key  /  COPY *.pem           ← never. credentials.
+#   COPY secrets/  /  COPY vault/       ← never. credential bundles.
+#   COPY d2/d2_checkpoints/             ← weights = learned representations
+#                                         of personal data. publish only via
+#                                         a separate model-release image with
+#                                         conscious intent.
+#   COPY d2/data/                       ← raw training data.
+#   COPY README_handoff.md              ← contains operational details.
+#   COPY README_project_history.md      ← same.
+#
+# ALLOWED:
+#   COPY d2/  (source code only — d2_checkpoints/, data/, output/ are in
+#              .dockerignore so this is safe)
+#   COPY app/ (anamnesis-app source)
+#   COPY trainers/ (trainer source)
+#   RUN pip install … (public PyPI)
+#   ENV NON_SECRET_VAR=value
+#
+# IF YOU NEED TO BAKE A CHECKPOINT INTO AN IMAGE FOR PUBLIC RELEASE:
+#   - Build a SEPARATE Dockerfile (e.g. Dockerfile.release-vN.example)
+#   - Make that image private OR confirm the checkpoint is intended public
+#   - Document the dataset + provenance in the image label
+# ─────────────────────────────────────────────────────────────────────────────
+# d2/Dockerfile.runpod — slim image for RunPod GPU pods.
+#
+# Layered on top of RunPod's official PyTorch image, which already contains
+# torch + CUDA + cuDNN. This keeps the OUR-side delta small (~500 MB instead
+# of the 6 GB self-contained image), so registry push/pull is minutes not hours.
+#
+# Build (on dellserver, no GPU needed for build):
+#   cd /home/elfege/0_GENESIS_PROJECT/0_ANAMNESIS
+#   docker build -t ghcr.io/elfege/anamnesis-d2:cuda-runpod -f d2/Dockerfile.runpod .
+#
+# Push (after `docker login ghcr.io`):
+#   docker push ghcr.io/elfege/anamnesis-d2:cuda-runpod
+#
+# Run on RunPod (handled by deploy_runpod.sh):
+#   docker run --gpus all -p 3015:3015 -v /workspace:/workspace ghcr.io/elfege/anamnesis-d2:cuda-runpod
+
+ARG BASE_IMAGE=runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+FROM ${BASE_IMAGE}
+
+# ── Lightweight extras ────────────────────────────────────────────────────────
+# RunPod's base already has torch, numpy, common ML deps. We only add what's
+# specific to anamnesis-d2: FastAPI server, Pydantic, tiktoken, datasets.
+RUN pip install --no-cache-dir \
+        fastapi==0.115.0 \
+        uvicorn==0.30.6 \
+        pydantic==2.9.2 \
+        httpx==0.27.2 \
+        tiktoken \
+        transformers==4.46.2 \
+        peft==0.13.2 \
+        accelerate==1.1.1 \
+        bitsandbytes==0.44.1 \
+        datasets
+
+# ── Copy the d2 module ────────────────────────────────────────────────────────
+WORKDIR /app
+COPY d2/ /app/d2/
+
+# ── Runtime config ────────────────────────────────────────────────────────────
+ENV PYTHONPATH=/app
+ENV D2_PROJECT_DIR=/app
+ENV D2_SERVICE_PORT=3015
+ENV D2_RUNS_DIR=/workspace/runs
+ENV D2_CHECKPOINTS_DIR=/workspace/checkpoints
+ENV D2_DATA_DIR=/workspace/data
+
+# ── Healthcheck ────────────────────────────────────────────────────────────────
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
+  CMD curl -fsS http://localhost:3015/health || exit 1
+
+EXPOSE 3015
+
+# Default: run the FastAPI service. Training is launched via /train/lm/start.
+# Override CMD to run training directly (e.g., for one-shot batch jobs):
+#   docker run ... ghcr.io/elfege/anamnesis-d2:cuda-runpod \
+#     python -m d2.train --optimizer delta2 --d2-additive-mode true ...
+CMD ["python", "-m", "d2.server"]

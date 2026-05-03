@@ -46,6 +46,10 @@ async def connect_to_mongo() -> motor.motor_asyncio.AsyncIOMotorClient:
     await _episodes_collection.create_index("tags")
     await _episodes_collection.create_index("timestamp")
 
+    # δ² explanations cache — indexed for fast lookup by SHA-256 cache_key
+    await _db["d2_explanations"].create_index("cache_key", unique=True)
+    await _db["d2_explanations"].create_index("generated_at")
+
     return _client
 
 
@@ -89,6 +93,18 @@ def get_feedback_collection():
     if _db is None:
         raise RuntimeError("MongoDB not connected.")
     return _db["chat_feedback"]
+
+
+# ─── δ² explanations cache ───────────────────────────────────────
+# Cache for /api/d2/explain — Claude CLI is slow (~10s per call).
+# Documents: {cache_key, what, values, context, audience, max_words,
+#             explanation, model, generated_at}
+# cache_key = SHA-256 of canonical JSON of the request inputs.
+
+def get_d2_explanations_collection():
+    if _db is None:
+        raise RuntimeError("MongoDB not connected.")
+    return _db["d2_explanations"]
 
 
 # ─── Chat session persistence ────────────────────────────────────

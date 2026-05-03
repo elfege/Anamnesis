@@ -66,6 +66,8 @@ class TrainingConfig:
     d2_w_bar_mode: str = "ema"          # reference state W̄: "init", "ema", "fisher"
     d2_w_bar_ema_decay: float = 0.999   # EMA decay for W̄ when mode="ema"
     d2_use_fisher: bool = False         # use Fisher Information weighting for δ₁
+    d2_additive_mode: bool = True       # path B: δ² ADDS to gradient descent (vs replaces). Default True after April-2026 sweep showed standalone form fails.
+    d2_base_lr: float = 1e-3            # gradient-descent step size when additive_mode=True (η is bassin injection on top)
 
     # ── Training loop ────────────────────────────────────────────────────
     batch_size: int = 32                # sequences per batch

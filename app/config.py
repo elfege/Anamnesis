@@ -57,6 +57,33 @@ CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
 CLAUDE_CLI_HOST = os.environ.get("CLAUDE_CLI_HOST", "localhost")
 CLAUDE_CLI_PATH = os.environ.get("CLAUDE_CLI_PATH", "claude")
 
+# ─── Together.ai (hosted, pay-per-token) ─────────────────────────
+# Set TOGETHER_AI_KEY (matches the dashboard's naming convention) to enable.
+# TOGETHER_API_KEY accepted as a fallback for any legacy configs.
+# Models discovered live via /v1/models.
+TOGETHER_API_KEY = os.environ.get("TOGETHER_AI_KEY") or os.environ.get("TOGETHER_API_KEY", "")
+TOGETHER_AI_ID = os.environ.get("TOGETHER_AI_ID", "")  # account identifier (not required for chat completions, kept for account-mgmt endpoints)
+TOGETHER_BASE_URL = os.environ.get("TOGETHER_BASE_URL", "https://api.together.xyz/v1")
+
+# ─── RunPod (on-demand pods running vLLM with OpenAI-compatible API) ─
+# RUNPOD_API_KEY: management API (currently informational here — pod
+# lifecycle handled by deploy_runpod.sh).
+# RUNPOD_ENDPOINT_URL: full base URL of a running pod (e.g.
+# "https://abc-12345-8000.proxy.runpod.net/v1"). Empty when no pod up.
+# RUNPOD_POD_ID: management identifier (informational).
+# RUNPOD_DEFAULT_MODEL: which model is loaded on the pod.
+RUNPOD_API_KEY = os.environ.get("RUNPOD_API_KEY", "")
+RUNPOD_POD_ID = os.environ.get("RUNPOD_POD_ID", "")
+RUNPOD_ENDPOINT_URL = os.environ.get("RUNPOD_ENDPOINT_URL", "")
+RUNPOD_DEFAULT_MODEL = os.environ.get(
+    "RUNPOD_DEFAULT_MODEL", "meta-llama/Meta-Llama-3.1-70B-Instruct"
+)
+
+# ─── δ² engine (research model — separate trainer container) ─────
+# Already used by routes/anamnesis_d2.py; re-exported here for the
+# unified inference-resources catalog.
+D2_ENDPOINT_URL = os.environ.get("D2_ENDPOINT_URL", "")
+
 # ─── Avatar ─────────────────────────────────────────────────────
 # Avatar GPU worker endpoints — tries in order, uses first reachable.
 # Mirrors OLLAMA_URL_N fallback pattern.

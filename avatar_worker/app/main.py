@@ -170,6 +170,13 @@ async def sadtalker_route(
     return FileResponse(mp4, media_type="video/mp4", filename="anim.mp4")
 
 
+@app.post("/sadtalker/cancel")
+async def sadtalker_cancel():
+    """Kill any in-flight SadTalker subprocess. Idempotent."""
+    killed = await sadtalker.cancel_all()
+    return {"killed": killed}
+
+
 # ─── helpers ──────────────────────────────────────────────────
 
 def _to_wav(src: str, dst: str, sample_rate: int = 24000):

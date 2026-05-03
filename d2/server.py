@@ -55,10 +55,12 @@ in each handler. They depend on `d2/inference.py` (already exists in
 scaffolded form) and `d2/train.py` (already exists).
 """
 
+import asyncio
 import json
 import logging
 import os
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -68,6 +70,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+# Sibling-import helper: makes `from inference import …` work for the d2/ tree
+# (mirrors the pattern in d2/experiments/continual.py:142).
+sys.path.insert(0, str(Path(__file__).parent))
+
 # These imports require torch + the d2 module installed; safe inside the container.
 # Outside (e.g. during static analysis on the orchestrator host), they will fail —
 # that's fine, this file isn't meant to run there.
@@ -76,6 +82,14 @@ try:
     HAS_TORCH = True
 except ImportError:
     HAS_TORCH = False
+
+# tiktoken (GPT-2 BPE) for tokenization at /generate time. Optional: if missing,
+# /generate returns a clear 503 instead of hard-crashing the service.
+try:
+    import tiktoken
+    HAS_TIKTOKEN = True
+except ImportError:
+    HAS_TIKTOKEN = False
 
 logger = logging.getLogger("d2.server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
@@ -95,11 +109,97 @@ class ServiceState:
     training_proc: Optional[subprocess.Popen] = None  # current training subprocess
     current_run_id: Optional[str] = None
     runs_dir: Path = Path(os.environ.get("D2_RUNS_DIR", "/workspace/runs"))
+    checkpoints_dir: Path = Path(os.environ.get("D2_CHECKPOINTS_DIR", "/workspace/checkpoints"))
+
+    # /generate state — lazy-initialized on first call
+    inference_engine = None      # d2.inference.D2InferenceEngine, lazy-loaded
+    tokenizer = None             # tiktoken GPT-2 encoder
 
     @classmethod
     def init(cls):
         cls.runs_dir.mkdir(parents=True, exist_ok=True)
+        cls.checkpoints_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Service runs dir: {cls.runs_dir}")
+        logger.info(f"Service checkpoints dir: {cls.checkpoints_dir}")
+
+    @classmethod
+    def find_default_checkpoint(cls) -> Optional[Path]:
+        """
+        Resolve which checkpoint /generate should load by default.
+
+        Priority:
+          1. D2_CHECKPOINT_PATH env var (explicit override)
+          2. {checkpoints_dir}/best.pt
+          3. Most recent .pt file under {checkpoints_dir}
+        """
+        env_path = os.environ.get("D2_CHECKPOINT_PATH")
+        if env_path and Path(env_path).exists():
+            return Path(env_path)
+
+        best = cls.checkpoints_dir / "best.pt"
+        if best.exists():
+            return best
+
+        candidates = sorted(
+            cls.checkpoints_dir.rglob("*.pt"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        return candidates[0] if candidates else None
+
+    @classmethod
+    def get_or_create_inference_engine(cls):
+        """
+        Lazy-init the D2InferenceEngine on first /generate call.
+
+        Returns the engine if a checkpoint is available, raises HTTPException(503)
+        with a helpful message if no model has been trained yet.
+        """
+        if cls.inference_engine is not None and cls.inference_engine.is_loaded():
+            return cls.inference_engine
+
+        ckpt = cls.find_default_checkpoint()
+        if ckpt is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "No d² checkpoint found. Train one first: "
+                    "POST /train/start with a language-model dataset, "
+                    f"or drop a .pt file into {cls.checkpoints_dir}."
+                ),
+            )
+
+        # Lazy import — avoids paying torch/inference cost at startup
+        from inference import D2InferenceEngine
+
+        engine = D2InferenceEngine(
+            checkpoint_path=str(ckpt),
+            device="auto",
+            entropy_threshold=4.0,
+            enable_bassin_recall=True,
+        )
+        if not engine.load():
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to load checkpoint at {ckpt}",
+            )
+
+        cls.inference_engine = engine
+        logger.info(f"Inference engine ready: {ckpt}")
+        return engine
+
+    @classmethod
+    def get_or_create_tokenizer(cls):
+        """Lazy-init the GPT-2 BPE tokenizer (matches WikiText-103 prep script)."""
+        if cls.tokenizer is not None:
+            return cls.tokenizer
+        if not HAS_TIKTOKEN:
+            raise HTTPException(
+                status_code=503,
+                detail="tiktoken not installed in this container — cannot tokenize prompts.",
+            )
+        cls.tokenizer = tiktoken.get_encoding("gpt2")
+        return cls.tokenizer
 
 
 # ============================================================================
@@ -122,6 +222,23 @@ class TrainStartRequest(BaseModel):
     tasks: int = 5
     epochs: int = 1
     seed: int = 0
+    notes: Optional[str] = None
+
+
+class TrainLMRequest(BaseModel):
+    """Launch a language-model training run (d2/train.py on a tokenized .bin dataset)."""
+    optimizer: str = "delta2"            # "adam" | "delta2"
+    dataset: str = "wikitext"            # subdir under data_dir
+    max_steps: int = 5000
+    batch_size: Optional[int] = None     # default from config
+    n_layer: Optional[int] = None
+    n_head: Optional[int] = None
+    n_embd: Optional[int] = None
+    block_size: Optional[int] = None
+    d2_eta: Optional[float] = None
+    d2_additive_mode: Optional[bool] = None  # path B (true) vs path A (false). Default: true.
+    d2_base_lr: Optional[float] = None       # gradient-descent step size when additive_mode=true
+    experiment: Optional[str] = None     # checkpoint subdir name (auto if None)
     notes: Optional[str] = None
 
 
@@ -191,34 +308,109 @@ async def health():
 @app.post("/generate")
 async def generate(req: GenerateRequest):
     """
-    Stream tokens from the δ² model. SSE-formatted output.
+    Stream tokens from the δ² model.
 
-    For now this is a SCAFFOLD: it returns a single-token "not implemented"
-    SSE response. The real implementation hooks up to d2/inference.py once
-    the model loading code is wired (TODO).
+    Lifecycle:
+      1. Lazy-load tokenizer + inference engine on first request.
+      2. Tokenize prompt with GPT-2 BPE (matches WikiText-103 prep).
+      3. Generate up to `max_tokens` via D2InferenceEngine.generate.
+      4. Decode + emit per-token SSE events when stream=True;
+         otherwise return the full assembled string.
+
+    Errors:
+      503 — torch missing / no checkpoint trained / tiktoken missing
+      500 — checkpoint load failed
     """
     if not HAS_TORCH:
         raise HTTPException(
             status_code=503,
             detail="torch not available — service running in scaffold mode",
         )
-    # TODO: load model on first call (lazy); call d2/inference.py:generate(req).
-    # For now, return a placeholder so the proxy + UI can be tested end-to-end.
-    async def _scaffold_stream():
-        yield f"data: {json.dumps({'token': '[d2-engine scaffold] '})}\n\n"
-        yield f"data: {json.dumps({'token': 'generation not yet wired. '})}\n\n"
-        yield f"data: {json.dumps({'token': 'See d2/server.py TODO.'})}\n\n"
-        yield f"data: {json.dumps({'done': True})}\n\n"
 
-    if req.stream:
-        return StreamingResponse(_scaffold_stream(), media_type="text/event-stream")
+    engine = ServiceState.get_or_create_inference_engine()
+    enc = ServiceState.get_or_create_tokenizer()
 
-    # Non-streaming: just return the assembled string
-    return {
-        "text": "[d2-engine scaffold] generation not yet wired.",
-        "tokens_generated": 0,
-        "bassin_recall_triggered": False,
-    }
+    prompt_ids_list = enc.encode_ordinary(req.prompt or "")
+    if not prompt_ids_list:
+        prompt_ids_list = [enc.eot_token] if hasattr(enc, "eot_token") else [50256]
+
+    prompt_tensor = torch.tensor([prompt_ids_list], dtype=torch.long)
+    prompt_len = prompt_tensor.size(1)
+
+    # Update entropy threshold per request (allows UI to tune sensitivity)
+    engine.entropy_threshold = req.uncertainty_threshold
+    engine.enable_bassin_recall = req.enable_bassin_recall
+
+    if not req.stream:
+        # Synchronous path: generate everything, then return
+        generated_ids, stats = engine.generate(
+            prompt_tensor,
+            max_tokens=req.max_tokens,
+            temperature=req.temperature,
+            top_k=req.top_k,
+        )
+        new_tokens = generated_ids[0, prompt_len:].tolist()
+        text = enc.decode(new_tokens)
+        return {
+            "text": text,
+            "tokens_generated": stats.get("tokens_generated", len(new_tokens)),
+            "bassin_recall_triggered": stats.get("bassin_recalls", 0) > 0,
+            "entropy_mean": stats.get("entropy_mean"),
+            "entropy_max": stats.get("entropy_max"),
+            "pct_uncertain": stats.get("pct_uncertain"),
+        }
+
+    # Streaming path: incremental generation with per-token SSE
+    async def _stream_tokens():
+        # Generate one token at a time so we can stream as we go.
+        # We re-implement the engine's loop to interleave async yields.
+        idx = prompt_tensor.to(engine.device)
+        bassin_recalls = 0
+        emitted_so_far = ""
+
+        try:
+            for i in range(req.max_tokens):
+                with torch.no_grad():
+                    idx_cond = idx if idx.size(1) <= engine.model.config.block_size \
+                        else idx[:, -engine.model.config.block_size:]
+                    logits, _ = engine.model(idx_cond)
+                    logits = logits[:, -1, :]
+
+                    # Entropy / bassin-recall hook (logged only — see inference.py TODO)
+                    from bassin import compute_entropy
+                    entropy = compute_entropy(logits[0])
+                    if entropy > engine.entropy_threshold and engine.enable_bassin_recall:
+                        bassin_recalls += 1
+
+                    logits = logits / max(req.temperature, 1e-5)
+                    if req.top_k:
+                        v, _ = torch.topk(logits, min(req.top_k, logits.size(-1)))
+                        logits[logits < v[:, [-1]]] = -float("Inf")
+
+                    probs = torch.nn.functional.softmax(logits, dim=-1)
+                    idx_next = torch.multinomial(probs, num_samples=1)
+                    idx = torch.cat((idx, idx_next), dim=1)
+
+                # Decode incremental delta. tiktoken decode operates on the full
+                # sequence then we substring; per-token decode is unsafe for
+                # multi-byte BPE pieces (would emit replacement chars).
+                new_tokens = idx[0, prompt_len:].tolist()
+                full_decoded = enc.decode(new_tokens)
+                delta = full_decoded[len(emitted_so_far):]
+                emitted_so_far = full_decoded
+
+                if delta:
+                    payload = {"token": delta, "entropy": float(entropy)}
+                    yield f"data: {json.dumps(payload)}\n\n"
+                    # Cooperative yield so the SSE framing flushes
+                    await asyncio.sleep(0)
+
+            yield f"data: {json.dumps({'done': True, 'tokens_generated': req.max_tokens, 'bassin_recalls': bassin_recalls})}\n\n"
+        except Exception as e:
+            logger.exception("generate() streaming failure")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(_stream_tokens(), media_type="text/event-stream")
 
 
 # ============================================================================
@@ -284,6 +476,98 @@ async def train_start(req: TrainStartRequest):
     return {
         "ok": True,
         "run_id": run_id,
+        "started_at": started_at,
+        "log_file": str(log_path),
+    }
+
+
+@app.post("/train/lm/start")
+async def train_lm_start(req: TrainLMRequest):
+    """
+    Launch a language-model training run (next-token cross-entropy on a
+    tokenized .bin dataset, e.g. WikiText-103).
+
+    Runs `python -m d2.train --optimizer X --dataset Y --output-dir Z ...`.
+    Checkpoints land in {checkpoints_dir}/{experiment}/best.pt — which is
+    what /generate auto-loads.
+    """
+    if ServiceState.training_proc is not None and ServiceState.training_proc.poll() is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Training already in progress: run_id={ServiceState.current_run_id}",
+        )
+
+    run_id = f"lm-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+    experiment = req.experiment or f"{req.optimizer}_{req.dataset}_{run_id[3:]}"
+
+    # train.py reads --data-dir; the prep script writes under /app/d2/data/{dataset}/
+    data_dir = os.environ.get("D2_DATA_DIR", "/app/d2/data")
+
+    cmd = [
+        "python", "-m", "d2.train",
+        "--optimizer", req.optimizer,
+        "--dataset", req.dataset,
+        "--max-steps", str(req.max_steps),
+        "--data-dir", data_dir,
+        "--output-dir", str(ServiceState.checkpoints_dir),
+        "--experiment", experiment,
+    ]
+    if req.batch_size is not None:
+        cmd += ["--batch-size", str(req.batch_size)]
+    if req.n_layer is not None:
+        cmd += ["--n-layer", str(req.n_layer)]
+    if req.n_head is not None:
+        cmd += ["--n-head", str(req.n_head)]
+    if req.n_embd is not None:
+        cmd += ["--n-embd", str(req.n_embd)]
+    if req.block_size is not None:
+        cmd += ["--block-size", str(req.block_size)]
+    if req.d2_eta is not None:
+        cmd += ["--d2-eta", str(req.d2_eta)]
+    if req.d2_additive_mode is not None:
+        cmd += ["--d2-additive-mode", "true" if req.d2_additive_mode else "false"]
+    if req.d2_base_lr is not None:
+        cmd += ["--d2-base-lr", str(req.d2_base_lr)]
+
+    log_path = ServiceState.runs_dir / f"{run_id}.log"
+    log_file = open(log_path, "w")
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            cwd=os.environ.get("D2_PROJECT_DIR", "/app"),
+        )
+    except FileNotFoundError as e:
+        log_file.close()
+        raise HTTPException(status_code=500, detail=f"Failed to launch trainer: {e}")
+
+    ServiceState.training_proc = proc
+    ServiceState.current_run_id = run_id
+
+    started_at = time.time()
+    meta_path = ServiceState.runs_dir / f"{run_id}.meta.json"
+    meta = {
+        "run_id": run_id,
+        "kind": "language_model",
+        "experiment": experiment,
+        "checkpoint_dir": str(ServiceState.checkpoints_dir / experiment),
+        "started_at": started_at,
+        "command": cmd,
+        "request": req.model_dump(),
+    }
+    meta_path.write_text(json.dumps(meta, indent=2))
+
+    # Invalidate cached inference engine so /generate picks up the new checkpoint
+    ServiceState.inference_engine = None
+
+    logger.info(f"Started LM training run {run_id}: {' '.join(cmd)}")
+    return {
+        "ok": True,
+        "run_id": run_id,
+        "experiment": experiment,
+        "checkpoint_dir": str(ServiceState.checkpoints_dir / experiment),
         "started_at": started_at,
         "log_file": str(log_path),
     }

@@ -52,6 +52,18 @@ services:
       NANOGPT_URLS: "${NANOGPT_URLS:-http://localhost:3011}"
       D2_ENDPOINT_URL: "${D2_ENDPOINT_URL:-}"
       D2_TIMEOUT_SECONDS: "${D2_TIMEOUT_SECONDS:-120}"
+      # ── Together.ai (hosted, pay-per-token) ─────────────
+      # TOGETHER_AI_KEY is the canonical name (matches together.ai dashboard).
+      # TOGETHER_API_KEY kept for legacy/external compat — config.py reads either.
+      TOGETHER_AI_KEY: "${TOGETHER_AI_KEY:-}"
+      TOGETHER_AI_ID: "${TOGETHER_AI_ID:-}"
+      TOGETHER_API_KEY: "${TOGETHER_API_KEY:-}"
+      TOGETHER_BASE_URL: "${TOGETHER_BASE_URL:-https://api.together.xyz/v1}"
+      # ── RunPod (on-demand A100/H100 pods, OpenAI-compatible vLLM) ─
+      RUNPOD_API_KEY: "${RUNPOD_API_KEY:-}"
+      RUNPOD_POD_ID: "${RUNPOD_POD_ID:-}"
+      RUNPOD_ENDPOINT_URL: "${RUNPOD_ENDPOINT_URL:-}"
+      RUNPOD_DEFAULT_MODEL: "${RUNPOD_DEFAULT_MODEL:-meta-llama/Meta-Llama-3.1-70B-Instruct}"
       TRAINER_URLS: "${TRAINER_URLS:-}"
       TRAINER_LABEL_SERVER1: "${TRAINER_LABEL_SERVER1:-SERVER-1 · ROCm}"
       TRAINER_LABEL_SERVER2: "${TRAINER_LABEL_SERVER2:-SERVER-2 · CUDA}"
