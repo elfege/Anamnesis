@@ -2368,6 +2368,195 @@ $(function () {
         if (e.key === "Escape") $("#help-modal-overlay").fadeOut(150);
     });
 
+    // ─── Direct Ingestion (Upload + URL) ────────────────────────
+    (function setupUploadPanel() {
+        var $zone     = $("#upload-dropzone");
+        var $input    = $("#upload-file-input");
+        var $info     = $("#upload-file-info");
+        var $progWrap = $("#upload-progress-wrap");
+        var $progFill = $("#upload-progress-fill");
+        var $progLbl  = $("#upload-progress-label");
+        var $result   = $("#upload-result");
+        var $url      = $("#upload-url-input");
+        var $btnUrl   = $("#btn-ingest-url");
+
+        if (!$zone.length) return;                                // panel not on this page
+
+        function fmt_bytes(n) {
+            if (n < 1024) return n + " B";
+            if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+            return (n / (1024 * 1024)).toFixed(2) + " MB";
+        }
+
+        function reset_result() {
+            $result.removeClass("upload-ok upload-err upload-dup").text("");
+        }
+
+        function show_progress(label) {
+            $progFill.css("width", "0%");
+            $progLbl.text(label || "Uploading…");
+            $progWrap.show();
+        }
+
+        function set_progress(pct, label) {
+            $progFill.css("width", Math.max(0, Math.min(100, pct)) + "%");
+            if (label) $progLbl.text(label);
+        }
+
+        function hide_progress() { $progWrap.hide(); }
+
+        function render_result(data) {
+            var advanced_bits = [];
+            if (data.url) advanced_bits.push("URL: " + data.url);
+            if (data.filename) advanced_bits.push("File: " + data.filename);
+            if (data.bytes != null) advanced_bits.push("Size: " + fmt_bytes(data.bytes));
+            if (data.char_count != null) advanced_bits.push(data.char_count.toLocaleString() + " chars extracted");
+
+            if (data.duplicate) {
+                $result.removeClass("upload-ok upload-err").addClass("upload-dup")
+                       .html("Duplicate — content already ingested (SHA-256 match). " +
+                             advanced_bits.join(" · "));
+                return;
+            }
+
+            var link = data.episode_id
+                ? '<a href="#" class="upload-jump-episode" data-id="' +
+                  $("<div>").text(data.episode_id).html() + '">View in Episodes ↗</a>'
+                : "";
+            $result.removeClass("upload-err upload-dup").addClass("upload-ok")
+                   .html("Ingested: <code>" + $("<div>").text(data.title || "—").html() +
+                         "</code> · " + advanced_bits.join(" · ") + " " + link);
+        }
+
+        function render_error(xhr) {
+            var msg = "Error";
+            try { msg = (xhr.responseJSON && xhr.responseJSON.detail) || xhr.statusText || msg; }
+            catch (e) {}
+            $result.removeClass("upload-ok upload-dup").addClass("upload-err")
+                   .text("Error: " + msg);
+        }
+
+        // Click → open file picker
+        $zone.on("click", function () { $input.trigger("click"); });
+        $zone.on("keydown", function (e) {
+            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $input.trigger("click"); }
+        });
+
+        // Drag visuals
+        $zone.on("dragover", function (e) {
+            e.preventDefault(); e.stopPropagation();
+            $zone.addClass("dragover");
+        });
+        $zone.on("dragleave dragend", function (e) {
+            e.preventDefault(); e.stopPropagation();
+            $zone.removeClass("dragover");
+        });
+        $zone.on("drop", function (e) {
+            e.preventDefault(); e.stopPropagation();
+            $zone.removeClass("dragover");
+            var dt = e.originalEvent && e.originalEvent.dataTransfer;
+            if (dt && dt.files && dt.files.length) {
+                handle_file(dt.files[0]);
+            }
+        });
+
+        $input.on("change", function () {
+            if (this.files && this.files.length) handle_file(this.files[0]);
+        });
+
+        function handle_file(file) {
+            reset_result();
+            $info.show().text(file.name + "  ·  " + fmt_bytes(file.size));
+
+            var fd = new FormData();
+            fd.append("file", file);
+            var tags = $("#upload-tags").val().trim();
+            var title = $("#upload-title").val().trim();
+            var project = $("#upload-project").val().trim() || "manual-upload";
+            if (tags)  fd.append("tags", tags);
+            if (title) fd.append("title_override", title);
+            fd.append("project", project);
+
+            show_progress("Uploading…");
+
+            $.ajax({
+                url: "/api/episodes/upload",
+                method: "POST",
+                data: fd,
+                processData: false,
+                contentType: false,
+                xhr: function () {
+                    var x = new window.XMLHttpRequest();
+                    x.upload.addEventListener("progress", function (evt) {
+                        if (evt.lengthComputable) {
+                            var pct = (evt.loaded / evt.total) * 100;
+                            set_progress(pct, "Uploading… " + Math.round(pct) + "%");
+                            if (pct >= 99.5) set_progress(100, "Parsing + embedding…");
+                        }
+                    }, false);
+                    return x;
+                },
+                success: function (data) {
+                    set_progress(100, "Done");
+                    setTimeout(hide_progress, 600);
+                    render_result(data);
+                    $input.val("");                              // allow same file re-upload
+                },
+                error: function (xhr) {
+                    hide_progress();
+                    render_error(xhr);
+                },
+            });
+        }
+
+        // URL ingest
+        $btnUrl.on("click", function () {
+            var url = $url.val().trim();
+            if (!url) { alert("Enter a URL."); return; }
+            reset_result();
+            show_progress("Fetching URL…");
+            var payload = { url: url, project: $("#upload-project").val().trim() || "manual-upload" };
+            var tags = $("#upload-tags").val().trim();
+            var title = $("#upload-title").val().trim();
+            if (tags)  payload.tags = tags.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+            if (title) payload.title_override = title;
+
+            $.ajax({
+                url: "/api/episodes/ingest-url",
+                method: "POST",
+                contentType: "application/json",
+                data: JSON.stringify(payload),
+                success: function (data) {
+                    set_progress(100, "Done");
+                    setTimeout(hide_progress, 600);
+                    render_result(data);
+                },
+                error: function (xhr) {
+                    hide_progress();
+                    render_error(xhr);
+                },
+            });
+        });
+
+        // "View in Episodes" — set tag filter to the episode_id and run filter
+        $(document).on("click", ".upload-jump-episode", function (e) {
+            e.preventDefault();
+            var id = $(this).data("id");
+            $("#filter-tag").val("");                            // tag filter unused for episode_id
+            // No direct lookup endpoint by episode_id in the list filter; just scroll up
+            // and let the user inspect via the Episodes list.  We highlight the result line.
+            $("html, body").animate({scrollTop: $("#upload-result").offset().top - 40}, 200);
+            // Try to fetch the single episode and append it as a card.
+            $.getJSON("/api/episodes/" + encodeURIComponent(id), function (ep) {
+                var $list = $("#episodes-list");
+                var html = (typeof render_episode_card === "function")
+                    ? render_episode_card(ep, false)
+                    : '<pre>' + $("<div>").text(JSON.stringify(ep, null, 2)).html() + '</pre>';
+                $list.prepend(html);
+            });
+        });
+    })();
+
 });
 
 /* ── Training Tab ────────────────────────────────────────────────── */

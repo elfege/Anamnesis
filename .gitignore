@@ -68,3 +68,4 @@ checkpoints/
 
 # Pre-push security check script (intentionally untracked — easy to edit per machine)
 scripts/security_check.sh
+app/uploads/

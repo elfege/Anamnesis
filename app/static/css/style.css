@@ -1679,3 +1679,50 @@ textarea.match-input {
     line-height: 1;
 }
 .btn-help-close:hover { color: var(--text-primary); }
+
+/* ─── Upload / direct-ingest panel ───────────────────────────── */
+.upload-dropzone {
+    border: 2px dashed var(--text-secondary);
+    border-radius: 8px;
+    padding: 22px 14px;
+    text-align: center;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s, color 0.15s;
+    background: rgba(255,255,255,0.02);
+}
+.upload-dropzone:hover,
+.upload-dropzone:focus {
+    border-color: var(--accent);
+    color: var(--accent);
+    outline: none;
+    background: rgba(88,166,255,0.04);
+}
+.upload-dropzone.dragover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(88,166,255,0.10);
+}
+.upload-dropzone-text { font-size: 0.95em; }
+.upload-file-info {
+    margin-top: 8px;
+    font-size: 0.85em;
+    color: var(--text-primary);
+    font-family: monospace;
+    word-break: break-all;
+}
+.upload-progress-bar {
+    height: 6px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.upload-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    transition: width 0.15s linear;
+}
+#upload-result.upload-ok    { color: #3fb950; }
+#upload-result.upload-err   { color: #f85149; }
+#upload-result.upload-dup   { color: #d29922; }
