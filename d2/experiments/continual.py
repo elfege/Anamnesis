@@ -300,7 +300,7 @@ def get_split_mnist_tasks(n_tasks: int, batch_size: int, data_dir: str):
 # OPTIMIZER FACTORY (mirrors train.py but in continual-learning context)
 # ============================================================================
 
-def build_optimizer(method: str, model: nn.Module, lr: float, d2_eta: float = None, d2_base_lr: float = None):
+def build_optimizer(method: str, model: nn.Module, lr: float, d2_eta: float = None, d2_base_lr: float = None, d2_alpha1: float = None, d2_alpha2: float = None):
     """
     Build the right optimizer for the chosen method.
 
@@ -359,9 +359,11 @@ def build_optimizer(method: str, model: nn.Module, lr: float, d2_eta: float = No
         # rate to converge in 1 epoch on these MLP+MNIST tasks.
         eta_resolved = d2_eta if d2_eta is not None else 1e-5
         base_lr_resolved = d2_base_lr if d2_base_lr is not None else 1e-2
+        alpha1_resolved = d2_alpha1 if d2_alpha1 is not None else 1e-5
+        alpha2_resolved = d2_alpha2 if d2_alpha2 is not None else 1e-4
         opt = DeltaSquaredOptimizer(
             model.parameters(),
-            alpha1=1e-5, alpha2=1e-4,
+            alpha1=alpha1_resolved, alpha2=alpha2_resolved,
             gamma=0.99, eta=eta_resolved,
             bound_fn="tanh",
             w_bar_mode="ema",
@@ -558,6 +560,10 @@ def main():
                    help="δ² eta override (delta2_additive only). Default: hardcoded 1e-5.")
     p.add_argument("--d2-base-lr", type=float, default=None,
                    help="δ² base SGD lr override (delta2_additive only). Default: hardcoded 1e-2.")
+    p.add_argument("--d2-alpha1", type=float, default=None,
+                   help="δ² α₁ override (logical-friction lr). Default: 1e-5.")
+    p.add_argument("--d2-alpha2", type=float, default=None,
+                   help="δ² α₂ override (empirical-friction lr; controls bassin growth rate). Default: 1e-4.")
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -575,7 +581,7 @@ def main():
 
     # ── Build model + optimizer ──────────────────────────────────────────
     model = SmallMLP().to(args.device)
-    optimizer, baseline = build_optimizer(args.method, model, args.lr, d2_eta=args.d2_eta, d2_base_lr=args.d2_base_lr)
+    optimizer, baseline = build_optimizer(args.method, model, args.lr, d2_eta=args.d2_eta, d2_base_lr=args.d2_base_lr, d2_alpha1=args.d2_alpha1, d2_alpha2=args.d2_alpha2)
     logger.info(f"Model: SmallMLP ({sum(p.numel() for p in model.parameters()):,} params)")
     logger.info(f"Optimizer: {type(optimizer).__name__}")
     logger.info(f"Baseline: {type(baseline).__name__}")
