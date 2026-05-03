@@ -435,6 +435,23 @@ async def _is_already_ingested(content_hash: str) -> bool:
     return existing is not None
 
 
+async def _is_blocked(content_hash: str = None, source_path: str = None, url: str = None) -> bool:
+    """Check ingestion_blocklist by any of: sha256, source_path, url.
+
+    User can flag content (via the 'Block re-ingestion?' confirm after
+    deleting an episode) — the crawler should silently skip those.
+    """
+    from database import get_blocklist_collection
+    blocklist = get_blocklist_collection()
+    keys = []
+    if content_hash: keys.append(f"sha256:{content_hash}")
+    if source_path:  keys.append(f"path:{source_path}")
+    if url:          keys.append(f"url:{url}")
+    if not keys: return False
+    found = await blocklist.find_one({"_id": {"$in": keys}})
+    return found is not None
+
+
 async def _mark_as_ingested(content_hash: str, episode_id: str, source_name: str):
     """Record that this content hash has been ingested."""
     crawl_state = await _get_crawl_state_collection()
@@ -460,6 +477,15 @@ async def _ingest_section(
     """Embed and store a single section as an episode. Returns True if ingested."""
 
     content_hash = section["hash"]
+
+    # Blocklist check (user-flagged "do not re-ingest" — beats dedup since
+    # the blocklist may persist across content variations).
+    if await _is_blocked(
+        content_hash=content_hash,
+        source_path=section.get("source_path") or source.get("path"),
+        url=section.get("url"),
+    ):
+        return False
 
     # Dedup check
     if await _is_already_ingested(content_hash):

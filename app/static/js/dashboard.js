@@ -806,22 +806,58 @@ $(function () {
     }
 
     // Delegated: Delete episode (Episodes list + Search results + Personal Benchmarks etc.)
+    function _delete_episode_with_block_prompt(episode_id, $card) {
+        if ($card) $card.css("opacity", 0.5);
+        $.ajax({
+            url: "/api/episodes/" + encodeURIComponent(episode_id),
+            method: "DELETE",
+            // success_data: {status: "deleted", episode_id, ...}
+            success: function () {
+                if ($card) $card.slideUp(150, function () { $card.remove(); });
+                // Second prompt: block re-ingestion?
+                setTimeout(function () {
+                    if (confirm(
+                        "Episode deleted.\n\n" +
+                        "Do you want to mark this content as EXCLUDED so the crawler / " +
+                        "uploads will refuse to re-ingest it in the future?\n\n" +
+                        "(You can unblock from Settings → Blocklist.)"
+                    )) {
+                        var reason = prompt("Reason (optional, for your future self):", "") || "";
+                        $.ajax({
+                            url: "/api/episodes/" + encodeURIComponent(episode_id) + "/exclude",
+                            method: "POST",
+                            contentType: "application/json",
+                            data: JSON.stringify({reason: reason}),
+                            success: function (resp) {
+                                var keys = (resp && resp.blocked_keys) || [];
+                                console.log("Blocklisted:", keys);
+                            },
+                            error: function (xhr) {
+                                var msg = (xhr.responseJSON && xhr.responseJSON.detail) || "block failed";
+                                alert(
+                                    "Episode is deleted, but couldn't add to blocklist: " + msg +
+                                    "\n\n(Episode metadata may not have included a content hash. " +
+                                    "Manually add via Settings → Blocklist if needed.)"
+                                );
+                            },
+                        });
+                    }
+                }, 200);
+            },
+            error: function (xhr) {
+                if ($card) $card.css("opacity", 1);
+                var msg = (xhr.responseJSON && xhr.responseJSON.detail) || xhr.statusText || "delete failed";
+                alert("Could not delete: " + msg);
+            },
+        });
+    }
+
     $(document).on("click", ".episode-delete-btn", function () {
         var episode_id = $(this).data("episode-id");
         if (!episode_id) return;
         if (!confirm("Permanently delete episode\n\n  " + episode_id + "\n\nThis cannot be undone.")) return;
         var $card = $(this).closest(".episode-card");
-        $card.css("opacity", 0.5);
-        $.ajax({
-            url: "/api/episodes/" + encodeURIComponent(episode_id),
-            method: "DELETE",
-            success: function () { $card.slideUp(150, function () { $card.remove(); }); },
-            error: function (xhr) {
-                $card.css("opacity", 1);
-                var msg = (xhr.responseJSON && xhr.responseJSON.detail) || xhr.statusText || "delete failed";
-                alert("Could not delete: " + msg);
-            },
-        });
+        _delete_episode_with_block_prompt(episode_id, $card);
     });
 
     function escape_html(str) {
@@ -2459,25 +2495,31 @@ $(function () {
                          "</code> · " + advanced_bits.join(" · ") + " " + link + undo);
         }
 
-        // Inline undo link: deletes the just-ingested episode
+        // Inline undo link: deletes the just-ingested episode (with same
+        // post-delete "block re-ingestion?" prompt as the Delete button)
         $(document).on("click", ".upload-undo-episode", function (e) {
             e.preventDefault();
             var episode_id = $(this).data("id");
             if (!episode_id) return;
             if (!confirm("Undo this ingestion? Permanently deletes:\n\n  " + episode_id)) return;
             var $r = $result;
-            $.ajax({
-                url: "/api/episodes/" + encodeURIComponent(episode_id),
-                method: "DELETE",
-                success: function () {
-                    $r.removeClass("upload-ok upload-dup").addClass("upload-err")
-                      .text("Undone — episode " + episode_id + " deleted.");
-                },
-                error: function (xhr) {
-                    var msg = (xhr.responseJSON && xhr.responseJSON.detail) || xhr.statusText || "delete failed";
-                    alert("Could not undo: " + msg);
-                },
-            });
+            $r.removeClass("upload-ok upload-dup").addClass("upload-err")
+              .text("Undoing…");
+            // Reuse the global delete-with-block-prompt helper
+            if (typeof _delete_episode_with_block_prompt === "function") {
+                _delete_episode_with_block_prompt(episode_id, null);
+                $r.text("Undone — episode " + episode_id + " deleted.");
+            } else {
+                $.ajax({
+                    url: "/api/episodes/" + encodeURIComponent(episode_id),
+                    method: "DELETE",
+                    success: function () { $r.text("Undone — episode " + episode_id + " deleted."); },
+                    error: function (xhr) {
+                        var msg = (xhr.responseJSON && xhr.responseJSON.detail) || xhr.statusText || "delete failed";
+                        alert("Could not undo: " + msg);
+                    },
+                });
+            }
         });
 
         function render_error(xhr) {

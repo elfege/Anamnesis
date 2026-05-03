@@ -74,6 +74,24 @@ def get_settings_collection():
     return _db["settings"]
 
 
+def get_blocklist_collection():
+    """Return the ingestion_blocklist collection.
+
+    Schema per document:
+        _id:                  "<key_type>:<key_value>"   # e.g. "sha256:<hash>" or "url:<url>"
+        key_type:             "sha256" | "url" | "path"
+        key_value:            the actual hash/url/path
+        title:                human-readable title (for display)
+        reason:               user-provided rationale (optional)
+        blocked_at:           datetime
+        blocked_by:           "ui-delete" | "manual" | …
+        previous_episode_id:  the episode that triggered the block (if any)
+    """
+    if _db is None:
+        raise RuntimeError("MongoDB not connected. Call connect_to_mongo() first.")
+    return _db["ingestion_blocklist"]
+
+
 def get_db():
     """Return the raw Motor database handle.
 

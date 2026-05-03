@@ -272,6 +272,30 @@ async def _ingest_text(
     section_content = f"[Document: {title}]\n\n{text}"
     content_hash = _content_hash(section_content)
 
+    # Blocklist check first (separate from dedup — user-explicitly excluded).
+    from database import get_blocklist_collection
+    blocklist = get_blocklist_collection()
+    blocked = await blocklist.find_one({
+        "$or": [
+            {"_id": f"sha256:{content_hash}"},
+            {"_id": f"sha256:{content_sha256}"},
+        ]
+    })
+    if blocked:
+        return {
+            "episode_id": None,
+            "title": title,
+            "summary_chars": len(section_content),
+            "char_count": len(text),
+            "duplicate": False,
+            "blocked": True,
+            "message": (
+                f"Refused: content is in the ingestion blocklist (reason: "
+                f"{blocked.get('reason') or '<no reason given>'}). "
+                f"Unblock from Settings → Blocklist if you want to re-ingest."
+            ),
+        }
+
     # Dedup against prior crawler/upload runs (SHA-256 over the same content).
     if await _is_already_ingested(content_hash):
         return {

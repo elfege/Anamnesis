@@ -11,6 +11,7 @@ from bson import ObjectId
 
 from database import (
     get_episodes_collection,
+    get_blocklist_collection,
     vector_search,
     increment_retrieval_count,
     save_reembed_checkpoint,
@@ -180,6 +181,36 @@ async def list_episodes(
         ))
 
     return episodes
+
+
+# ─── Blocklist (declared BEFORE /{episode_id} so they aren't shadowed) ──
+
+@router.get("/blocklist")
+async def list_blocklist_early():
+    """List all blocked content (declared before /{episode_id} to avoid shadowing)."""
+    blocklist = get_blocklist_collection()
+    items = []
+    async for doc in blocklist.find().sort("blocked_at", -1):
+        items.append({
+            "id": doc["_id"],
+            "key_type": doc["key_type"],
+            "key_value": doc["key_value"],
+            "title": doc.get("title", ""),
+            "reason": doc.get("reason", ""),
+            "blocked_at": doc.get("blocked_at").isoformat() if doc.get("blocked_at") else None,
+            "previous_episode_id": doc.get("previous_episode_id"),
+        })
+    return {"items": items, "total": len(items)}
+
+
+@router.delete("/blocklist/{block_id:path}")
+async def unblock_early(block_id: str):
+    """Remove an entry from the blocklist (declared before /{episode_id})."""
+    blocklist = get_blocklist_collection()
+    result = await blocklist.delete_one({"_id": block_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail=f"Blocklist entry '{block_id}' not found.")
+    return {"status": "unblocked", "id": block_id}
 
 
 # ─── Get Single ──────────────────────────────────────────────────
@@ -365,3 +396,74 @@ async def delete_episode(episode_id: str):
 
     logger.info(f"Deleted episode: {episode_id}")
     return {"status": "deleted", "episode_id": episode_id}
+
+
+# ─── Blocklist (post-delete "don't re-ingest" flow) ─────────────────────
+
+@router.post("/{episode_id}/exclude")
+async def exclude_from_reingestion(episode_id: str, payload: Optional[dict] = None):
+    """Add an entry to the ingestion_blocklist so future crawler/upload
+    runs skip this content.
+
+    Looks up the episode (must already be deleted OR still present — we
+    accept either) and derives the block key from its source metadata:
+      - sha256 if the episode came from a file ingestion (most reliable)
+      - url    if it came from a URL ingestion
+      - path   if it came from the crawler with no hash
+    All available keys are added (one document per key) so future re-ingest
+    via any path is blocked.
+    """
+    payload = payload or {}
+    reason = (payload.get("reason") or "").strip()[:500]
+
+    # Look up episode metadata if still present, OR accept caller-supplied keys
+    eps = get_episodes_collection()
+    ep = await eps.find_one({"episode_id": episode_id})
+
+    keys = []  # list of (key_type, key_value, title)
+    title = (ep or {}).get("title") or (ep or {}).get("summary", "")[:80] or episode_id
+
+    if ep:
+        sha = ep.get("sha256") or ep.get("content_sha256")
+        url = ep.get("source_url") or ep.get("url")
+        path = ep.get("source_path") or ep.get("file_path")
+        if sha: keys.append(("sha256", sha, title))
+        if url: keys.append(("url", url, title))
+        if path: keys.append(("path", path, title))
+
+    # Caller can also explicitly pass keys
+    if "sha256" in payload: keys.append(("sha256", payload["sha256"], title))
+    if "url" in payload:    keys.append(("url", payload["url"], title))
+    if "path" in payload:   keys.append(("path", payload["path"], title))
+
+    if not keys:
+        raise HTTPException(
+            status_code=400,
+            detail=("Cannot block: no sha256/url/path found on this episode. "
+                    "Pass {sha256, url, or path} in the body explicitly, or "
+                    "block before deleting the episode."),
+        )
+
+    blocklist = get_blocklist_collection()
+    written = []
+    now = datetime.now(timezone.utc)
+    for key_type, key_value, ep_title in keys:
+        if not key_value: continue
+        doc = {
+            "_id": f"{key_type}:{key_value}",
+            "key_type": key_type,
+            "key_value": key_value,
+            "title": ep_title,
+            "reason": reason,
+            "blocked_at": now,
+            "blocked_by": "ui-delete",
+            "previous_episode_id": episode_id,
+        }
+        # Upsert (replace) so re-blocking the same key doesn't error
+        await blocklist.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+        written.append(doc["_id"])
+    logger.info(f"Blocklisted {len(written)} key(s) from episode {episode_id}: {written}")
+    return {"status": "blocked", "episode_id": episode_id, "blocked_keys": written}
+
+
+# (Blocklist GET/DELETE moved up — see "Blocklist (declared BEFORE /{episode_id})")
