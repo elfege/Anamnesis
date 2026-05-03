@@ -9,7 +9,23 @@
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 </head>
 <body>
-    <header>
+    <header style="position:relative">
+        <!-- ─── Settings gear (top-right of header) ─────────── -->
+        <button id="settings-gear-btn" type="button" aria-label="Open settings"
+                title="Settings"
+                style="position:absolute; top:14px; right:310px; z-index:60;
+                       background:transparent; border:1px solid var(--border,#30363d);
+                       color:var(--text-secondary,#8b949e);
+                       border-radius:8px; width:36px; height:36px; cursor:pointer;
+                       display:inline-flex; align-items:center; justify-content:center;
+                       transition: color 0.15s ease, border-color 0.15s ease;">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none"
+                 stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+        </button>
         <img src="/static/img/logo.svg" style="width:54px;height:34px;margin-bottom:6px;" alt="">
         <h1>Anamnesis</h1>
         <p class="subtitle">Self-hosted continual-learning + embodied-AI platform</p>
@@ -2865,5 +2881,446 @@ Polls every 30 s. Read-only.`;
     </script>
 
     <script src="/static/js/dashboard.js"></script>
+
+    <!-- ─── Centralized Settings — full-viewport view ───────── -->
+    <div id="settings-view" style="display:none; position:fixed; inset:0;
+         background:var(--bg-primary,#0d1117); color:var(--text-primary,#e6edf3);
+         z-index:9999; overflow:auto;">
+        <div style="max-width:1400px; margin:0 auto; padding:24px 28px 80px 28px;">
+            <header style="display:flex; align-items:center; justify-content:space-between;
+                           border-bottom:1px solid var(--border,#30363d);
+                           padding-bottom:14px; margin-bottom:22px;">
+                <div>
+                    <h1 style="font-weight:300; letter-spacing:0.12em; text-transform:uppercase;
+                               font-size:1.7em; color:var(--accent,#58a6ff); margin:0;">Settings</h1>
+                    <p style="color:var(--text-secondary,#8b949e); font-size:0.85em; margin-top:4px;">
+                        Three-layer resolution: Mongo override → .env → schema default.
+                        Press <kbd style="border:1px solid var(--border,#30363d);padding:1px 6px;border-radius:3px">Esc</kbd> to close.
+                    </p>
+                </div>
+                <div style="display:flex; gap:10px; align-items:center;">
+                    <button id="settings-restart-btn" type="button" style="display:none;
+                            background:#d29922; color:#1a1a1a; border:none;
+                            padding:8px 14px; border-radius:6px; font-weight:600;
+                            cursor:pointer;">Apply &amp; restart</button>
+                    <button id="settings-close-btn" type="button" aria-label="Close" style="
+                            background:transparent; border:1px solid var(--border,#30363d);
+                            color:var(--text-secondary,#8b949e);
+                            width:36px; height:36px; border-radius:8px;
+                            cursor:pointer; font-size:18px; line-height:1;">&times;</button>
+                </div>
+            </header>
+            <div id="settings-status-bar" style="margin-bottom:14px; min-height:1.2em;
+                color:var(--text-secondary,#8b949e); font-size:0.85em; font-style:italic;"></div>
+            <div id="settings-cards-grid" style="display:grid;
+                grid-template-columns:repeat(auto-fill, minmax(380px, 1fr));
+                gap:18px;">
+                <div style="color:var(--text-secondary,#8b949e); padding:40px;">loading…</div>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        .settings-card {
+            background: var(--bg-card, #1c2128);
+            border: 1px solid var(--border, #30363d);
+            border-radius: 8px;
+            padding: 16px 18px;
+            display: flex; flex-direction: column;
+        }
+        .settings-card h3 {
+            margin: 0 0 4px 0; font-size: 1em; color: var(--accent, #58a6ff);
+            letter-spacing: 0.04em;
+        }
+        .settings-card .desc {
+            color: var(--text-secondary, #8b949e); font-size: 0.78em;
+            margin-bottom: 12px; line-height: 1.45;
+        }
+        .settings-row {
+            display: grid; grid-template-columns: 1fr; gap: 4px;
+            padding: 8px 0; border-top: 1px dashed var(--border, #30363d);
+            font-size: 0.85em;
+        }
+        .settings-row:first-of-type { border-top: none; }
+        .settings-row .key-line {
+            display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+        }
+        .settings-row .key-name {
+            font-family: monospace; color: var(--text-primary, #e6edf3); font-size: 0.92em;
+        }
+        .settings-row .badge {
+            font-size: 0.65em; padding: 1px 6px; border-radius: 10px;
+            text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;
+        }
+        .badge-restart { background: #d29922; color: #1a1a1a; }
+        .badge-secret  { background: #6e40c9; color: #fff; }
+        .badge-modified{ background: #3fb950; color: #1a1a1a; }
+        .badge-pending { background: #f85149; color: #fff; }
+        .settings-row .desc-line {
+            color: var(--text-secondary, #8b949e); font-size: 0.78em;
+        }
+        .settings-row input[type=text],
+        .settings-row input[type=number],
+        .settings-row input[type=password],
+        .settings-row select {
+            width: 100%; padding: 5px 8px;
+            background: var(--bg-secondary, #161b22);
+            color: var(--text-primary, #e6edf3);
+            border: 1px solid var(--border, #30363d);
+            border-radius: 4px; font-family: monospace; font-size: 0.88em;
+        }
+        .settings-row .row-actions {
+            display: flex; gap: 8px; align-items: center;
+        }
+        .settings-row .row-actions button,
+        .settings-row .row-actions a {
+            background: transparent;
+            color: var(--text-secondary, #8b949e);
+            border: 1px solid var(--border, #30363d);
+            padding: 3px 8px; border-radius: 4px;
+            font-size: 0.78em; cursor: pointer; text-decoration: none;
+        }
+        .settings-row .row-actions button.primary {
+            color: var(--accent, #58a6ff); border-color: var(--accent, #58a6ff);
+        }
+        .source-slot { padding: 10px 0; border-top: 1px dashed var(--border,#30363d); }
+        .source-slot:first-of-type { border-top: none; }
+        .source-slot .slot-head {
+            display:flex; gap:8px; align-items:center; margin-bottom:4px;
+        }
+        .source-slot .slot-num {
+            font-family:monospace; color:var(--accent,#58a6ff); font-weight:600;
+        }
+        .source-slot .last-ingest {
+            color:var(--text-secondary,#8b949e); font-size:0.72em; margin-top:4px;
+        }
+    </style>
+
+    <script>
+    (function(){
+        // ─── Settings UI controller ──────────────────────────
+        var $btn   = document.getElementById('settings-gear-btn');
+        var $view  = document.getElementById('settings-view');
+        var $close = document.getElementById('settings-close-btn');
+        var $grid  = document.getElementById('settings-cards-grid');
+        var $bar   = document.getElementById('settings-status-bar');
+        var $apply = document.getElementById('settings-restart-btn');
+        if (!$btn || !$view) return;
+
+        var state = { categories: {}, overrides: [], pending: {}, lastIngest: {} };
+
+        function open(){
+            $view.style.display = 'block';
+            document.body.style.overflow = 'hidden';
+            load();
+        }
+        function close(){
+            $view.style.display = 'none';
+            document.body.style.overflow = '';
+        }
+        $btn.addEventListener('click', function(e){ e.preventDefault(); open(); });
+        $close.addEventListener('click', close);
+        document.addEventListener('keydown', function(e){
+            if (e.key === 'Escape' && $view.style.display === 'block') close();
+        });
+
+        function setStatus(msg){ $bar.textContent = msg || ''; }
+
+        async function load(){
+            try {
+                setStatus('loading…');
+                var [allRes, lastRes] = await Promise.all([
+                    fetch('/api/settings').then(function(r){ return r.json(); }),
+                    fetch('/api/settings/sources/last-ingest').then(function(r){
+                        return r.ok ? r.json() : { sources: [] };
+                    }).catch(function(){ return { sources: [] }; }),
+                ]);
+                state.categories = allRes.categories || {};
+                state.overrides  = new Set(allRes.overrides || []);
+                state.pending    = {};
+                state.lastIngest = {};
+                (lastRes.sources || []).forEach(function(s){
+                    state.lastIngest['SOURCE_' + s.slot] = s;
+                });
+                render();
+                setStatus('');
+            } catch (e) {
+                setStatus('Load failed: ' + (e.message || e));
+            }
+        }
+
+        function escapeHTML(s){
+            if (s === null || s === undefined) return '';
+            return String(s).replace(/[&<>"']/g, function(c){
+                return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+            });
+        }
+
+        function valueAsString(v){
+            if (v === null || v === undefined) return '';
+            if (typeof v === 'object') return JSON.stringify(v);
+            return String(v);
+        }
+
+        function inputForKey(cat, kd){
+            var dotId = cat + '.' + kd.key;
+            var inputId = 'set-' + dotId.replace(/\./g, '_');
+            var t = kd.type || 'string';
+            var v = valueAsString(kd.value);
+
+            if (t === 'select' && kd.options && kd.options.length){
+                var opts = kd.options.map(function(o){
+                    var sel = (o === v) ? ' selected' : '';
+                    return '<option value="' + escapeHTML(o) + '"' + sel + '>' + escapeHTML(o) + '</option>';
+                }).join('');
+                return '<select id="' + inputId + '" data-cat="' + cat + '" data-key="' + kd.key + '">' + opts + '</select>';
+            }
+            if (t === 'int' || t === 'float'){
+                var step = (t === 'float') ? 'any' : '1';
+                return '<input id="' + inputId + '" type="number" step="' + step + '" '
+                     + 'data-cat="' + cat + '" data-key="' + kd.key + '" '
+                     + 'value="' + escapeHTML(v) + '">';
+            }
+            if (t === 'secret' || kd.secret){
+                return '<input id="' + inputId + '" type="password" placeholder="' + escapeHTML(v || '') + '" '
+                     + 'data-cat="' + cat + '" data-key="' + kd.key + '" '
+                     + 'value="">';
+            }
+            // string / path
+            return '<input id="' + inputId + '" type="text" '
+                 + 'data-cat="' + cat + '" data-key="' + kd.key + '" '
+                 + 'value="' + escapeHTML(v) + '">';
+        }
+
+        function rowHTML(cat, kd){
+            var dotId = cat + '.' + kd.key;
+            var modified = state.overrides.has(dotId);
+            var badges = '';
+            if (kd.restart_required) badges += ' <span class="badge badge-restart">restart</span>';
+            if (kd.secret)           badges += ' <span class="badge badge-secret">secret</span>';
+            if (modified)            badges += ' <span class="badge badge-modified">modified</span>';
+
+            var html = '<div class="settings-row" data-row="' + escapeHTML(dotId) + '">';
+            html += '<div class="key-line"><span class="key-name">' + escapeHTML(kd.key) + '</span>' + badges + '</div>';
+            if (kd.description){
+                html += '<div class="desc-line">' + escapeHTML(kd.description) + '</div>';
+            }
+            html += inputForKey(cat, kd);
+            html += '<div class="row-actions">';
+            html += '<button type="button" class="primary" data-action="save" data-cat="' + cat + '" data-key="' + kd.key + '">Save</button>';
+            if (modified){
+                html += '<button type="button" data-action="revert" data-cat="' + cat + '" data-key="' + kd.key + '">Revert</button>';
+            }
+            html += '</div></div>';
+            return html;
+        }
+
+        function sourceCardHTML(cat){
+            var keys = (state.categories[cat] || []);
+            var byKey = {};
+            keys.forEach(function(k){ byKey[k.key] = k; });
+            var html = '<div class="settings-card" data-card="' + escapeHTML(cat) + '">';
+            html += '<h3>Sources</h3><div class="desc">' + escapeHTML(SETTINGS_CAT_DESC[cat] || '') + '</div>';
+
+            var emptySlot = -1;
+            for (var i = 0; i < 6; i++){
+                var slot = state.lastIngest['SOURCE_' + i] || { name: 'source-' + i };
+                var pathKey = byKey['SOURCE_' + i];
+                var nameKey = byKey['SOURCE_' + i + '_NAME'];
+                var pathVal = pathKey ? valueAsString(pathKey.value) : '';
+                if (!pathVal && emptySlot === -1) emptySlot = i;
+                var nameVal = nameKey ? valueAsString(nameKey.value) : ('source-' + i);
+                html += '<div class="source-slot">';
+                html += '<div class="slot-head"><span class="slot-num">SOURCE_' + i + '</span> '
+                      + '<span style="color:var(--text-secondary,#8b949e);font-size:0.82em">→ /sources/' + escapeHTML(slot.name || nameVal) + '/</span></div>';
+                if (pathKey)  html += rowHTML(cat, pathKey);
+                if (nameKey)  html += rowHTML(cat, nameKey);
+                html += '<div class="last-ingest">last ingest: ' + escapeHTML(slot.last_ingested_at || 'never') + '</div>';
+                html += '<div class="row-actions" style="margin-top:6px">';
+                html += '<button type="button" data-action="recrawl" data-slot="' + i + '" title="Trigger crawl (TODO endpoint)">Re-crawl now</button>';
+                if (pathVal){
+                    html += '<button type="button" data-action="remove-source" data-slot="' + i + '">Remove</button>';
+                }
+                html += '</div></div>';
+            }
+            // Other sources keys (DOCUMENTS_DIR, TEACHINGS_DIR, CRAWLER_INTERVAL_SECONDS)
+            keys.forEach(function(k){
+                if (k.key.indexOf('SOURCE_') === 0) return;
+                html += rowHTML(cat, k);
+            });
+
+            html += '<div style="margin-top:10px">';
+            if (emptySlot === -1){
+                html += '<em style="color:var(--text-secondary,#8b949e);font-size:0.78em">'
+                      + 'All 6 slots used — extend docker-compose.yml to add more.</em>';
+            } else {
+                html += '<button type="button" data-action="add-source" data-slot="' + emptySlot + '" '
+                      + 'class="primary" style="background:transparent;color:var(--accent,#58a6ff);'
+                      + 'border:1px solid var(--accent,#58a6ff);padding:5px 10px;border-radius:4px;'
+                      + 'cursor:pointer;font-size:0.82em;">Add Source (slot ' + emptySlot + ')</button>';
+            }
+            html += '</div>';
+
+            html += '</div>';
+            return html;
+        }
+
+        function genericCardHTML(cat){
+            var keys = (state.categories[cat] || []);
+            var html = '<div class="settings-card" data-card="' + escapeHTML(cat) + '">';
+            html += '<h3>' + escapeHTML(cat) + '</h3>';
+            html += '<div class="desc">' + escapeHTML(SETTINGS_CAT_DESC[cat] || '') + '</div>';
+            keys.forEach(function(k){ html += rowHTML(cat, k); });
+            html += '</div>';
+            return html;
+        }
+
+        var SETTINGS_CAT_DESC = {};
+
+        async function fetchCategoryDescs(){
+            try {
+                var r = await fetch('/api/settings/categories');
+                var j = await r.json();
+                Object.keys(j.categories || {}).forEach(function(c){
+                    SETTINGS_CAT_DESC[c] = j.categories[c].description || '';
+                });
+            } catch (e) {}
+        }
+
+        function render(){
+            var html = '';
+            var cats = Object.keys(state.categories);
+            cats.forEach(function(c){
+                if (c === 'sources') html += sourceCardHTML(c);
+                else                 html += genericCardHTML(c);
+            });
+            $grid.innerHTML = html;
+            updateApplyBtn();
+        }
+
+        function hasPendingRestartRequired(){
+            for (var oid of state.overrides){
+                // Find the kd for this override and check restart_required
+                var parts = oid.split('.');
+                var rows = state.categories[parts[0]] || [];
+                for (var k of rows){
+                    if (k.key === parts.slice(1).join('.') && k.restart_required) return true;
+                }
+            }
+            return false;
+        }
+        function updateApplyBtn(){
+            $apply.style.display = hasPendingRestartRequired() ? 'inline-block' : 'none';
+        }
+
+        // ─── Click delegation ─────────────────────────────────
+        $grid.addEventListener('click', async function(e){
+            var t = e.target;
+            if (t.tagName !== 'BUTTON') return;
+            var action = t.getAttribute('data-action');
+            var cat = t.getAttribute('data-cat');
+            var key = t.getAttribute('data-key');
+
+            if (action === 'save'){
+                var input = $grid.querySelector('[data-cat="' + cat + '"][data-key="' + key + '"]:not(button)');
+                if (!input) return;
+                var val = input.value;
+                t.disabled = true;
+                try {
+                    var r = await fetch('/api/settings/' + cat + '/' + key, {
+                        method: 'PUT',
+                        headers: {'Content-Type':'application/json'},
+                        body: JSON.stringify({ value: val }),
+                    });
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    setStatus('Saved ' + cat + '.' + key);
+                    await load();
+                } catch (err) {
+                    setStatus('Save failed: ' + err.message);
+                    t.disabled = false;
+                }
+                return;
+            }
+            if (action === 'revert'){
+                t.disabled = true;
+                try {
+                    await fetch('/api/settings/' + cat + '/' + key, { method: 'DELETE' });
+                    setStatus('Reverted ' + cat + '.' + key);
+                    await load();
+                } catch (err) {
+                    setStatus('Revert failed: ' + err.message);
+                    t.disabled = false;
+                }
+                return;
+            }
+            if (action === 'remove-source'){
+                var slot = t.getAttribute('data-slot');
+                if (!confirm('Clear SOURCE_' + slot + '? (Reverts to default mount.)')) return;
+                t.disabled = true;
+                try {
+                    await fetch('/api/settings/sources/SOURCE_' + slot, { method: 'DELETE' });
+                    setStatus('Cleared SOURCE_' + slot);
+                    await load();
+                } catch (err) {
+                    setStatus('Remove failed: ' + err.message);
+                    t.disabled = false;
+                }
+                return;
+            }
+            if (action === 'add-source'){
+                var slot = t.getAttribute('data-slot');
+                var path = prompt('Host path for SOURCE_' + slot + ' (e.g. /home/elfege/some-dir):');
+                if (!path) return;
+                var name = prompt('Display name for SOURCE_' + slot + ' (e.g. workdir):',
+                                  'source-' + slot);
+                if (!name) return;
+                try {
+                    await fetch('/api/settings/sources/SOURCE_' + slot, {
+                        method: 'PUT',
+                        headers: {'Content-Type':'application/json'},
+                        body: JSON.stringify({ value: path }),
+                    });
+                    await fetch('/api/settings/sources/SOURCE_' + slot + '_NAME', {
+                        method: 'PUT',
+                        headers: {'Content-Type':'application/json'},
+                        body: JSON.stringify({ value: name }),
+                    });
+                    setStatus('Added SOURCE_' + slot + ' — restart required to mount.');
+                    await load();
+                } catch (err) {
+                    setStatus('Add failed: ' + err.message);
+                }
+                return;
+            }
+            if (action === 'recrawl'){
+                setStatus('Re-crawl per-source endpoint not yet implemented (TODO). Use the global crawler trigger on the Crawler tab.');
+                return;
+            }
+        });
+
+        $apply.addEventListener('click', async function(){
+            if (!confirm('Apply restart-required changes? The container will go down for ~10s.')) return;
+            $apply.disabled = true;
+            setStatus('Triggering restart…');
+            try {
+                var r = await fetch('/api/settings/restart', { method: 'POST' });
+                var j = await r.json();
+                if (j.restarting){
+                    setStatus('Restart triggered — waiting for app to come back…');
+                    setTimeout(function(){ location.reload(); }, 12000);
+                } else {
+                    setStatus('Restart NOT triggered: ' + (j.detail || JSON.stringify(j)));
+                    $apply.disabled = false;
+                }
+            } catch (err) {
+                setStatus('Restart failed: ' + err.message);
+                $apply.disabled = false;
+            }
+        });
+
+        // Pre-fetch category descriptions once at idle
+        fetchCategoryDescs();
+    })();
+    </script>
 </body>
 </html>

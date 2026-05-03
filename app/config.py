@@ -7,12 +7,33 @@ MONGO_URI = os.environ.get(
 )
 MONGO_DB = os.environ.get("MONGO_DB", "anamnesis")
 
-# Embedding model
-EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5")
-EMBEDDING_DIMENSIONS = int(os.environ.get("EMBEDDING_DIMENSIONS", "1024"))
+
+def _resolve_or_env(category: str, key: str, env_var: str, default):
+    """Resolver-aware lookup with safe fallback.
+
+    During very early startup (before MongoDB is connected) the resolver
+    returns env/default anyway, so this is a drop-in replacement that
+    becomes UI-aware once Mongo is available.
+    """
+    try:
+        from config_resolver import resolve  # local import — avoids circular import
+        v = resolve(category, key)
+        if v not in (None, ""):
+            return v
+    except Exception:
+        pass
+    raw = os.environ.get(env_var)
+    if raw is not None and raw != "":
+        return raw
+    return default
+
+
+# Embedding model — UI-editable via settings (category: ingestion)
+EMBEDDING_MODEL = _resolve_or_env("ingestion", "EMBED_MODEL", "EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5")
+EMBEDDING_DIMENSIONS = int(_resolve_or_env("ingestion", "EMBEDDING_DIMENSIONS", "EMBEDDING_DIMENSIONS", 1024))
 
 # CPU throttle: percentage of logical cores available to embedding workers (1-100)
-EMBEDDING_CPU_PCT = max(1, min(100, int(os.environ.get("EMBEDDING_CPU_PCT", "50"))))
+EMBEDDING_CPU_PCT = max(1, min(100, int(_resolve_or_env("ingestion", "EMBEDDING_CPU_PCT", "EMBEDDING_CPU_PCT", 50))))
 
 # Collection and index names
 COLLECTION_NAME = "episodes"
