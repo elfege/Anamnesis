@@ -717,6 +717,146 @@ async def get_run(run_id: str):
 
 
 # ============================================================================
+# /checkpoints/personal — read-only scan of personal-track checkpoints
+# ============================================================================
+#
+# This endpoint scans the host bind-mount at $D2_PERSONAL_CHECKPOINTS_DIR
+# (default /workspace/checkpoints_personal) for personal_* run dirs and
+# returns one summary object per run. It is read-only and never logs to
+# any shared collection — these are personal-track artifacts and stay on
+# the host they were trained on.
+#
+# Per the two-track architecture (see README_canonical_two_tracks.md):
+#   - Bench checkpoints   → /workspace/checkpoints       (publishable)
+#   - Personal checkpoints → /workspace/checkpoints_personal (private)
+#
+# The dashboard's /api/d2/personal-runs proxies this 1:1.
+# ============================================================================
+
+PERSONAL_CHECKPOINTS_DIR = Path(
+    os.environ.get("D2_PERSONAL_CHECKPOINTS_DIR", "/workspace/checkpoints_personal")
+)
+
+
+def _scan_personal_run(run_dir: Path) -> Optional[dict]:
+    """Read one personal_* checkpoint dir and return its summary, or None on error."""
+    try:
+        cfg_path = run_dir / "config.json"
+        metrics_path = run_dir / "metrics.jsonl"
+        cfg: dict = {}
+        if cfg_path.exists():
+            try:
+                cfg = json.loads(cfg_path.read_text())
+            except Exception as e:
+                logger.warning(f"Bad config.json in {run_dir}: {e}")
+
+        steps = 0
+        tasks: set = set()
+        final_train: Optional[float] = None
+        final_val: Optional[float] = None
+        if metrics_path.exists():
+            last_line = None
+            with open(metrics_path) as f:
+                for raw in f:
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        continue
+                    if "task_idx" in rec:
+                        tasks.add(rec["task_idx"])
+                    last_line = rec
+            if last_line is not None:
+                steps = int(last_line.get("global_step", 0)) + 1
+                tv = last_line.get("train_loss")
+                vv = last_line.get("val_loss")
+                final_train = float(tv) if tv is not None else None
+                final_val = float(vv) if vv is not None else None
+
+        # Completion time: prefer the lora_adapter_final dir mtime (written
+        # only at successful end of run); fall back to metrics.jsonl mtime.
+        adapter_dir = run_dir / "lora_adapter_final"
+        if adapter_dir.exists():
+            mtime = adapter_dir.stat().st_mtime
+        elif metrics_path.exists():
+            mtime = metrics_path.stat().st_mtime
+        else:
+            mtime = run_dir.stat().st_mtime
+
+        from datetime import datetime, timezone as _tz
+        completed_at = (
+            datetime.fromtimestamp(mtime, tz=_tz.utc)
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
+        )
+
+        return {
+            "experiment": cfg.get("experiment") or run_dir.name,
+            "base_model": cfg.get("base_model"),
+            "optimizer": cfg.get("optimizer"),
+            "steps": steps,
+            "tasks": len(tasks),
+            "final_train_loss": final_train,
+            "final_val_loss": final_val,
+            "completed_at": completed_at,
+            "has_adapter": adapter_dir.exists(),
+            "config": {
+                k: cfg.get(k) for k in (
+                    "lr", "d2_eta", "batch_size", "block_size",
+                    "lora_r", "lora_alpha", "lora_target_modules",
+                    "steps_per_task", "seed",
+                ) if k in cfg
+            },
+        }
+    except Exception as exc:
+        logger.warning(f"Failed to scan {run_dir}: {exc}")
+        return None
+
+
+@app.get("/checkpoints/personal")
+async def list_personal_checkpoints():
+    """
+    Scan $D2_PERSONAL_CHECKPOINTS_DIR for personal_* run subdirs and return
+    a summary per run. Read-only, no MongoDB writes, no shared logging.
+
+    Returns:
+      {
+        "dir": "/workspace/checkpoints_personal",
+        "exists": bool,
+        "runs": [ {experiment, base_model, optimizer, steps, tasks,
+                   final_train_loss, final_val_loss, completed_at, ...}, ... ],
+        "total": int,
+      }
+    """
+    out = {
+        "dir": str(PERSONAL_CHECKPOINTS_DIR),
+        "exists": PERSONAL_CHECKPOINTS_DIR.exists(),
+        "runs": [],
+        "total": 0,
+    }
+    if not PERSONAL_CHECKPOINTS_DIR.exists():
+        return out
+
+    runs = []
+    for sub in sorted(PERSONAL_CHECKPOINTS_DIR.iterdir()):
+        if not sub.is_dir():
+            continue
+        if not sub.name.startswith("personal_"):
+            # Enforce the naming convention from README_canonical_two_tracks.md
+            continue
+        summary = _scan_personal_run(sub)
+        if summary:
+            runs.append(summary)
+    # Sort newest-first by completed_at
+    runs.sort(key=lambda r: r.get("completed_at") or "", reverse=True)
+    out["runs"] = runs
+    out["total"] = len(runs)
+    return out
+
+
+# ============================================================================
 # Local entry point
 # ============================================================================
 

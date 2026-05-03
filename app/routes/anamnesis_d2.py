@@ -393,6 +393,165 @@ async def get_run(run_id: str):
 
 
 # ============================================================================
+# /personal-runs — read-only summary of personal-track LoRA runs
+# ============================================================================
+#
+# Personal-track LoRA fine-tunes (Anamnesis-corpus over Llama/GPT2/etc.) are
+# private artifacts. They live on the GPU host's disk under
+# /workspace/checkpoints_personal/ (host bind-mount: d2/d2_checkpoints_personal/).
+#
+# Privacy posture (from project_two_chatrooms_purpose.md):
+#   - never write to MongoDB or any shared collection
+#   - never crawl into Anamnesis-public
+#   - read from disk only, return JSON to the local dashboard
+#
+# Strategy:
+#   1. If the d² engine endpoint is configured, proxy /checkpoints/personal
+#      from there (single source of truth — the GPU host owns the disk).
+#   2. Otherwise, scan the local filesystem at $D2_PERSONAL_CHECKPOINTS_DIR
+#      (default /workspace/checkpoints_personal) — useful for colocated
+#      deployments and for tests.
+#
+# Either way, the response is shaped:
+#   { dir, exists, runs: [{experiment, base_model, optimizer, steps, tasks,
+#                          final_train_loss, final_val_loss, completed_at,
+#                          has_adapter, config}], total }
+
+D2_PERSONAL_CHECKPOINTS_DIR = os.environ.get(
+    "D2_PERSONAL_CHECKPOINTS_DIR", "/workspace/checkpoints_personal"
+)
+
+
+def _scan_personal_local() -> dict:
+    """Local filesystem scan — used when the d² engine isn't reachable.
+
+    Mirrors d2/server.py:_scan_personal_run shape so the dashboard sees a
+    consistent payload regardless of which side did the scan.
+    """
+    import json as _json
+    from datetime import datetime as _dt, timezone as _tz
+    from pathlib import Path as _Path
+
+    base = _Path(D2_PERSONAL_CHECKPOINTS_DIR)
+    out = {"dir": str(base), "exists": base.exists(), "runs": [], "total": 0}
+    if not base.exists():
+        return out
+
+    runs = []
+    for sub in sorted(base.iterdir()):
+        if not sub.is_dir() or not sub.name.startswith("personal_"):
+            continue
+        cfg_path = sub / "config.json"
+        metrics_path = sub / "metrics.jsonl"
+        cfg = {}
+        if cfg_path.exists():
+            try:
+                cfg = _json.loads(cfg_path.read_text())
+            except Exception:
+                pass
+        steps = 0
+        tasks: set = set()
+        ft = fv = None
+        if metrics_path.exists():
+            last = None
+            with open(metrics_path) as f:
+                for raw in f:
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = _json.loads(line)
+                    except Exception:
+                        continue
+                    if "task_idx" in rec:
+                        tasks.add(rec["task_idx"])
+                    last = rec
+            if last is not None:
+                steps = int(last.get("global_step", 0)) + 1
+                ft = float(last["train_loss"]) if last.get("train_loss") is not None else None
+                fv = float(last["val_loss"]) if last.get("val_loss") is not None else None
+        adapter = sub / "lora_adapter_final"
+        if adapter.exists():
+            mtime = adapter.stat().st_mtime
+        elif metrics_path.exists():
+            mtime = metrics_path.stat().st_mtime
+        else:
+            mtime = sub.stat().st_mtime
+        completed_at = (
+            _dt.fromtimestamp(mtime, tz=_tz.utc)
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
+        )
+        runs.append({
+            "experiment": cfg.get("experiment") or sub.name,
+            "base_model": cfg.get("base_model"),
+            "optimizer": cfg.get("optimizer"),
+            "steps": steps,
+            "tasks": len(tasks),
+            "final_train_loss": ft,
+            "final_val_loss": fv,
+            "completed_at": completed_at,
+            "has_adapter": adapter.exists(),
+            "config": {
+                k: cfg.get(k) for k in (
+                    "lr", "d2_eta", "batch_size", "block_size",
+                    "lora_r", "lora_alpha", "lora_target_modules",
+                    "steps_per_task", "seed",
+                ) if k in cfg
+            },
+        })
+    runs.sort(key=lambda r: r.get("completed_at") or "", reverse=True)
+    out["runs"] = runs
+    out["total"] = len(runs)
+    return out
+
+
+@router.get("/personal-runs")
+async def personal_runs():
+    """
+    Read-only list of personal-track LoRA fine-tune runs.
+
+    Source priority:
+      1. d² engine /checkpoints/personal (if D2_ENDPOINT_URL is set + reachable)
+      2. local filesystem scan of $D2_PERSONAL_CHECKPOINTS_DIR
+
+    No MongoDB writes. No shared logging. Personal data stays local.
+
+    Response shape: see d2/server.py:list_personal_checkpoints docstring.
+    """
+    # Attempt remote scan first — that's where the disk actually lives in prod.
+    if D2_ENDPOINT_URL:
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                r = await client.get(f"{D2_ENDPOINT_URL.rstrip('/')}/checkpoints/personal")
+                if r.status_code == 200:
+                    data = r.json()
+                    data["_source"] = "d2_engine"
+                    return data
+                logger.warning(
+                    f"d² /checkpoints/personal returned {r.status_code}; falling back to local scan"
+                )
+        except Exception as exc:
+            logger.warning(f"d² /checkpoints/personal probe failed ({exc}); local scan fallback")
+
+    # Local fallback (colocated deployment or tests)
+    try:
+        data = _scan_personal_local()
+        data["_source"] = "local_fs"
+        return data
+    except Exception as exc:
+        logger.warning(f"Local personal-runs scan failed: {exc}")
+        return {
+            "dir": D2_PERSONAL_CHECKPOINTS_DIR,
+            "exists": False,
+            "runs": [],
+            "total": 0,
+            "_source": "error",
+            "_error": str(exc),
+        }
+
+
+# ============================================================================
 # /explain — Claude CLI–powered interpretation of any KPI / panel / result
 # ============================================================================
 #
