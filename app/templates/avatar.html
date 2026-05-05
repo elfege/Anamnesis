@@ -577,7 +577,13 @@
     });
 
     // Animate checkbox with localStorage
-    try { animChk.checked = localStorage.getItem(LS_ANIM) === '1'; } catch {}
+    // Default ON (server-side AVATAR_ANIMATE_DEFAULT also resolves true when
+    // workers + reference image exist — make the UI match). User can toggle OFF
+    // and that preference persists.
+    try {
+      const stored = localStorage.getItem(LS_ANIM);
+      animChk.checked = stored === null ? true : stored === '1';
+    } catch { animChk.checked = true; }
     animChk.addEventListener('change', () => {
       try { localStorage.setItem(LS_ANIM, animChk.checked ? '1' : '0'); } catch {}
     });
