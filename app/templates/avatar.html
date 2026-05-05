@@ -253,6 +253,7 @@
       <span class="status-dot ready" id="statusDot"></span>
       <span class="name-text" id="personaName">{{ persona }}</span>
       <span id="backendLabel" style="margin-left: 8px; font-size: 11px; opacity: 0.5;"></span>
+      <span id="statusText" style="margin-left: 8px; font-size: 11px; opacity: 0.75; color: var(--accent, #58a6ff);"></span>
     </div>
   </div>
 
@@ -376,6 +377,7 @@
     const sendBtn = document.getElementById('sendBtn');
     const stopBtn = document.getElementById('stopBtn');
     const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
     const avatarImage = document.getElementById('avatarImage');
     const avatarVideo = document.getElementById('avatarVideo');
     const audioPlayer = document.getElementById('audioPlayer');
@@ -636,16 +638,39 @@
           setStatus('speaking');
           audioPlayer.src = msg.url;
           audioPlayer.play().catch(() => {});
-          audioPlayer.onended = () => setStatus('ready');
+          audioPlayer.onended = () => {
+            // If user requested animation, the video is still rendering on
+            // the GPU worker (~1-2 min on 1660 SUPER). Surface a status so
+            // the user knows to wait instead of thinking it's done.
+            if (animChk.checked && !avatarVideo.src) {
+              setStatus('animating');
+              statusText.textContent = 'animating (60-120s on 1660 SUPER) — keep this page open';
+            } else {
+              setStatus('ready');
+            }
+          };
           break;
         case 'video':
+          // Mute the video — audio was already played via the audio event
+          // (avoids double-audio). Browsers also more readily auto-play muted.
+          avatarVideo.muted = true;
           avatarImage.style.display = 'none';
           avatarVideo.style.display = 'block';
           avatarVideo.src = msg.url;
-          avatarVideo.play().catch(() => {});
+          const playPromise = avatarVideo.play();
+          if (playPromise && playPromise.catch) {
+            playPromise.catch((e) => {
+              // Surface the failure so user doesn't see a black box silently
+              statusText.textContent = 'video ready — click to play (autoplay blocked)';
+              avatarVideo.controls = true;
+            });
+          }
+          setStatus('ready');
+          if (statusText) statusText.textContent = 'animating';
           avatarVideo.onended = () => {
             avatarVideo.style.display = 'none';
             avatarImage.style.display = 'block';
+            if (statusText) statusText.textContent = '';
           };
           break;
         case 'done':
