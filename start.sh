@@ -241,14 +241,14 @@ do_env_prep() {
 		if [[ "$TEST" == "true" ]]; then
 			echo -e "${YELLOW}[TEST]${NC} would append host.docker.internal block to $ssh_cfg"
 		else
-			cat >> "$ssh_cfg" <<-EOF
-
-			Host host.docker.internal
-			   HostName host.docker.internal
-			   User ${SSH_USER:-elfege}
-			   IdentityFile $id_file
-			   StrictHostKeyChecking no
-			EOF
+			{
+				echo
+				echo "Host host.docker.internal"
+				echo "   HostName host.docker.internal"
+				echo "   User ${SSH_USER:-elfege}"
+				echo "   IdentityFile $id_file"
+				echo "   StrictHostKeyChecking no"
+			} >> "$ssh_cfg"
 		fi
 		stop_spinner
 	fi

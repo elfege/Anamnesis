@@ -109,14 +109,12 @@ menu_main() {
 		echo
 		display_block "ANAMNESIS — Stop Services"
 		$TEST && echo -e "  ${YELLOW}TEST MODE — no commands will be executed${NC}"
-		cat <<-EOF
-
-		  1) Stop LOCAL only (anamnesis-app + mongo)
-		  2) Stop REMOTE workers only
-		  3) Stop EVERYTHING
-		  0) Exit
-
-		EOF
+		echo
+		echo "  1) Stop LOCAL only (anamnesis-app + mongo)"
+		echo "  2) Stop REMOTE workers only"
+		echo "  3) Stop EVERYTHING"
+		echo "  0) Exit"
+		echo
 		read -r -p "  Select [0-3]: " choice
 		case "$choice" in
 			1) action_local ;;
