@@ -389,6 +389,47 @@ async def list_backends_and_models():
             pass
     out["backends"]["d2"] = d2_info
 
+    # Together.ai — available iff key set; probe /v1/models for live list
+    together_info = {"available": False, "models": [], "endpoint": config.TOGETHER_BASE_URL}
+    if config.TOGETHER_API_KEY:
+        together_info["available"] = True
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                r = await client.get(
+                    f"{config.TOGETHER_BASE_URL}/models",
+                    headers={"Authorization": f"Bearer {config.TOGETHER_API_KEY}"},
+                )
+                if r.status_code == 200:
+                    # Filter to chat-capable models; prefer instruct variants
+                    raw = r.json() if isinstance(r.json(), list) else r.json().get("data", [])
+                    together_info["models"] = sorted(
+                        m["id"] for m in raw if isinstance(m, dict) and "id" in m
+                    )[:80]    # cap at 80 — UI dropdown sanity
+        except Exception as e:
+            together_info["error"] = str(e)[:120]
+    out["backends"]["together"] = together_info
+
+    # RunPod — available iff a pod endpoint is registered (active pod)
+    runpod_endpoint = config.RUNPOD_ENDPOINT_URL.rstrip("/") if config.RUNPOD_ENDPOINT_URL else ""
+    runpod_info = {
+        "available": False,
+        "endpoint": runpod_endpoint or None,
+        "models": [config.RUNPOD_DEFAULT_MODEL] if runpod_endpoint else [],
+    }
+    if runpod_endpoint:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get(f"{runpod_endpoint}/models")
+                if r.status_code == 200:
+                    runpod_info["available"] = True
+                    raw = r.json() if isinstance(r.json(), list) else r.json().get("data", [])
+                    runpod_info["models"] = sorted(
+                        m["id"] for m in raw if isinstance(m, dict) and "id" in m
+                    ) or runpod_info["models"]
+        except Exception as e:
+            runpod_info["error"] = str(e)[:120]
+    out["backends"]["runpod"] = runpod_info
+
     return out
 
 

@@ -318,6 +318,60 @@ async def _stream_d2(
         yield ("error", f"d2 endpoint error: {exc}")
 
 
+# ─── OpenAI-compatible streaming (Together.ai, RunPod, generic vLLM) ──
+
+async def _stream_openai_compat(
+    system: str,
+    user_message: str,
+    model: Optional[str],
+    previous_messages: Optional[list[dict]],
+    base_url: str,
+    api_key: str,
+    backend_label: str,
+) -> AsyncIterator[tuple[str, str]]:
+    """Stream from any OpenAI-compatible /v1/chat/completions endpoint."""
+    if not base_url:
+        yield ("error", f"{backend_label} backend not configured (no base_url)")
+        return
+    msgs = [{"role": "system", "content": system}]
+    if previous_messages:
+        msgs.extend(previous_messages)
+    msgs.append({"role": "user", "content": user_message})
+    payload = {
+        "model": model or "",
+        "messages": msgs,
+        "stream": True,
+        "max_tokens": 256,
+        "temperature": 0.85,
+    }
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream("POST", url, json=payload, headers=headers) as r:
+                if r.status_code != 200:
+                    body = (await r.aread()).decode(errors="replace")[:200]
+                    yield ("error", f"{backend_label} HTTP {r.status_code}: {body}")
+                    return
+                async for line in r.aiter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                    data = line[len("data: "):].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(data)
+                        delta = obj["choices"][0]["delta"].get("content")
+                        if delta:
+                            yield ("token", delta)
+                    except Exception:
+                        continue
+    except Exception as exc:
+        yield ("error", f"{backend_label} endpoint error: {exc}")
+
+
 # ─── Public dispatcher ──────────────────────────────────────────
 
 async def stream_reply(
@@ -339,6 +393,22 @@ async def stream_reply(
             yield evt
     elif backend == "d2":
         async for evt in _stream_d2(system, user_message, model, previous_messages):
+            yield evt
+    elif backend == "together":
+        async for evt in _stream_openai_compat(
+            system, user_message, model, previous_messages,
+            base_url=config.TOGETHER_BASE_URL,
+            api_key=config.TOGETHER_API_KEY,
+            backend_label="together",
+        ):
+            yield evt
+    elif backend == "runpod":
+        async for evt in _stream_openai_compat(
+            system, user_message, model, previous_messages,
+            base_url=config.RUNPOD_ENDPOINT_URL,
+            api_key=config.RUNPOD_API_KEY,
+            backend_label="runpod",
+        ):
             yield evt
     else:
         yield ("error", f"Unknown backend: {backend!r}")
