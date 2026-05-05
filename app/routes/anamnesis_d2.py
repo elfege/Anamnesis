@@ -506,6 +506,100 @@ def _scan_personal_local() -> dict:
     return out
 
 
+# ============================================================================
+# /lora/* — proxy LoRA hot-load endpoints to the engine
+# ============================================================================
+#
+# Thin proxies for the dashboard "Load for chat" buttons + chat-page
+# auto-unload on tab close. Status is cached for 5s to keep poll cost low.
+
+class LoraLoadBody(BaseModel):
+    adapter_id: str
+    base_model: str
+    adapter_path: str
+
+
+class LoraUnloadBody(BaseModel):
+    adapter_id: Optional[str] = None
+
+
+_lora_status_cache: dict = {"ts": 0.0, "data": None}
+
+
+@router.post("/lora/load")
+async def lora_load(body: LoraLoadBody):
+    base = _require_endpoint()
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            r = await client.post(f"{base}/load_lora", json=body.model_dump())
+            if r.status_code != 200:
+                raise HTTPException(status_code=r.status_code,
+                                    detail=f"engine /load_lora {r.status_code}: {r.text[:300]}")
+            _lora_status_cache["ts"] = 0  # invalidate
+            return r.json()
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"engine unreachable: {exc}")
+
+
+@router.post("/lora/unload")
+async def lora_unload(body: LoraUnloadBody | None = None):
+    base = _require_endpoint()
+    payload = (body.model_dump() if body is not None else {}) or {}
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(f"{base}/unload_lora", json=payload)
+            if r.status_code != 200:
+                raise HTTPException(status_code=r.status_code,
+                                    detail=f"engine /unload_lora {r.status_code}: {r.text[:300]}")
+            _lora_status_cache["ts"] = 0
+            return r.json()
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"engine unreachable: {exc}")
+
+
+@router.get("/lora/status")
+async def lora_status_proxy():
+    """Proxy /lora_status, cached 5 s to keep dashboard polling cheap."""
+    import time as _t
+    base = _require_endpoint()
+    now = _t.time()
+    if _lora_status_cache["data"] is not None and now - _lora_status_cache["ts"] < 5.0:
+        return _lora_status_cache["data"]
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            r = await client.get(f"{base}/lora_status")
+            if r.status_code != 200:
+                raise HTTPException(status_code=r.status_code,
+                                    detail=f"engine /lora_status {r.status_code}")
+            data = r.json()
+            _lora_status_cache.update(ts=now, data=data)
+            return data
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"engine unreachable: {exc}")
+
+
+# ── sendBeacon-friendly path: accepts POST with no body, plain text, or JSON.
+# sendBeacon does not follow redirects and may set odd Content-Types; we
+# accept anything and just unload the active adapter.
+@router.post("/lora/unload_beacon")
+async def lora_unload_beacon():
+    """
+    Endpoint specifically for navigator.sendBeacon() on page unload.
+    No body required. Always unloads the currently-active adapter.
+    Always returns 200 so the browser doesn't retry.
+    """
+    base = _require_endpoint() if D2_ENDPOINT_URL else None
+    if not base:
+        return {"ok": True, "note": "engine not configured"}
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.post(f"{base}/unload_lora", json={})
+            return r.json() if r.status_code == 200 else {"ok": False, "status": r.status_code}
+    except Exception as exc:
+        logger.warning(f"beacon unload failed: {exc}")
+        return {"ok": False, "error": str(exc)}
+
+
 @router.get("/personal-runs")
 async def personal_runs():
     """

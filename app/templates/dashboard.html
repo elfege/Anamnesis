@@ -1163,10 +1163,11 @@
                         <th style="padding:6px 8px;text-align:right">Final train loss</th>
                         <th style="padding:6px 8px;text-align:right">Final val loss</th>
                         <th style="padding:6px 8px">Completed</th>
+                        <th style="padding:6px 8px">Chat</th>
                     </tr>
                 </thead>
                 <tbody id="d2-personal-tbody">
-                    <tr><td colspan="8" style="padding:14px;text-align:center;color:var(--muted)">loading …</td></tr>
+                    <tr><td colspan="9" style="padding:14px;text-align:center;color:var(--muted)">loading …</td></tr>
                 </tbody>
             </table>
             <details style="margin-top:14px">
@@ -2001,14 +2002,66 @@
             // Pulls /api/d2/personal-runs (which proxies the d² engine's
             // /checkpoints/personal). Renders a bare HTML table; no chart
             // libs, no MongoDB writes — disk-only by contract.
+            // Track which adapter the engine reports as live, so we can
+            // render the "Currently loaded" badge and switch button copy.
+            let _activeLoraAdapter = null;
+            async function refreshLoraStatus() {
+                try {
+                    const r = await fetch('/api/d2/lora/status');
+                    if (!r.ok) { _activeLoraAdapter = null; return; }
+                    const data = await r.json();
+                    _activeLoraAdapter = data.active_adapter || null;
+                } catch (e) {
+                    _activeLoraAdapter = null;
+                }
+            }
+
+            async function loadAdapterForChat(experiment, baseModel, btn) {
+                if (!btn) return;
+                const orig = btn.textContent;
+                btn.disabled = true;
+                btn.textContent = 'Loading…';
+                try {
+                    const adapterPath = `/workspace/checkpoints_personal/${experiment}/lora_adapter_final`;
+                    const r = await fetch('/api/d2/lora/load', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            adapter_id: experiment,
+                            base_model: baseModel || 'gpt2-medium',
+                            adapter_path: adapterPath,
+                        }),
+                    });
+                    if (!r.ok) {
+                        const t = await r.text();
+                        alert('Load failed: ' + t.slice(0, 300));
+                        btn.textContent = orig;
+                        btn.disabled = false;
+                        return;
+                    }
+                    _activeLoraAdapter = experiment;
+                    btn.textContent = '✓ Loaded — open chat';
+                    btn.disabled = false;
+                    btn.dataset.loaded = '1';
+                    refreshD2Personal();
+                } catch (e) {
+                    alert('Load error: ' + e);
+                    btn.textContent = orig;
+                    btn.disabled = false;
+                }
+            }
+            // Expose for inline onclick handlers
+            window._anamnesisLoadAdapter = loadAdapterForChat;
+
             async function refreshD2Personal() {
                 const tbody = document.getElementById('d2-personal-tbody');
                 const srcEl = document.getElementById('d2-personal-source');
                 if (!tbody) return;
+                await refreshLoraStatus();
                 try {
                     const r = await fetch('/api/d2/personal-runs');
                     if (!r.ok) {
-                        tbody.innerHTML = `<tr><td colspan="8" style="padding:14px;text-align:center;color:var(--muted)">probe failed (HTTP ${r.status})</td></tr>`;
+                        tbody.innerHTML = `<tr><td colspan="9" style="padding:14px;text-align:center;color:var(--muted)">probe failed (HTTP ${r.status})</td></tr>`;
                         srcEl.textContent = '';
                         return;
                     }
@@ -2016,10 +2069,11 @@
                     const src = data._source === 'd2_engine' ? 'd² engine'
                               : data._source === 'local_fs'  ? 'local filesystem'
                               : data._source || '?';
-                    srcEl.textContent = `source: ${src} · scanned: ${data.dir} · runs: ${data.total}`;
+                    srcEl.textContent = `source: ${src} · scanned: ${data.dir} · runs: ${data.total}`
+                        + (_activeLoraAdapter ? ` · live: ${_activeLoraAdapter}` : '');
                     const runs = data.runs || [];
                     if (!runs.length) {
-                        tbody.innerHTML = '<tr><td colspan="8" style="padding:14px;text-align:center;color:var(--muted)">no personal runs found yet — fire <code>d2/scripts/personal_arms_only_2026_05_04.sh</code></td></tr>';
+                        tbody.innerHTML = '<tr><td colspan="9" style="padding:14px;text-align:center;color:var(--muted)">no personal runs found yet — fire <code>d2/scripts/personal_arms_only_2026_05_04.sh</code></td></tr>';
                         return;
                     }
                     const fmtLoss = v => v == null ? '—' : Number(v).toFixed(4);
@@ -2029,8 +2083,21 @@
                     for (const r of runs) {
                         const tr = document.createElement('tr');
                         tr.style.borderBottom = '1px solid rgba(255,255,255,0.04)';
+                        const isActive = _activeLoraAdapter && r.experiment === _activeLoraAdapter;
+                        const canLoad = r.has_adapter && r.base_model;
+                        let btnHtml;
+                        if (!canLoad) {
+                            btnHtml = '<span style="color:var(--muted);font-size:11px">no adapter</span>';
+                        } else if (isActive) {
+                            btnHtml = `<a href="/chat" style="display:inline-block;padding:4px 10px;background:linear-gradient(135deg,#3a8a4a,#2a6a3a);color:#fff;border-radius:4px;text-decoration:none;font-size:11px;font-weight:600">✓ Loaded — open chat</a>`;
+                        } else {
+                            btnHtml = `<button onclick="window._anamnesisLoadAdapter('${escape(r.experiment)}','${escape(r.base_model)}',this)" style="padding:4px 10px;background:linear-gradient(135deg,#5a8de8,#3a6cd0);color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600">Load for chat</button>`;
+                        }
+                        const liveBadge = isActive
+                            ? ' <span style="background:rgba(74,222,128,0.18);color:#4ade80;border:1px solid rgba(74,222,128,0.4);padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;margin-left:4px">LIVE</span>'
+                            : '';
                         tr.innerHTML = `
-                            <td style="padding:6px 8px"><strong>${escape(r.experiment)}</strong>${r.has_adapter ? '' : ' <span style="color:#d4556e;font-size:10px">(no adapter)</span>'}</td>
+                            <td style="padding:6px 8px"><strong>${escape(r.experiment)}</strong>${liveBadge}${r.has_adapter ? '' : ' <span style="color:#d4556e;font-size:10px">(no adapter)</span>'}</td>
                             <td style="padding:6px 8px;font-family:monospace;font-size:11px">${escape(r.base_model)}</td>
                             <td style="padding:6px 8px">${escape(r.optimizer)}</td>
                             <td style="padding:6px 8px;text-align:right;font-family:monospace">${r.steps ?? '—'}</td>
@@ -2038,12 +2105,13 @@
                             <td style="padding:6px 8px;text-align:right;font-family:monospace">${fmtLoss(r.final_train_loss)}</td>
                             <td style="padding:6px 8px;text-align:right;font-family:monospace">${fmtLoss(r.final_val_loss)}</td>
                             <td style="padding:6px 8px;color:var(--muted);font-size:11px">${fmtTs(r.completed_at)}</td>
+                            <td style="padding:6px 8px">${btnHtml}</td>
                         `;
                         tbody.appendChild(tr);
                     }
                 } catch (e) {
                     console.error('personal-runs fetch failed', e);
-                    tbody.innerHTML = '<tr><td colspan="8" style="padding:14px;text-align:center;color:var(--muted)">fetch error</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="9" style="padding:14px;text-align:center;color:var(--muted)">fetch error</td></tr>';
                 }
             }
 
@@ -2802,6 +2870,27 @@ Polls every 30 s. Read-only.`;
             d.textContent = text;
             return d;
         }
+        // Compact "label  [▒▒▒░░] 42%  meta" bar — used by Machines section.
+        // bcls is one of res-dot-ok/warn/err, reused as the fill color.
+        function barRow(label, percent, bcls, meta) {
+            const wrap = document.createElement('div');
+            wrap.style.display = 'flex';
+            wrap.style.alignItems = 'center';
+            wrap.style.gap = '4px';
+            wrap.style.lineHeight = '1.3';
+            const fillColor = bcls === 'res-dot-ok' ? '#4caf50'
+                            : bcls === 'res-dot-warn' ? '#f5a623'
+                            : '#d4556e';
+            const p = Math.max(0, Math.min(100, percent || 0));
+            wrap.innerHTML =
+                '<span style="display:inline-block;width:34px;flex:0 0 auto">' + escape(label) + '</span>' +
+                '<span style="display:inline-block;width:54px;height:6px;background:#222;border-radius:3px;overflow:hidden;flex:0 0 auto">' +
+                  '<span style="display:block;height:100%;width:' + p.toFixed(0) + '%;background:' + fillColor + '"></span>' +
+                '</span>' +
+                '<span style="width:34px;text-align:right;flex:0 0 auto">' + p.toFixed(0) + '%</span>' +
+                '<span style="flex:1;color:var(--muted,#7d8590);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escape(meta || '') + '</span>';
+            return wrap;
+        }
         function escape(s) {
             return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
         }
@@ -2876,7 +2965,11 @@ Polls every 30 s. Read-only.`;
                 const d2 = d.d2_engine || {};
                 let d2Class = 'res-dot-off', d2Meta = 'not set';
                 if (d2.configured) {
-                    if (d2.ok && d2.model_loaded) { d2Class = 'res-dot-ok'; d2Meta = 'live · model loaded'; }
+                    if (d2.ok && d2.active_lora_adapter) {
+                        d2Class = 'res-dot-ok';
+                        d2Meta  = 'live · ' + d2.active_lora_adapter;
+                    }
+                    else if (d2.ok && d2.model_loaded) { d2Class = 'res-dot-ok'; d2Meta = 'live · model loaded'; }
                     else if (d2.ok)               { d2Class = 'res-dot-warn'; d2Meta = (d2.training_status || 'idle') + ' · no model'; }
                     else                          { d2Class = 'res-dot-err'; d2Meta = 'unreachable'; }
                 }
@@ -2886,21 +2979,113 @@ Polls every 30 s. Read-only.`;
                     (d2.error ? '\nerror: ' + d2.error : '')
                 ));
 
-                // Hosts
+                // Hosts (TCP reach). Mark which hosts also have a /host
+                // telemetry endpoint (small "·t" hint) so the user knows
+                // which rows are augmented in the MACHINES section below.
                 content.appendChild(section('Hosts'));
+                const _machineHostFrags = (d.machines || [])
+                    .filter(mm => mm.host_endpoint && mm.host)
+                    .map(mm => mm.host);
                 for (const h of (d.hosts || [])) {
                     const cls = h.ok ? 'res-dot-ok' : 'res-dot-err';
                     const meta = h.ok ? (h.rtt_ms + 'ms') : 'down';
-                    content.appendChild(row(cls, h.label, meta, h.host + ':' + h.port + (h.error ? '\nerror: ' + h.error : '')));
+                    let label = h.label;
+                    for (const ip of _machineHostFrags) {
+                        if (h.host && (h.host.indexOf(ip) >= 0 || ip.indexOf(h.host) >= 0)) {
+                            label += ' ·t';  // ·t = telemetry available
+                            break;
+                        }
+                    }
+                    content.appendChild(row(cls, label, meta, h.host + ':' + h.port + (h.error ? '\nerror: ' + h.error : '')));
                 }
 
-                // GPUs
-                if ((d.gpus || []).length) {
-                    content.appendChild(section('GPU memory'));
-                    for (const g of d.gpus) {
-                        const cls = g.ok ? (g.free_mib > 1000 ? 'res-dot-ok' : 'res-dot-warn') : 'res-dot-err';
-                        const meta = g.ok ? (g.free_mib + '/' + g.total_mib + ' MiB') : 'n/a';
-                        content.appendChild(row(cls, g.label, meta, (g.host || '') + (g.error ? '\n' + g.error : '')));
+                // ─── MACHINES ───────────────────────────────────────────────
+                // One card per known box: hostname + dot, CPU% bar, RAM% bar,
+                // each GPU with VRAM% + util%. Click hostname to collapse
+                // details. Replaces the legacy "GPU memory" section.
+                if ((d.machines || []).length) {
+                    content.appendChild(section('Machines'));
+                    for (const m of d.machines) {
+                        let cls = 'res-dot-err';
+                        if (m.ok)              cls = 'res-dot-ok';
+                        else if (m.stale)      cls = 'res-dot-warn';
+                        else if (!m.host_endpoint) cls = 'res-dot-off';
+
+                        const header = document.createElement('div');
+                        header.className = 'res-row';
+                        header.style.cursor = 'pointer';
+                        const hostName = m.hostname || m.label || m.host || '?';
+                        let status;
+                        if (m.ok)              status = 'live';
+                        else if (m.stale)      status = 'stale (' + (m.consecutive_failures||1) + ')';
+                        else if (!m.host_endpoint) status = 'no telemetry';
+                        else                   status = 'down';
+                        header.innerHTML =
+                            '<span class="res-dot ' + cls + '"></span>' +
+                            '<span class="res-label">' + escape(hostName) + '</span>' +
+                            '<span class="res-meta">' + escape(status) + '</span>';
+                        if (m.error) header.title = m.error;
+                        content.appendChild(header);
+
+                        const det = document.createElement('div');
+                        det.style.margin = '2px 0 6px 17px';
+                        det.style.fontSize = '10px';
+                        det.style.fontFamily = 'monospace';
+                        det.style.color = 'var(--muted,#7d8590)';
+
+                        if (!m.ok && !m.host_endpoint) {
+                            det.textContent = '(no probe agent — install /host endpoint to see telemetry)';
+                        } else if (!m.ok) {
+                            det.textContent = m.error || 'unreachable';
+                        } else {
+                            if (m.cpu) {
+                                const p = m.cpu.percent != null ? m.cpu.percent : 0;
+                                const bcls = p < 60 ? 'res-dot-ok' : (p < 85 ? 'res-dot-warn' : 'res-dot-err');
+                                const la = (m.cpu.load_1 != null) ? ('  la ' + m.cpu.load_1 + '/' + (m.cpu.load_5 != null ? m.cpu.load_5 : '?')) : '';
+                                det.appendChild(barRow('CPU', p, bcls,
+                                    (m.cpu.cores ? m.cpu.cores + 'c' : '') + la));
+                            }
+                            if (m.ram) {
+                                const p = m.ram.percent != null ? m.ram.percent : 0;
+                                const bcls = p < 60 ? 'res-dot-ok' : (p < 85 ? 'res-dot-warn' : 'res-dot-err');
+                                det.appendChild(barRow('RAM', p, bcls,
+                                    m.ram.used_gb + '/' + m.ram.total_gb + ' GB'));
+                            }
+                            for (const g of (m.gpus || [])) {
+                                const vp = g.vram_percent != null ? g.vram_percent : 0;
+                                const up = g.util_pct     != null ? g.util_pct     : 0;
+                                const bcls = vp < 60 ? 'res-dot-ok' : (vp < 85 ? 'res-dot-warn' : 'res-dot-err');
+                                const extra = (g.temp_c != null ? ' ' + g.temp_c + '°C' : '')
+                                            + (g.power_w != null ? ' ' + g.power_w + 'W' : '');
+                                det.appendChild(barRow(
+                                    'GPU ' + (g.name || '?').replace(/^NVIDIA\s+/i,'').slice(0,20),
+                                    vp, bcls,
+                                    'vram ' + (g.vram_used_mib||0) + '/' + (g.vram_total_mib||0) + ' MiB · util ' + up + '%' + extra
+                                ));
+                            }
+                            if (!(m.gpus || []).length) {
+                                const noGpu = document.createElement('div');
+                                noGpu.textContent = 'GPU: none';
+                                det.appendChild(noGpu);
+                            }
+                            const meta2 = document.createElement('div');
+                            meta2.style.marginTop = '2px';
+                            const upMin = m.uptime_s != null ? Math.floor(m.uptime_s/60) + 'm' : '?';
+                            meta2.textContent = (m.roles || []).join(',') + ' · up ' + upMin;
+                            det.appendChild(meta2);
+                            for (const k of ['cpu_probe_error','gpu_probe_error']) {
+                                if (m[k]) {
+                                    const e = document.createElement('div');
+                                    e.style.color = '#d4556e';
+                                    e.textContent = k + ': ' + m[k];
+                                    det.appendChild(e);
+                                }
+                            }
+                        }
+                        content.appendChild(det);
+                        header.addEventListener('click', () => {
+                            det.style.display = (det.style.display === 'none') ? '' : 'none';
+                        });
                     }
                 }
 

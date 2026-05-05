@@ -49,9 +49,38 @@ async def host_info():
         "gpu_type_hint": config.GPU_TYPE,
         "uptime_s": int(time.time() - _SERVICE_START_TS),
         "ip": None,
+        "cpu": None,
+        "ram": None,
         "gpus": [],
         "roles": ["trainer-sidecar"],
     }
+    # CPU + RAM via psutil. Off-thread so the event loop stays responsive.
+    try:
+        import asyncio as _asyncio
+        import psutil  # type: ignore
+        loop = _asyncio.get_event_loop()
+        cpu_pct = await loop.run_in_executor(None, lambda: psutil.cpu_percent(interval=1.0))
+        cores = psutil.cpu_count(logical=True) or 0
+        try:
+            la1, la5, _la15 = os.getloadavg()
+        except (OSError, AttributeError):
+            la1, la5 = None, None
+        info["cpu"] = {
+            "percent": round(cpu_pct, 1),
+            "cores": cores,
+            "load_1": round(la1, 2) if la1 is not None else None,
+            "load_5": round(la5, 2) if la5 is not None else None,
+        }
+        vm = psutil.virtual_memory()
+        info["ram"] = {
+            "used_gb":  round(vm.used  / (1024 ** 3), 2),
+            "total_gb": round(vm.total / (1024 ** 3), 2),
+            "percent":  round(vm.percent, 1),
+        }
+    except ImportError:
+        info["cpu_probe_error"] = "psutil not installed"
+    except Exception as e:
+        info["cpu_probe_error"] = f"{type(e).__name__}: {str(e)[:120]}"
     # Outbound IP discovery (UDP-trick, no packet sent)
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -66,14 +95,14 @@ async def host_info():
     try:
         stats = await gpu.get_gpu_stats(config.GPU_TYPE)
         if stats:
+            _vt = int(stats.get("vram_total_mb") or 0)
+            _vu = int(stats.get("vram_used_mb") or 0)
             info["gpus"].append({
                 "name": config.GPU_TYPE,
-                "vram_total_mib": int(stats.get("vram_total_mb") or 0),
-                "vram_used_mib":  int(stats.get("vram_used_mb") or 0),
-                "vram_free_mib":  max(
-                    0,
-                    int((stats.get("vram_total_mb") or 0) - (stats.get("vram_used_mb") or 0)),
-                ),
+                "vram_total_mib": _vt,
+                "vram_used_mib":  _vu,
+                "vram_free_mib":  max(0, _vt - _vu),
+                "vram_percent":   round(100.0 * _vu / _vt, 1) if _vt else None,
                 "util_pct": int(stats.get("gpu_pct") or 0),
                 "temp_c":   int(stats.get("temp_c") or 0),
                 "power_w":  int(stats.get("power_w") or 0),

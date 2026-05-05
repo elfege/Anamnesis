@@ -209,6 +209,8 @@ async def _probe_d2() -> dict[str, Any]:
                 out["model_loaded"] = data.get("model_loaded")
                 out["training_status"] = data.get("training_status")
                 out["bassin_size"] = data.get("bassin_size")
+                out["active_lora_adapter"] = data.get("active_lora_adapter")
+                out["loaded_lora_count"] = data.get("loaded_lora_count")
                 _LAST_OK[D2_ENDPOINT_URL] = time.time()
                 _FAIL_COUNT[D2_ENDPOINT_URL] = 0
                 out["consecutive_failures"] = 0
@@ -286,6 +288,124 @@ async def _probe_gpu_remote(label: str, ssh_host: str) -> dict[str, Any]:
 
 
 # ============================================================================
+# /host probe — fetch CPU+RAM+GPU telemetry from a machine's /host endpoint
+# ============================================================================
+#
+# Each known machine exposes a /host endpoint (Anamnesis app, d² engine,
+# trainer sidecar — all symmetric). This probe hits that endpoint with a
+# 2 s timeout and surfaces stale-vs-down state (consistent with the recent
+# Ollama probe fix).
+#
+# For machines we don't have a /host endpoint on (e.g., the office box that
+# only runs Ollama), the caller passes endpoint=None and we return a row
+# with ok=False, error="(no probe agent — install /host endpoint to see telemetry)".
+
+
+async def _probe_machine_host(
+    label: str,
+    host: str,
+    endpoint: str | None,
+    roles_hint: list[str] | None = None,
+) -> dict[str, Any]:
+    """Hit GET <endpoint> (e.g., http://192.168.10.15:3015/host). 2s timeout."""
+    cache_key = endpoint or f"machine:{label}"
+    out: dict[str, Any] = {
+        "label": label,
+        "host": host,
+        "host_endpoint": endpoint,
+        "ok": False,
+        "stale": False,
+        "consecutive_failures": _FAIL_COUNT.get(cache_key, 0),
+        "last_ok": _ts_iso(_LAST_OK.get(cache_key)),
+        "hostname": None,
+        "uptime_s": None,
+        "cpu": None,
+        "ram": None,
+        "gpus": [],
+        "roles": list(roles_hint or []),
+        "error": None,
+    }
+    if not endpoint:
+        out["error"] = "(no probe agent — install /host endpoint to see telemetry)"
+        return out
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get(endpoint)
+            if r.status_code == 200:
+                data = r.json()
+                out["ok"] = True
+                out["hostname"] = data.get("hostname")
+                out["uptime_s"] = data.get("uptime_s")
+                out["cpu"]      = data.get("cpu")
+                out["ram"]      = data.get("ram")
+                out["gpus"]     = data.get("gpus") or []
+                # Merge service-reported roles (don't drop the hint)
+                for role in (data.get("roles") or []):
+                    if role not in out["roles"]:
+                        out["roles"].append(role)
+                # Surface probe sub-errors so the UI can flag partial data
+                for key in ("cpu_probe_error", "gpu_probe_error"):
+                    if data.get(key):
+                        out[key] = data[key]
+                _LAST_OK[cache_key] = time.time()
+                _FAIL_COUNT[cache_key] = 0
+                out["last_ok"] = _ts_iso(_LAST_OK[cache_key])
+                out["consecutive_failures"] = 0
+            else:
+                out["error"] = f"HTTP {r.status_code}"
+    except httpx.RequestError as e:
+        out["error"] = str(e)[:120]
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {str(e)[:100]}"
+    if not out["ok"]:
+        _FAIL_COUNT[cache_key] = _FAIL_COUNT.get(cache_key, 0) + 1
+        out["consecutive_failures"] = _FAIL_COUNT[cache_key]
+        out["stale"] = (out["last_ok"] is not None) and (out["consecutive_failures"] <= STALE_THRESHOLD)
+    return out
+
+
+def _known_machines() -> list[tuple[str, str, str | None, list[str]]]:
+    """
+    Static-ish list of machines the dashboard cares about.
+
+    Tuple: (label, host, /host-endpoint-url-or-None, roles_hint)
+
+    - dellserver  → THIS container's /host (the Anamnesis app exposes it)
+    - server      → d² engine /host on 3015 (also runs trainer; one card per box)
+    - office      → no /host endpoint today (Ollama-only); show "(no telemetry)"
+    - RunPod pod  → if D2_ENDPOINT_URL points at a RunPod pod, that's already
+                    surfaced as `server`. Active-pod info is in d.runpod.
+
+    Kept short on purpose; expanding is a one-liner here.
+    """
+    machines: list[tuple[str, str, str | None, list[str]]] = []
+    # This box (dellserver). Local /host endpoint via 127.0.0.1.
+    machines.append((
+        "dellserver (this host)",
+        "127.0.0.1",
+        "http://127.0.0.1:8000/host",
+        ["anamnesis-app", "mongo"],
+    ))
+    # Server box — d² engine + trainer sidecar both live here. Probe d² /host
+    # (it returns the box's CPU/RAM/GPU regardless of which service answers).
+    if D2_ENDPOINT_URL:
+        machines.append((
+            "server (192.168.10.15)",
+            "192.168.10.15",
+            f"{D2_ENDPOINT_URL.rstrip('/')}/host",
+            ["d2-engine", "trainer-sidecar", "ollama"],
+        ))
+    # Office (192.168.10.110) — Ollama only, no /host. Show as "no telemetry".
+    machines.append((
+        "office (192.168.10.110)",
+        "192.168.10.110",
+        None,
+        ["ollama"],
+    ))
+    return machines
+
+
+# ============================================================================
 # Aggregator — single endpoint the dashboard polls
 # ============================================================================
 
@@ -330,8 +450,15 @@ async def resources_status() -> dict[str, Any]:
     ]
 
     # GPU memory only for hosts where SSH actually works.
+    # Kept for backward compat; the new MACHINES section subsumes this on the UI.
     gpu_probes = [
         _probe_gpu_remote("server (GPU host)", "server"),
+    ]
+
+    # Per-machine /host probes — parallel, 2 s timeout each.
+    machine_probes = [
+        _probe_machine_host(label, host, endpoint, roles)
+        for (label, host, endpoint, roles) in _known_machines()
     ]
 
     # Run everything concurrently
@@ -341,12 +468,14 @@ async def resources_status() -> dict[str, Any]:
         d2_result,
         host_results,
         gpu_results,
+        machine_results,
     ) = await asyncio.gather(
         asyncio.gather(*ollama_probes) if ollama_probes else asyncio.sleep(0, result=[]),
         _probe_runpod(),
         _probe_d2(),
         asyncio.gather(*host_probes),
         asyncio.gather(*gpu_probes),
+        asyncio.gather(*machine_probes) if machine_probes else asyncio.sleep(0, result=[]),
         return_exceptions=False,
     )
 
@@ -358,5 +487,6 @@ async def resources_status() -> dict[str, Any]:
         "runpod":      runpod_result,
         "d2_engine":   d2_result,
         "hosts":       list(host_results),
-        "gpus":        list(gpu_results),
+        "gpus":        list(gpu_results),  # legacy, retained for backward compat
+        "machines":    list(machine_results),
     }

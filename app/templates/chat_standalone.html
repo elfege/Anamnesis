@@ -1517,6 +1517,93 @@ $(function () {
         .on("mouseleave blur", hide_tooltip)
         .on("click", function (e) { e.stopPropagation(); });
 
+    // ── LoRA auto-unload on chat exit ──────────────────────────────
+    //
+    // Per spec: NO manual unload button. The currently-loaded personal
+    // adapter is freed automatically when the user "leaves" the chat
+    // surface. Triggers:
+    //   (a) tab/window close       → beforeunload + sendBeacon (survives unload)
+    //   (b) navigation away        → pagehide
+    //   (c) switch back to Bench   → unload immediately
+    //   (d) switch to a different adapter → engine handles it (load = implicit unload)
+    //   (e) idle 30 min no inference → engine-side watchdog
+    //
+    // 5 s grace period after last keystroke avoids unloading if the
+    // user is just typing.
+    var LORA_UNLOAD_URL = '/api/d2/lora/unload_beacon';
+    var _lastKeystrokeTs = 0;
+    var _loraActiveSomewhere = false;
+
+    // Track whether *this* page knows of a loaded adapter so we don't
+    // beacon-spam the engine when nothing is loaded. Best-effort: poll
+    // /api/d2/lora/status on entry and after each chat send.
+    function refreshLoraActiveFlag() {
+        return fetch('/api/d2/lora/status', {cache: 'no-store'})
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (d) {
+                _loraActiveSomewhere = !!(d && d.active_adapter);
+            })
+            .catch(function () { /* ignore */ });
+    }
+    refreshLoraActiveFlag();
+
+    function sendUnloadBeacon(reason) {
+        if (!_loraActiveSomewhere) return;
+        // Honor the 5-second grace after keystroke
+        var sinceKey = Date.now() - _lastKeystrokeTs;
+        if (sinceKey < 5000 && reason !== 'beforeunload' && reason !== 'pagehide') {
+            return;
+        }
+        try {
+            // sendBeacon: survives unload reliably; fetch keepalive is best-effort
+            var blob = new Blob(['{}'], {type: 'application/json'});
+            var ok = navigator.sendBeacon && navigator.sendBeacon(LORA_UNLOAD_URL, blob);
+            if (!ok) {
+                // Fallback to fetch keepalive
+                fetch(LORA_UNLOAD_URL, {method: 'POST', body: '{}', headers: {'Content-Type': 'application/json'}, keepalive: true})
+                    .catch(function () {});
+            }
+            _loraActiveSomewhere = false;
+        } catch (e) { /* ignore — page is going away */ }
+    }
+
+    // (a) Tab/window close
+    window.addEventListener('beforeunload', function () { sendUnloadBeacon('beforeunload'); });
+    // (b) SPA-style nav away (also fires on bfcache snapshots)
+    window.addEventListener('pagehide',     function () { sendUnloadBeacon('pagehide'); });
+    // Visibility change (mobile-safer than beforeunload)
+    document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'hidden') sendUnloadBeacon('visibilitychange');
+    });
+
+    // (c) Track switch back to bench → unload now (no grace needed; explicit user action)
+    var _origSetTrack = set_track;
+    set_track = function (track) {
+        if (track !== 'personal' && _loraActiveSomewhere) {
+            // Direct call (not beacon — page is staying)
+            fetch(LORA_UNLOAD_URL, {method: 'POST', body: '{}', headers: {'Content-Type': 'application/json'}})
+                .then(function () { _loraActiveSomewhere = false; })
+                .catch(function () {});
+        }
+        _origSetTrack(track);
+    };
+
+    // Track keystrokes in the chat input (for the 5 s grace window)
+    $(document).on('input keydown', '#sc-input, textarea, input[type="text"]', function () {
+        _lastKeystrokeTs = Date.now();
+    });
+
+    // After each send, refresh the active-adapter flag so the page
+    // knows whether to beacon-unload on exit.
+    var _origSubmit = window.submit_chat;
+    if (typeof _origSubmit === 'function') {
+        window.submit_chat = function () {
+            var ret = _origSubmit.apply(this, arguments);
+            setTimeout(refreshLoraActiveFlag, 1500);
+            return ret;
+        };
+    }
+
     // Apply persisted track on load
     apply_track(get_track());
 
