@@ -2354,19 +2354,33 @@
                     dot.title = 'idle';
                     if (stopBtn) stopBtn.style.display = 'none';
                 }
-                document.getElementById('d2-live-name').textContent = st.experiment_name || '—';
+                // Prefix the run name + state so a finished run can't be mistaken for active
+                const stateTag = st.active
+                    ? ''
+                    : (st.log_path ? ' (last run · finished/crashed)' : '');
+                document.getElementById('d2-live-name').textContent = (st.experiment_name || '—') + stateTag;
                 document.getElementById('d2-live-kind').textContent = st.kind || '—';
                 document.getElementById('d2-live-started').textContent = st.started_at || '—';
-                // elapsed_s is mtime-of-log relative to now; for active runs that's
-                // close to "elapsed since last log line", which is good enough.
-                let elapsed = st.elapsed_s;
+                // For ACTIVE runs: elapsed = now - started.
+                // For FINISHED runs: show "Xm ago" so it's visually obvious the run is done,
+                // not actively cooking. (Bug fix: stale log was being shown as elapsed time,
+                // making finished runs look 1h-active.)
+                let elapsedLabel;
                 if (st.active && st.started_at) {
                     try {
                         const tStart = new Date(st.started_at).getTime();
-                        if (!isNaN(tStart)) elapsed = Math.max(0, Math.floor((Date.now() - tStart) / 1000));
-                    } catch {}
+                        if (!isNaN(tStart)) {
+                            elapsedLabel = _fmtElapsed(Math.max(0, Math.floor((Date.now() - tStart) / 1000)));
+                        } else {
+                            elapsedLabel = _fmtElapsed(st.elapsed_s);
+                        }
+                    } catch { elapsedLabel = _fmtElapsed(st.elapsed_s); }
+                } else if (st.log_path) {
+                    elapsedLabel = _fmtElapsed(st.log_age_s) + ' ago (idle)';
+                } else {
+                    elapsedLabel = '—';
                 }
-                document.getElementById('d2-live-elapsed').textContent = _fmtElapsed(elapsed);
+                document.getElementById('d2-live-elapsed').textContent = elapsedLabel;
                 document.getElementById('d2-live-step').textContent =
                     st.step != null
                         ? (st.total_steps ? `${st.step} / ${st.total_steps}` : `${st.step}`)
