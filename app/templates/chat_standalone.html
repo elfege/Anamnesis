@@ -880,7 +880,8 @@ $(function () {
             state.resources.forEach(function (r) {
                 var label = r.label;
                 if (r.reachable) {
-                    label = "✓ " + label + " (" + (r.models || []).length + ")";
+                    var n = (r.models || []).length;
+                    label = "✓ " + label + " (" + n + " model" + (n === 1 ? "" : "s") + ")";
                 } else {
                     label = "✗ " + label;
                 }
