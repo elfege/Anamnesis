@@ -1473,12 +1473,51 @@ $(function () {
             if (sessionStorage.getItem(BANNER_DISMISS_KEY) !== "1") {
                 $("#sc-privacy-banner").show();
             }
+            // Auto-pick a sensible default backend for Personal track:
+            // Together.ai (Qwen2.5-72B) gives real conversational quality
+            // immediately. The δ² Personal LoRA is too small (gpt2-medium)
+            // to be coherent — leave that as a manual opt-in for users
+            // who specifically want to talk to their own-corpus model.
+            // Only auto-switch if no resource is currently chosen, OR if
+            // the current pick is the bench-side d² engine (avoids
+            // overriding an explicit Personal-side choice the user made).
+            try {
+                var currentRes = $("#sc-resource-select").val() || "";
+                var savedPersonalRes = localStorage.getItem("anamnesis.chat.personalResource");
+                if (savedPersonalRes) {
+                    $("#sc-resource-select").val(savedPersonalRes).trigger("change");
+                } else if (!currentRes || currentRes.indexOf("d2") !== -1) {
+                    // Find the Together.ai option and select it
+                    var $togetherOpt = $("#sc-resource-select option").filter(function () {
+                        return /together/i.test($(this).text());
+                    }).first();
+                    if ($togetherOpt.length) {
+                        $("#sc-resource-select").val($togetherOpt.val()).trigger("change");
+                    }
+                }
+            } catch (e) {}
+            // Hide the RunPod lifecycle widget by default — it's a
+            // power-user feature that confuses new users into thinking
+            // RunPod is required for chat. Reachable via the gear /
+            // dashboard for those who actually want cloud GPU.
+            $("#rp-ctl").hide();
         } else {
             $("body").removeClass("track-personal");
             $("#sc-track-lock").hide();
             $("#sc-privacy-banner").hide();
+            $("#rp-ctl").hide();
         }
     }
+    // Save the chosen Personal-side resource so we don't auto-switch
+    // back to Together.ai every page load if the user explicitly picked
+    // δ² Personal (the LoRA experiment).
+    $("#sc-resource-select").on("change", function () {
+        try {
+            if (localStorage.getItem(TRACK_KEY) === "personal") {
+                localStorage.setItem("anamnesis.chat.personalResource", $(this).val() || "");
+            }
+        } catch (e) {}
+    });
     $("#sc-track-toggle button").on("click", function () {
         var track = $(this).data("track");
         // Switching back into personal clears the per-session dismiss so
