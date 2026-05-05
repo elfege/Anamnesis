@@ -359,7 +359,7 @@ menu_d2() {
 
 	  1) server   ${DIM}(NVIDIA CUDA — recommended, stable)${NC}
 	  2) office   ${DIM}(AMD ROCm — unstable, see crash log 2026-04-25)${NC}
-	  3) runpod   ${DIM}(cloud — pod must be started via deploy_runpod.sh first)${NC}
+	  3) runpod   ${DIM}(cloud — will offer to spin a pod via deploy_runpod.sh, ~\$0.30/hr)${NC}
 	  4) all      ${DIM}(every reachable GPU host)${NC}
 	  0) Back
 

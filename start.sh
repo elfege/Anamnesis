@@ -660,7 +660,7 @@ menu_d2() {
 
 	  1) Start service on server  ${DIM}(NVIDIA CUDA — recommended)${NC}
 	  2) Start service on office  ${DIM}(AMD ROCm — unstable)${NC}
-	  3) Start service on RunPod  ${DIM}(pod must be up — see deploy_runpod.sh)${NC}
+	  3) Start service on RunPod  ${DIM}(will offer to spin a pod via deploy_runpod.sh, ~\$0.30/hr)${NC}
 	  4) Start service on ALL reachable hosts
 	  5) SMOKE benchmark  ${DIM}(controller × permuted_mnist × 2 tasks — ~5 min)${NC}
 	  6) FULL benchmark   ${DIM}(6 methods × 2 benchmarks × 5 tasks — ~30-60 min)${NC}
