@@ -38,6 +38,10 @@ services:
       D2_CHECKPOINTS_DIR: /workspace/checkpoints
       D2_CHECKPOINTS_BENCH_DIR: /workspace/checkpoints_bench
       D2_CHECKPOINTS_PERSONAL_DIR: /workspace/checkpoints_personal
+      # LoRA idle auto-unload threshold (seconds). Set to 60 in shell when
+      # testing the watchdog without waiting 30 minutes:
+      #   LORA_IDLE_UNLOAD_SECONDS=60 docker compose up -d --force-recreate d2-cuda
+      LORA_IDLE_UNLOAD_SECONDS: "${LORA_IDLE_UNLOAD_SECONDS:-1800}"
     volumes:
       - ./d2_runs:/workspace/runs
       # Bind-mount BOTH tracks so they survive container restarts AND stay segregated on the host
