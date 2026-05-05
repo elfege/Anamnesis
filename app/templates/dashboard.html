@@ -3014,7 +3014,17 @@ Polls every 30 s. Read-only.`;
                         const header = document.createElement('div');
                         header.className = 'res-row';
                         header.style.cursor = 'pointer';
-                        const hostName = m.hostname || m.label || m.host || '?';
+                        // Prefer the user-meaningful label (server / dellserver / office)
+                        // over the container's docker-assigned hostname (e.g. 870d3ad991e5).
+                        // If both exist and differ, show "label · hostname" so you can still
+                        // see the container ID for debugging.
+                        const labelClean = (m.label || '').replace(/\s*\([^)]*\)\s*$/, '').trim();   // strip "(192.168.x.y)"
+                        let hostName;
+                        if (labelClean && m.hostname && labelClean !== m.hostname) {
+                            hostName = labelClean + ' · ' + m.hostname;
+                        } else {
+                            hostName = labelClean || m.hostname || m.host || '?';
+                        }
                         let status;
                         if (m.ok)              status = 'live';
                         else if (m.stale)      status = 'stale (' + (m.consecutive_failures||1) + ')';

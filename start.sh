@@ -291,11 +291,11 @@ action_remote_workers() {
 		local handle where compose
 		handle=$(svc_field 1 "$spec"); where=$(svc_field 2 "$spec"); compose=$(svc_field 4 "$spec")
 		[[ "$where" == "local" ]] && continue
-		# Skip d²-* — they have their own action_d2 (different lifecycle:
-		# benchmark-driven, not chat-driven, and we don't want every
-		# `start.sh --action=all` to spin up a GPU container that the user
-		# may not currently want running).
-		[[ "$handle" == d2-* ]] && continue
+		# d2-server IS started here: tonight's LoRA hot-loading made the d²
+		# engine first-class chat infra (chat → δ² Personal needs /load_lora).
+		# d2-office (ROCm, unstable per MSG-116) and d2-runpod (needs an
+		# active pod first) stay opt-in via menu option 6 / action_d2.
+		[[ "$handle" == d2-office || "$handle" == d2-runpod ]] && continue
 		# Skip runpod-host services if no pod is currently registered.
 		# host_available("runpod") returns true only when the worker_registry
 		# has a runpod URL, so this is safe.

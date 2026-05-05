@@ -253,11 +253,15 @@ action_all() {
 		local h=$(tgt_field 1 "$t")
 		local w=$(tgt_field 2 "$t")
 		[[ "$w" == "local" ]] && continue
-		# Skip d²-* — different lifecycle: research-mode, opt-in via menu
-		# option 6 / --action=d2*. Building it under "EVERYTHING" but
-		# never starting it (start.sh's action_remote_workers also skips
-		# d²-*) is more confusing than helpful.
-		[[ "$h" == d2-* ]] && continue
+		# Skip the unstable + cloud d² targets, but BUILD d2-server: tonight's
+		# LoRA hot-loading endpoints (/load_lora, /unload_lora, idle-watchdog)
+		# in d2/server.py are now operationally part of the chat path
+		# (chat → δ² Personal needs them). Without rebuilding the d² image,
+		# those endpoints exist only as runtime pip-installs in the live
+		# container — a recreate would lose them.
+		# d2-office: ROCm/RX 6800 unstable per MSG-116. Opt-in via option 6.
+		# d2-runpod: requires an active pod first. Opt-in via option 6.
+		[[ "$h" == d2-office || "$h" == d2-runpod ]] && continue
 		build_one "$h" || true
 	done
 	display_block "Starting everything"
@@ -322,7 +326,7 @@ menu_main() {
 		# (heredocs print color vars as literal \033 strings).
 		echo -e "  ${BOLD}Chat + Avatar pipeline${NC}     ${DIM}(everyday services)${NC}"
 		echo -e "   1) Rebuild + start LOCAL only        ${DIM}→ anamnesis-app + mongo${NC}"
-		echo -e "   2) Rebuild + start FULL chat stack   ${DIM}→ anamnesis-app + avatar-workers + trainers (all hosts)${NC}"
+		echo -e "   2) Rebuild + start FULL chat stack   ${DIM}→ anamnesis-app + avatar-workers + trainers + d2-server${NC}"
 		echo -e "   3) Rebuild a single image…           ${DIM}→ pick any one target${NC}"
 		echo -e "   4) Rebuild REMOTE workers only       ${DIM}→ no start, just images on office/server${NC}"
 		echo
