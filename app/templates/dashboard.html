@@ -942,15 +942,30 @@
                         }
                         btnStart.addEventListener('click', () => fireTask(item, 'start'));
                         btnRerun.addEventListener('click', () => fireTask(item, 'rerun'));
-                        // View results link — points to bench/personal panel as appropriate
+                        // View results link — programmatically activate the δ² tab
+                        // (the dashboard tab system is JS-driven, hash anchors don't switch tabs)
                         const view = node.querySelector('.cc-view-results');
-                        if (item.delegate_kind === 'personal' || item.id.startsWith('personal_')) {
-                            view.href = '#tab-d2';
-                            view.title = 'Jump to δ² tab → Personal Benchmarks panel';
-                        } else {
-                            view.href = '#tab-d2';
-                            view.title = 'Jump to δ² tab → Historical runs / leaderboard';
-                        }
+                        const isPersonal = (item.delegate_kind === 'personal' || item.id.startsWith('personal_'));
+                        view.href = '#';
+                        view.title = isPersonal
+                            ? 'Jump to δ² tab → Personal Benchmarks panel'
+                            : 'Jump to δ² tab → Historical runs / leaderboard';
+                        view.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            // Click the δ² tab button to activate
+                            const d2TabBtn = document.querySelector('.tab[data-tab="d2"]');
+                            if (d2TabBtn) {
+                                d2TabBtn.click();
+                                // Scroll to the relevant panel after tab content is visible
+                                setTimeout(() => {
+                                    const targetSel = isPersonal ? '#personal-benchmarks-panel, .personal-benchmarks-panel' : '#runs-history, #leaderboard, .runs-history';
+                                    const tgt = document.querySelector(targetSel);
+                                    if (tgt) tgt.scrollIntoView({behavior: 'smooth', block: 'start'});
+                                }, 100);
+                            } else {
+                                console.warn('δ² tab button not found');
+                            }
+                        });
                         grid.appendChild(node);
                     });
                     const dupWin = data.duplicate_window_seconds || 60;
