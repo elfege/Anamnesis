@@ -2801,13 +2801,23 @@ Polls every 30 s. Read-only.`;
                 const d = await r.json();
                 content.innerHTML = '';
 
-                // Ollama section
+                // Ollama section — distinguish "stale" (1-2 transient failures) from "down" (3+)
                 content.appendChild(section('Ollama (' + (d.ollama || []).length + ')'));
                 for (const o of (d.ollama || [])) {
-                    const cls = o.ok ? 'res-dot-ok' : 'res-dot-err';
-                    const meta = o.ok ? ('v' + (o.version || '?')) : 'down';
+                    let cls, meta;
+                    if (o.ok) {
+                        cls = 'res-dot-ok';
+                        meta = 'v' + (o.version || '?');
+                    } else if (o.stale) {
+                        cls = 'res-dot-warn';
+                        meta = 'stale (' + (o.consecutive_failures || 1) + ')';
+                    } else {
+                        cls = 'res-dot-err';
+                        meta = 'down';
+                    }
                     const title = (o.url || '') +
                                   (o.last_ok ? '\nlast OK: ' + o.last_ok : '') +
+                                  (o.consecutive_failures ? '\nconsecutive failures: ' + o.consecutive_failures : '') +
                                   (o.error ? '\nerror: ' + o.error : '');
                     content.appendChild(row(cls, o.label || o.url, meta, title));
                 }

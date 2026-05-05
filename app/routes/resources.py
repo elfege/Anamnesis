@@ -78,6 +78,10 @@ router = APIRouter(prefix="/api/resources", tags=["resources"])
 # Ollama dot. Stash the timestamps in process memory; reset on restart.
 
 _LAST_OK: dict[str, float] = {}
+# Consecutive-failure counter so we can distinguish a brief blip ("stale")
+# from a real outage ("down"). UI renders amber for stale, red for down.
+_FAIL_COUNT: dict[str, int] = {}
+STALE_THRESHOLD = 2  # ≤ N consecutive failures = stale (amber); > N = down (red)
 
 
 def _now_iso() -> str:
@@ -105,6 +109,8 @@ async def _probe_ollama_one(url: str, label: str, has_gpu: bool) -> dict[str, An
         "version": None,
         "last_ok": _ts_iso(_LAST_OK.get(url)),
         "error": None,
+        "consecutive_failures": _FAIL_COUNT.get(url, 0),
+        "stale": False,
     }
     try:
         async with httpx.AsyncClient(timeout=1.5) as client:
@@ -116,13 +122,20 @@ async def _probe_ollama_one(url: str, label: str, has_gpu: bool) -> dict[str, An
                 except Exception:
                     pass
                 _LAST_OK[url] = time.time()
+                _FAIL_COUNT[url] = 0
                 out["last_ok"] = _ts_iso(_LAST_OK[url])
+                out["consecutive_failures"] = 0
             else:
                 out["error"] = f"HTTP {r.status_code}"
     except httpx.RequestError as e:
         out["error"] = str(e)[:120]
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {str(e)[:100]}"
+    if not out["ok"]:
+        _FAIL_COUNT[url] = _FAIL_COUNT.get(url, 0) + 1
+        out["consecutive_failures"] = _FAIL_COUNT[url]
+        # Stale = was OK recently AND failures haven't crossed threshold
+        out["stale"] = (out["last_ok"] is not None) and (out["consecutive_failures"] <= STALE_THRESHOLD)
     return out
 
 
@@ -180,6 +193,9 @@ async def _probe_d2() -> dict[str, Any]:
         "training_status": None,
         "bassin_size": None,
         "error": None,
+        "consecutive_failures": _FAIL_COUNT.get(D2_ENDPOINT_URL, 0) if D2_ENDPOINT_URL else 0,
+        "stale": False,
+        "last_ok": _ts_iso(_LAST_OK.get(D2_ENDPOINT_URL)) if D2_ENDPOINT_URL else None,
     }
     if not D2_ENDPOINT_URL:
         out["error"] = "D2_ENDPOINT_URL not set"
@@ -194,11 +210,18 @@ async def _probe_d2() -> dict[str, Any]:
                 out["training_status"] = data.get("training_status")
                 out["bassin_size"] = data.get("bassin_size")
                 _LAST_OK[D2_ENDPOINT_URL] = time.time()
+                _FAIL_COUNT[D2_ENDPOINT_URL] = 0
+                out["consecutive_failures"] = 0
+                out["last_ok"] = _ts_iso(_LAST_OK[D2_ENDPOINT_URL])
                 out["last_ok"] = _ts_iso(_LAST_OK[D2_ENDPOINT_URL])
             else:
                 out["error"] = f"HTTP {r.status_code}"
     except Exception as e:
         out["error"] = str(e)[:120]
+    if not out["ok"] and D2_ENDPOINT_URL:
+        _FAIL_COUNT[D2_ENDPOINT_URL] = _FAIL_COUNT.get(D2_ENDPOINT_URL, 0) + 1
+        out["consecutive_failures"] = _FAIL_COUNT[D2_ENDPOINT_URL]
+        out["stale"] = (out["last_ok"] is not None) and (out["consecutive_failures"] <= STALE_THRESHOLD)
     return out
 
 
