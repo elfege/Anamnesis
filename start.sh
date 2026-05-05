@@ -56,10 +56,9 @@ source_global_env >/dev/null 2>&1 || true
 
 # Colors (fall back if env.colors missing)
 : "${CYAN:=\033[0;36m}"; : "${GREEN:=\033[0;32m}"; : "${YELLOW:=\033[0;33m}"
-# Force-set with ANSI-C quoting so the vars hold the actual ESC byte, not the
-# literal 4-char string '\033...'. (~/.env.colors exports them as literal
-# strings, which is fine for `echo -e` but breaks heredocs / printf '%s'.)
-RED=$'\033[0;31m'; BOLD=$'\033[1m'; DIM=$'\033[2m'; NC=$'\033[0m'
+# Color vars come from ~/.env.colors (exported as literal '\033...' strings).
+# Use `echo -e` everywhere — that's the canonical pattern in this codebase.
+: "${RED:=\033[0;31m}"; : "${BOLD:=\033[1m}"; : "${DIM:=\033[2m}"; : "${NC:=\033[0m}"
 : "${FLASH_CYAN:=\033[5;33m}"
 
 dbg() { [[ "$DEBUG" == "true" ]] && echo -e "${YELLOW}[DEBUG] $*${NC}" || true; }
@@ -659,17 +658,15 @@ menu_main() {
 menu_d2() {
 	echo
 	display_block "δ² engine"
-	cat <<-EOF
-
-	  1) Start service on server  ${DIM}(NVIDIA CUDA — recommended)${NC}
-	  2) Start service on office  ${DIM}(AMD ROCm — unstable)${NC}
-	  3) Start service on RunPod  ${DIM}(will offer to spin a pod via deploy_runpod.sh, ~\$0.30/hr)${NC}
-	  4) Start service on ALL reachable hosts
-	  5) SMOKE benchmark  ${DIM}(controller × permuted_mnist × 2 tasks — ~5 min)${NC}
-	  6) FULL benchmark   ${DIM}(6 methods × 2 benchmarks × 5 tasks — ~30-60 min)${NC}
-	  0) Back
-
-	EOF
+	echo
+	echo -e "  1) Start service on server  ${DIM}(NVIDIA CUDA — recommended)${NC}"
+	echo -e "  2) Start service on office  ${DIM}(AMD ROCm — unstable)${NC}"
+	echo -e "  3) Start service on RunPod  ${DIM}(will offer to spin a pod via deploy_runpod.sh, ~\$0.30/hr)${NC}"
+	echo    "  4) Start service on ALL reachable hosts"
+	echo -e "  5) SMOKE benchmark  ${DIM}(controller × permuted_mnist × 2 tasks — ~5 min)${NC}"
+	echo -e "  6) FULL benchmark   ${DIM}(6 methods × 2 benchmarks × 5 tasks — ~30-60 min)${NC}"
+	echo    "  0) Back"
+	echo
 	read -r -p "  Select [0-6]: " pick
 	case "$pick" in
 		1) action_d2 server ;;

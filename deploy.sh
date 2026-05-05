@@ -53,10 +53,9 @@ source_global_env >/dev/null 2>&1 || true
 . ~/.env.colors 2>/dev/null || true
 
 : "${CYAN:=\033[0;36m}"; : "${GREEN:=\033[0;32m}"; : "${YELLOW:=\033[0;33m}"
-# Force-set with ANSI-C quoting so the vars hold the actual ESC byte, not the
-# literal 4-char string '\033...'. (~/.env.colors exports them as literal
-# strings, which is fine for `echo -e` but breaks heredocs / printf '%s'.)
-RED=$'\033[0;31m'; BOLD=$'\033[1m'; DIM=$'\033[2m'; NC=$'\033[0m'
+# Color vars come from ~/.env.colors (exported as literal '\033...' strings).
+# Use `echo -e` everywhere — that's the canonical pattern in this codebase.
+: "${RED:=\033[0;31m}"; : "${BOLD:=\033[1m}"; : "${DIM:=\033[2m}"; : "${NC:=\033[0m}"
 
 dbg() { [[ "$DEBUG" == "true" ]] && echo -e "${YELLOW}[DEBUG] $*${NC}" || true; }
 
@@ -358,15 +357,13 @@ menu_main() {
 menu_d2() {
 	echo
 	display_block "δ² engine — pick host"
-	cat <<-EOF
-
-	  1) server   ${DIM}(NVIDIA CUDA — recommended, stable)${NC}
-	  2) office   ${DIM}(AMD ROCm — unstable, see crash log 2026-04-25)${NC}
-	  3) runpod   ${DIM}(cloud — will offer to spin a pod via deploy_runpod.sh, ~\$0.30/hr)${NC}
-	  4) all      ${DIM}(every reachable GPU host)${NC}
-	  0) Back
-
-	EOF
+	echo
+	echo -e "  1) server   ${DIM}(NVIDIA CUDA — recommended, stable)${NC}"
+	echo -e "  2) office   ${DIM}(AMD ROCm — unstable, see crash log 2026-04-25)${NC}"
+	echo -e "  3) runpod   ${DIM}(cloud — will offer to spin a pod via deploy_runpod.sh, ~\$0.30/hr)${NC}"
+	echo -e "  4) all      ${DIM}(every reachable GPU host)${NC}"
+	echo    "  0) Back"
+	echo
 	read -r -p "  Select [0-4]: " pick
 	case "$pick" in
 		1) action_d2 server ;;
