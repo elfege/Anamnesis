@@ -256,19 +256,84 @@ action_all() {
 		local h=$(tgt_field 1 "$t")
 		local w=$(tgt_field 2 "$t")
 		[[ "$w" == "local" ]] && continue
-		# Skip the unstable + cloud d² targets, but BUILD d2-server: tonight's
-		# LoRA hot-loading endpoints (/load_lora, /unload_lora, idle-watchdog)
-		# in d2/server.py are now operationally part of the chat path
-		# (chat → δ² Personal needs them). Without rebuilding the d² image,
-		# those endpoints exist only as runtime pip-installs in the live
-		# container — a recreate would lose them.
+		# Skip the unstable + cloud targets here (handled by the optional
+		# RunPod augmentation prompt below).
 		# d2-office: ROCm/RX 6800 unstable per MSG-116. Opt-in via option 6.
-		# d2-runpod: requires an active pod first. Opt-in via option 6.
-		[[ "$h" == d2-office || "$h" == d2-runpod ]] && continue
+		# d2-runpod / avatar-worker-runpod: see prompt_runpod_augment below.
+		[[ "$h" == d2-office || "$h" == d2-runpod || "$h" == avatar-worker-runpod ]] && continue
 		build_one "$h" || true
 	done
+
+	# ── Optional RunPod augmentation (asked AFTER local builds succeed,
+	#    BEFORE start.sh fires services). User can skip every prompt — this
+	#    is purely additive cloud GPU capacity. Each prompt is independent
+	#    so e.g. "yes to avatar, no to d²" works.
+	prompt_runpod_augment
+
 	display_block "Starting everything"
 	run "$SCRIPT_DIR/start.sh" --action=all ${TEST:+--test} ${DEBUG:+--debug}
+}
+
+# Ask whether to also deploy any RunPod-hosted services as part of this
+# first-deployment flow. Each is independent. Skip is the default — empty
+# input or 'n' / 'skip' continues without spinning anything cloud-side.
+# If RunPod itself is unreachable / image push fails, surface
+# [r]etry / [s]kip / [a]bort instead of silently failing.
+prompt_runpod_augment() {
+	# Safety: skip the whole block in non-interactive runs (CI, --action=*).
+	[[ "$MENU_MODE" != "true" ]] && return 0
+	[[ "$TEST" == "true" ]] && { echo -e "${YELLOW}[TEST]${NC} would prompt for RunPod augmentation"; return 0; }
+
+	# RunPod creds present?
+	if [[ -z "${RUNPOD_API_KEY:-}" ]]; then
+		echo -e "${DIM}  (RunPod augmentation skipped — RUNPOD_API_KEY not set in .env)${NC}"
+		return 0
+	fi
+
+	echo
+	display_block "Optional: also deploy RunPod-hosted services?"
+	echo -e "${DIM}  Each prompt is independent. Skip any with ENTER. Cost shows before any pod is spun.${NC}"
+	echo
+
+	# Avatar worker on RunPod: bigger GPU = working voice + animation
+	echo -e "  ${BOLD}avatar-worker on RunPod${NC} ${DIM}(XTTS + SadTalker on a 24GB pod, ~\$0.30/hr)${NC}"
+	local ans=""
+	read -t 30 -r -p "  Deploy now? [y/N/skip] " ans || true
+	case "$ans" in
+		y|Y|yes|YES) _runpod_augment_one "avatar:runpod" "avatar worker" ;;
+		*)           echo -e "${DIM}  Skipped — local server/office workers stay primary.${NC}" ;;
+	esac
+
+	echo
+	# d² engine on RunPod: only matters for users who don't have a CUDA host
+	echo -e "  ${BOLD}δ² engine on RunPod${NC} ${DIM}(continual-learning research, ~\$0.30/hr; server already has CUDA)${NC}"
+	read -t 30 -r -p "  Deploy now? [y/N/skip] " ans || true
+	case "$ans" in
+		y|Y|yes|YES) _runpod_augment_one "d2:runpod" "δ² engine" ;;
+		*)           echo -e "${DIM}  Skipped — d²-server (local CUDA) handles personal/bench runs.${NC}" ;;
+	esac
+}
+
+# Helper: invoke one RunPod-augmentation action with retry/skip/abort UX
+# on failure. Args: $1 = --action= value (e.g. avatar:runpod), $2 = label.
+_runpod_augment_one() {
+	local action="$1"
+	local label="$2"
+	while true; do
+		display_block "Deploying $label to RunPod"
+		if run "$SCRIPT_DIR/deploy.sh" --action="$action" ${TEST:+--test} ${DEBUG:+--debug}; then
+			echo -e "${GREEN}  $label: deployed.${NC}"
+			return 0
+		fi
+		echo -e "${RED}  $label: deployment failed.${NC}"
+		local choice=""
+		read -r -p "  [r]etry / [s]kip / [a]bort entire deploy? " choice
+		case "$choice" in
+			r|R|retry) continue ;;
+			a|A|abort) echo -e "${RED}  Aborting full deploy.${NC}"; exit 1 ;;
+			*)         echo -e "${DIM}  Skipped — continuing without $label.${NC}"; return 0 ;;
+		esac
+	done
 }
 
 action_remote_workers() {
