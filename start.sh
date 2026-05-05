@@ -56,7 +56,7 @@ source_global_env >/dev/null 2>&1 || true
 
 # Colors (fall back if env.colors missing)
 : "${CYAN:=\033[0;36m}"; : "${GREEN:=\033[0;32m}"; : "${YELLOW:=\033[0;33m}"
-: "${RED:=\033[0;31m}"; : "${BOLD:=\033[1m}"; : "${DIM:=\033[2m}"; : "${NC:=\033[0m}"
+: "${RED:=$'\033[0;31m'}"; : "${BOLD:=$'\033[1m'}"; : "${DIM:=$'\033[2m'}"; : "${NC:=$'\033[0m'}"
 : "${FLASH_CYAN:=\033[5;33m}"
 
 dbg() { [[ "$DEBUG" == "true" ]] && echo -e "${YELLOW}[DEBUG] $*${NC}" || true; }
@@ -381,7 +381,8 @@ action_d2() {
 				fi
 			fi
 			start_spinner "" "${CYAN}Spinning RunPod pod (gpu=$gpu_pick) — this can take 3-5 min${NC}"
-			if RUNPOD_PROFILE=d2 "$SCRIPT_DIR/deploy_runpod.sh" start --gpu "$gpu_pick"; then
+			# deploy_runpod.sh: 'start' takes the GPU alias as a POSITIONAL arg, not --gpu
+			if RUNPOD_PROFILE=d2 "$SCRIPT_DIR/deploy_runpod.sh" start "$gpu_pick"; then
 				stop_spinner
 				echo -e "${GREEN}  $handle: pod up + registered${NC}"
 				started_any=true
