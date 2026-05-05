@@ -207,13 +207,15 @@ async def _stream_anamnesis_gpt(
 
     # Build a flat prompt from system + prior turns + current user message.
     # The trainer's /generate endpoint accepts a single prompt string.
-    parts = [f"[SYSTEM] {system + _lang_instruction(_detect_language(user_message))}"]
+    # Use 'User:'/'Assistant:' (familiar from training data) instead of bracketed
+    # [USER]/[ASSISTANT] which models echo literally as if they were tokens.
+    parts = [f"System: {system + _lang_instruction(_detect_language(user_message))}"]
     for m in (previous_messages or []):
-        role = m.get("role", "")
+        role = (m.get("role", "") or "").capitalize() or "User"
         content = m.get("content", "")
-        parts.append(f"[{role.upper()}] {content}")
-    parts.append(f"[USER] {user_message}")
-    parts.append("[ASSISTANT]")
+        parts.append(f"{role}: {content}")
+    parts.append(f"User: {user_message}")
+    parts.append("Assistant:")
     prompt = "\n\n".join(parts)
 
     body = {"prompt": prompt, "max_tokens": 512, "temperature": 0.8, "top_k": 200, "stream": True}
@@ -274,11 +276,14 @@ async def _stream_d2(
         yield ("error", "D2_ENDPOINT_URL not configured — δ² trainer not deployed")
         return
 
-    parts = [f"[SYSTEM] {system + _lang_instruction(_detect_language(user_message))}"]
+    # Use 'User:'/'Assistant:' format — base models echo literal [USER]/[ASSISTANT]
+    # tokens as if they were actual response content (real bug observed in chat).
+    parts = [f"System: {system + _lang_instruction(_detect_language(user_message))}"]
     for m in (previous_messages or []):
-        parts.append(f"[{m.get('role', '').upper()}] {m.get('content', '')}")
-    parts.append(f"[USER] {user_message}")
-    parts.append("[ASSISTANT]")
+        role = (m.get("role", "") or "").capitalize() or "User"
+        parts.append(f"{role}: {m.get('content', '')}")
+    parts.append(f"User: {user_message}")
+    parts.append("Assistant:")
     prompt = "\n\n".join(parts)
 
     body = {
