@@ -213,8 +213,12 @@
         .backend-badge.d2        { border-color: var(--purple); color: var(--purple); background: rgba(188,140,255,0.08); }
 
         /* Resource selector — single dropdown listing every reachable backend */
-        #sc-resource-select { min-width: 240px; max-width: 340px; }
+        #sc-resource-select { min-width: 240px; max-width: 340px; flex: 0 1 auto; }
         #sc-resource-select option:disabled { color: var(--text-dim); font-style: italic; }
+        /* Model selector should ALWAYS get enough room to render the chosen
+           model name. Was getting squeezed to 60px showing "(no..." which
+           is unreadable. */
+        #sc-model-select { min-width: 200px; max-width: 360px; flex: 1 1 220px; }
         .resource-summary {
             font-size: 0.72em;
             color: var(--text-dim);
