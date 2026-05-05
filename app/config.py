@@ -115,11 +115,16 @@ D2_ENDPOINT_URL = os.environ.get("D2_ENDPOINT_URL", "")
 # Avatar GPU worker endpoints — tries in order, uses first reachable.
 # Mirrors OLLAMA_URL_N fallback pattern.
 def _build_avatar_worker_endpoints():
+    """Iterate AVATAR_WORKER_URL_1..9 — skip empty slots so slot 5 (reserved
+    for the RunPod-hosted avatar worker) is picked up even when slot 4 is
+    empty. The previous behavior broke at the first empty slot, which would
+    have hidden the cloud worker on dev boxes that only define 1-2 locals.
+    """
     endpoints = []
     for i in range(1, 10):
         url = os.environ.get(f"AVATAR_WORKER_URL_{i}")
         if not url:
-            break
+            continue
         label = os.environ.get(f"AVATAR_WORKER_LABEL_{i}", f"avatar-worker-{i}")
         endpoints.append((url, label))
     return endpoints

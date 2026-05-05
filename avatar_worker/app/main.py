@@ -44,6 +44,53 @@ def _vram_mb() -> tuple[Optional[int], Optional[int]]:
         return None, None
 
 
+@app.get("/host")
+async def host_telemetry():
+    """Box-level telemetry — CPU/RAM/GPU/hostname. Mirrors /host on other services.
+
+    Used by Anamnesis dashboard MACHINES probe to render a row for this
+    worker's host (especially useful for RunPod pods where the box identity
+    is otherwise opaque).
+    """
+    import socket
+    import platform
+
+    info: dict = {
+        "hostname": socket.gethostname(),
+        "platform": platform.platform(),
+        "machine": config.MACHINE_NAME,
+        "worker_id": config.WORKER_ID,
+        "gpu_type": config.GPU_TYPE,
+    }
+
+    # CPU + RAM via psutil (optional dep — graceful when missing).
+    try:
+        import psutil
+        vm = psutil.virtual_memory()
+        info["cpu_count"] = psutil.cpu_count(logical=True)
+        info["cpu_percent"] = psutil.cpu_percent(interval=0.05)
+        info["ram_total_mb"] = int(vm.total // (1024 * 1024))
+        info["ram_free_mb"] = int(vm.available // (1024 * 1024))
+    except Exception as exc:
+        info["psutil_error"] = str(exc)[:120]
+
+    # GPU info via torch
+    try:
+        import torch
+        if torch.cuda.is_available():
+            info["gpu_name"] = torch.cuda.get_device_name(0)
+            total = torch.cuda.get_device_properties(0).total_memory // (1024 * 1024)
+            free, _ = torch.cuda.mem_get_info(0)
+            info["gpu_total_mb"] = int(total)
+            info["gpu_free_mb"] = int(free // (1024 * 1024))
+        else:
+            info["gpu_name"] = None
+    except Exception as exc:
+        info["gpu_error"] = str(exc)[:120]
+
+    return info
+
+
 @app.get("/health")
 async def health():
     """Rich health response — schema agreed with Anamnesis side (intercom MSG-119)."""

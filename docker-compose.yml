@@ -81,6 +81,15 @@ services:
       AVATAR_WORKER_LABEL_2: "${AVATAR_WORKER_LABEL_2:-office · RX 6800 ROCm}"
       AVATAR_WORKER_URL_3: "${AVATAR_WORKER_URL_3:-}"
       AVATAR_WORKER_LABEL_3: "${AVATAR_WORKER_LABEL_3:-}"
+      AVATAR_WORKER_URL_4: "${AVATAR_WORKER_URL_4:-}"
+      AVATAR_WORKER_LABEL_4: "${AVATAR_WORKER_LABEL_4:-}"
+      # Slot 5 reserved for the RunPod-hosted avatar worker (set by
+      # deploy_runpod.sh with RUNPOD_PROFILE=avatar). Slots 1-4 are local
+      # workers; 5-9 cloud. AVATAR_WORKER_URL_N iteration in app/config.py
+      # stops at the first empty slot, so empty 4 is fine but slot 5 needs
+      # 4 to be set when populated — config.py handles this.
+      AVATAR_WORKER_URL_5: "${AVATAR_WORKER_URL_5:-}"
+      AVATAR_WORKER_LABEL_5: "${AVATAR_WORKER_LABEL_5:-runpod · cloud GPU}"
       AVATAR_EDGE_VOICE: "${AVATAR_EDGE_VOICE:-en-US-AvaNeural}"
       AVATAR_PERSONA_NAME: "${AVATAR_PERSONA_NAME:-Belle}"
       AVATAR_ANIMATE_DEFAULT: "${AVATAR_ANIMATE_DEFAULT:-auto}"

@@ -1,0 +1,48 @@
+# avatar_worker/docker-compose.runpod.yml — RunPod-specific compose.
+#
+# Mostly informational: RunPod itself does NOT consume docker-compose files
+# (the pod is created via GraphQL by deploy_runpod.sh, which references the
+# image by tag). This file is kept so that:
+#   1. `docker compose -f docker-compose.runpod.yml build` is a one-liner for
+#      local builds before pushing to ghcr.io;
+#   2. The service shape (env, ports, GPU request) is documented in one place;
+#   3. If RunPod ever ships a compose-aware deploy mode, we already have the
+#      manifest.
+#
+# Mirrors d2/docker-compose.runpod.yml in spirit (same ghcr.io image-pull
+# pattern, same private-registry auth via RUNPOD_REGISTRY_AUTH_ID).
+
+services:
+  avatar-worker-runpod:
+    build:
+      context: .
+      dockerfile: Dockerfile.runpod
+    image: ghcr.io/elfege/anamnesis-avatar-worker:cuda-runpod
+    container_name: avatar-worker-runpod
+    ports:
+      - "3013:3013"
+    environment:
+      GPU_TYPE: cuda
+      MACHINE_NAME: runpod
+      WORKER_ID: runpod-cuda
+      LOG_LEVEL: INFO
+      SADTALKER_DIR: /opt/SadTalker
+      SADTALKER_CHECKPOINT_DIR: /opt/SadTalker/checkpoints
+      # RunPod pods typically have 24+GB VRAM; XTTS + SadTalker co-fit fine.
+      AUTO_UNLOAD_XTTS: "false"
+      # Bigger render: pods have headroom for 512px output.
+      SADTALKER_SIZE: "512"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3013/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped

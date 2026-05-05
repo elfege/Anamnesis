@@ -402,6 +402,22 @@ def _known_machines() -> list[tuple[str, str, str | None, list[str]]]:
         None,
         ["ollama"],
     ))
+
+    # RunPod-hosted avatar worker (XTTS + SadTalker) — surfaced when slot 5
+    # in the AVATAR_WORKER_URL_N chain is populated by deploy_runpod.sh.
+    # Probes the worker's /host endpoint for box-level telemetry (GPU model,
+    # free VRAM, hostname). The pod's host identity is otherwise opaque.
+    runpod_avatar_url = os.environ.get("AVATAR_WORKER_URL_5", "").strip()
+    if runpod_avatar_url:
+        runpod_avatar_label = os.environ.get(
+            "AVATAR_WORKER_LABEL_5", "runpod · avatar (cloud GPU)"
+        )
+        machines.append((
+            f"runpod · {runpod_avatar_label}",
+            runpod_avatar_url.split("//", 1)[-1].split(":")[0] or "runpod",
+            f"{runpod_avatar_url.rstrip('/')}/host",
+            ["avatar-worker", "xtts", "sadtalker"],
+        ))
     return machines
 
 

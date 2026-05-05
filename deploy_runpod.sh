@@ -38,6 +38,8 @@ set -euo pipefail
 # ── Load .env if present ────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/.env"
+# Per-profile state files so trainer/d2/avatar pods can co-exist independently.
+# Resolved later once PROFILE is known.
 if [[ -f "$ENV_FILE" ]]; then
     set -a
     # shellcheck disable=SC1090
@@ -58,9 +60,14 @@ command -v curl >/dev/null 2>&1 || { echo "Error: curl not installed."; exit 1; 
 
 # ── Configuration ──────────────────────────────────────────────────────────
 RUNPOD_API="https://api.runpod.io/graphql"
-PROFILE="${RUNPOD_PROFILE:-trainer}"  # "trainer" (QLoRA, port 3011) | "d2" (δ² engine, port 3015)
+PROFILE="${RUNPOD_PROFILE:-trainer}"  # "trainer" | "d2" | "avatar"
 GPU_TYPE_DEFAULT="rtx3090"
-POD_STATE_FILE="$SCRIPT_DIR/.runpod_pod_id"  # tracks the active pod ID locally
+# Per-profile pod state file so multiple pod kinds can run side-by-side.
+# Backward compat: trainer keeps the historical .runpod_pod_id name.
+case "$PROFILE" in
+    trainer) POD_STATE_FILE="$SCRIPT_DIR/.runpod_pod_id" ;;
+    *)       POD_STATE_FILE="$SCRIPT_DIR/.runpod_pod_id.${PROFILE}" ;;
+esac
 
 # Per-profile defaults (image + port). Override via RUNPOD_DOCKER_IMAGE / RUNPOD_PORT.
 case "$PROFILE" in
@@ -72,8 +79,16 @@ case "$PROFILE" in
         DEFAULT_IMAGE="ghcr.io/elfege/anamnesis-d2:cuda-runpod"
         DEFAULT_PORT="3015"
         ;;
+    avatar)
+        # XTTS + SadTalker GPU worker. Image pre-bakes SadTalker checkpoints +
+        # XTTS v2 weights so first request avoids cold-start download.
+        # Local fallback workers on server/office stay running independently —
+        # this is purely additive (slot 5 in the AVATAR_WORKER_URL_N chain).
+        DEFAULT_IMAGE="ghcr.io/elfege/anamnesis-avatar-worker:cuda-runpod"
+        DEFAULT_PORT="3013"
+        ;;
     *)
-        echo "Error: unknown RUNPOD_PROFILE='$PROFILE'. Use 'trainer' or 'd2'."
+        echo "Error: unknown RUNPOD_PROFILE='$PROFILE'. Use 'trainer', 'd2', or 'avatar'."
         exit 1
         ;;
 esac
@@ -115,8 +130,39 @@ start_pod() {
         exit 1
     fi
 
-    echo "Creating RunPod pod: GPU=$gpu_alias ($gpu_id), image=$DOCKER_IMAGE"
+    echo "Creating RunPod pod: profile=$PROFILE, GPU=$gpu_alias ($gpu_id), image=$DOCKER_IMAGE"
     echo "(This costs money — make sure you intend this.)"
+
+    # ── Cost-confirmation guard ───────────────────────────────────────────
+    # rtx3090 community ~$0.22-0.45/hr. rtx4090 ~$0.40. a100 ~$1.50. h100 ~$2.50.
+    # For non-trivial spend (anything above $1/hr) require explicit re-typed
+    # confirmation. Below that, a single y/N prompt suffices.
+    local approx_hourly=""
+    case "$gpu_alias" in
+        rtx3090) approx_hourly="0.30" ;;
+        rtx4090) approx_hourly="0.40" ;;
+        a100)    approx_hourly="1.50" ;;
+        h100)    approx_hourly="2.50" ;;
+    esac
+    if [[ -n "$approx_hourly" ]]; then
+        echo "  Approx hourly cost: \$${approx_hourly}/hr (community spot pricing)."
+    fi
+    if [[ "${RUNPOD_SKIP_CONFIRM:-}" != "1" ]]; then
+        if [[ "$gpu_alias" == "a100" || "$gpu_alias" == "h100" ]]; then
+            echo "  This GPU exceeds the \$1/hr threshold — please confirm explicitly."
+            read -r -p "  Type the GPU alias ('$gpu_alias') to proceed: " conf
+            if [[ "$conf" != "$gpu_alias" ]]; then
+                echo "  Aborted — confirmation did not match."
+                exit 1
+            fi
+        else
+            read -r -p "  Proceed? [y/N] " conf
+            if [[ ! "$conf" =~ ^(y|Y|yes|YES)$ ]]; then
+                echo "  Aborted."
+                exit 1
+            fi
+        fi
+    fi
 
     # ── Container registry auth (private images, e.g. ghcr.io/elfege/anamnesis-d2) ──
     # If RUNPOD_REGISTRY_AUTH_ID is set, RunPod uses it to authenticate when pulling
@@ -144,9 +190,34 @@ start_pod() {
     #   - containerRegistryAuthId: opaque RunPod-side ID for private-registry creds
     local pod_name="anamnesis-$PROFILE"
     local ports_spec="$SERVICE_PORT/http"
+    # Profile-specific env: trainer/d2 expect AUTO_LOAD_MODEL=true (their
+    # server bootstraps a default checkpoint). The avatar worker has no such
+    # flag — its models are pre-baked into the image; passing irrelevant env
+    # is harmless but we keep it honest.
+    local env_block
+    case "$PROFILE" in
+        avatar)
+            env_block='env: [{ key: "GPU_TYPE", value: "cuda" }, { key: "MACHINE_NAME", value: "runpod" }]'
+            ;;
+        *)
+            env_block='env: [{ key: "AUTO_LOAD_MODEL", value: "true" }]'
+            ;;
+    esac
+    # Avatar pod needs more container disk (SadTalker checkpoints + XTTS
+    # weights baked in ~5 GB; leave headroom for HF cache).
+    local container_disk="20"
+    [[ "$PROFILE" == "avatar" ]] && container_disk="40"
     local mutation
-    mutation=$(jq -n --arg gpu "$gpu_id" --arg img "$DOCKER_IMAGE" --arg name "$pod_name" --arg ports "$ports_spec" --arg auth "$auth_clause" '{
-        query: "mutation { podFindAndDeployOnDemand(input: { cloudType: COMMUNITY, gpuCount: 1, volumeInGb: 50, containerDiskInGb: 20, gpuTypeId: \"\($gpu)\", name: \"\($name)\", imageName: \"\($img)\", ports: \"\($ports)\", env: [{ key: \"AUTO_LOAD_MODEL\", value: \"true\" }]\($auth) }) { id desiredStatus runtime { ports { ip publicPort privatePort isIpPublic } } } }"
+    mutation=$(jq -n \
+        --arg gpu "$gpu_id" \
+        --arg img "$DOCKER_IMAGE" \
+        --arg name "$pod_name" \
+        --arg ports "$ports_spec" \
+        --arg auth "$auth_clause" \
+        --arg env "$env_block" \
+        --arg disk "$container_disk" \
+        '{
+        query: "mutation { podFindAndDeployOnDemand(input: { cloudType: COMMUNITY, gpuCount: 1, volumeInGb: 50, containerDiskInGb: \($disk), gpuTypeId: \"\($gpu)\", name: \"\($name)\", imageName: \"\($img)\", ports: \"\($ports)\", \($env)\($auth) }) { id desiredStatus runtime { ports { ip publicPort privatePort isIpPublic } } } }"
     }')
 
     local response
@@ -259,33 +330,84 @@ status_pod() {
 register_worker() {
     local url="$1"
     local label="$2"
-    # Append to .env so future container restarts pick it up.
+    # Per-profile env keys so the avatar pod doesn't overwrite the d²/trainer
+    # endpoint vars in .env. Slot allocation in AVATAR_WORKER_URL_N: slot 5
+    # is reserved for the runpod avatar worker (1..4 = local server/office
+    # workers; 5..9 = cloud).
+    case "$PROFILE" in
+        avatar)
+            local env_key_url="AVATAR_WORKER_URL_5"
+            local env_key_label="AVATAR_WORKER_LABEL_5"
+            local env_label_value="runpod · ${1##*//}"
+            ;;
+        d2)
+            local env_key_url="D2_ENDPOINT_URL"
+            local env_key_label=""
+            ;;
+        trainer|*)
+            local env_key_url="NANOGPT_URLS_RUNPOD"
+            local env_key_label=""
+            ;;
+    esac
+
     if [[ -f "$ENV_FILE" ]]; then
-        # Remove any prior NANOGPT_URLS_RUNPOD / RUNPOD_ENDPOINT_URL lines,
-        # then append. RUNPOD_ENDPOINT_URL is read by app/routes/chat.py's
-        # _probe_runpod() so the chat dropdown sees the new pod immediately.
-        grep -v -e '^NANOGPT_URLS_RUNPOD=' -e '^RUNPOD_ENDPOINT_URL=' "$ENV_FILE" > "$ENV_FILE.tmp" || true
-        echo "NANOGPT_URLS_RUNPOD=$url"   >> "$ENV_FILE.tmp"
-        echo "RUNPOD_ENDPOINT_URL=$url"   >> "$ENV_FILE.tmp"
+        # Remove any prior matching lines plus the long-lived RUNPOD_ENDPOINT_URL
+        # (used by chat.py's _probe_runpod for trainer/d2 profiles only — the
+        # avatar profile doesn't touch it).
+        local strip_args=( -e "^${env_key_url}=" )
+        [[ -n "$env_key_label" ]] && strip_args+=( -e "^${env_key_label}=" )
+        if [[ "$PROFILE" != "avatar" ]]; then
+            strip_args+=( -e '^RUNPOD_ENDPOINT_URL=' )
+        fi
+        grep -v "${strip_args[@]}" "$ENV_FILE" > "$ENV_FILE.tmp" || true
+        echo "${env_key_url}=${url}" >> "$ENV_FILE.tmp"
+        if [[ -n "$env_key_label" ]]; then
+            echo "${env_key_label}=runpod · 3090 24GB" >> "$ENV_FILE.tmp"
+        fi
+        if [[ "$PROFILE" != "avatar" ]]; then
+            echo "RUNPOD_ENDPOINT_URL=${url}" >> "$ENV_FILE.tmp"
+        fi
         mv "$ENV_FILE.tmp" "$ENV_FILE"
     fi
 
-    # POST to the worker registry API (if available — non-fatal if not)
+    # POST to the worker registry API (if available — non-fatal if not).
+    # The kind is profile-tagged so the dashboard can group runpod-avatar
+    # rows distinctly from runpod-d2 rows.
     curl -s -X POST "http://192.168.10.20:3010/api/workers/register" \
         -H "Content-Type: application/json" \
-        -d "$(jq -n --arg url "$url" --arg label "$label" '{url: $url, label: $label, kind: "runpod"}')" \
+        -d "$(jq -n --arg url "$url" --arg label "$label" --arg kind "runpod-${PROFILE}" \
+                '{url: $url, label: $label, kind: $kind}')" \
         2>/dev/null || true
 }
 
 unregister_worker() {
     local pod_id="$1"
-    # Remove the NANOGPT_URLS_RUNPOD + RUNPOD_ENDPOINT_URL lines from .env
+    case "$PROFILE" in
+        avatar)
+            local env_key_url="AVATAR_WORKER_URL_5"
+            local env_key_label="AVATAR_WORKER_LABEL_5"
+            ;;
+        d2)
+            local env_key_url="D2_ENDPOINT_URL"
+            local env_key_label=""
+            ;;
+        trainer|*)
+            local env_key_url="NANOGPT_URLS_RUNPOD"
+            local env_key_label=""
+            ;;
+    esac
+
     if [[ -f "$ENV_FILE" ]]; then
-        grep -v -e '^NANOGPT_URLS_RUNPOD=' -e '^RUNPOD_ENDPOINT_URL=' "$ENV_FILE" > "$ENV_FILE.tmp" || true
+        local strip_args=( -e "^${env_key_url}=" )
+        [[ -n "$env_key_label" ]] && strip_args+=( -e "^${env_key_label}=" )
+        if [[ "$PROFILE" != "avatar" ]]; then
+            strip_args+=( -e '^RUNPOD_ENDPOINT_URL=' )
+        fi
+        grep -v "${strip_args[@]}" "$ENV_FILE" > "$ENV_FILE.tmp" || true
         mv "$ENV_FILE.tmp" "$ENV_FILE"
     fi
 
-    # DELETE from the registry
+    # DELETE from the registry (best effort — endpoint may not exist).
     curl -s -X DELETE "http://192.168.10.20:3010/api/workers/register/runpod-$pod_id" \
         2>/dev/null || true
 }
@@ -301,10 +423,12 @@ case "${1:-}" in
         echo "Profile selection (env var):"
         echo "  RUNPOD_PROFILE=trainer  → QLoRA trainer image, port 3011 (default)"
         echo "  RUNPOD_PROFILE=d2       → δ² engine image (ghcr.io/elfege/anamnesis-d2:cuda-runpod), port 3015"
+        echo "  RUNPOD_PROFILE=avatar   → avatar worker (XTTS + SadTalker), port 3013 — additive to local workers"
         echo ""
         echo "Examples:"
         echo "  RUNPOD_PROFILE=d2 ./deploy_runpod.sh start --gpu rtx3090"
-        echo "  RUNPOD_PROFILE=d2 ./deploy_runpod.sh status"
+        echo "  RUNPOD_PROFILE=avatar ./deploy_runpod.sh start --gpu rtx3090"
+        echo "  RUNPOD_PROFILE=avatar ./deploy_runpod.sh status"
         exit 1
         ;;
 esac

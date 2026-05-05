@@ -111,6 +111,7 @@ TARGETS=(
 	"anamnesis-app|local|$SCRIPT_DIR|docker-compose.yml|anamnesis-app"
 	"avatar-worker-office|office|~/0_GENESIS_PROJECT/0_ANAMNESIS/avatar_worker|docker-compose.office.yml|avatar-worker"
 	"avatar-worker-server|server|~/0_GENESIS_PROJECT/0_ANAMNESIS/avatar_worker|docker-compose.server.yml|avatar-worker"
+	"avatar-worker-runpod|local|$SCRIPT_DIR/avatar_worker|docker-compose.runpod.yml|avatar-worker-runpod"
 	"anamnesis-trainer-office|office|~/0_GENESIS_PROJECT/0_ANAMNESIS/trainers|docker-compose.office.yml|anamnesis-trainer"
 	"anamnesis-trainer-server|server|~/0_GENESIS_PROJECT/0_ANAMNESIS/trainers|docker-compose.server.yml|anamnesis-trainer"
 	"d2-server|server|~/0_GENESIS_PROJECT/0_ANAMNESIS/d2|docker-compose.yml|d2-cuda"
@@ -286,6 +287,34 @@ action_remote_workers() {
 # Default: server (CUDA, 1660 SUPER 6GB — sufficient for SmallMLP MNIST benchmarks).
 # Office is reachable but unstable (RX 6800 ROCm crashes in MSG-116 / MSG of 2026-04-25).
 # RunPod is the cloud option once a pod has been started via deploy_runpod.sh.
+# Build the avatar-worker image for RunPod (locally), push to ghcr.io, then
+# spin up a pod via deploy_runpod.sh with RUNPOD_PROFILE=avatar.
+# Uses the same private-registry auth (RUNPOD_REGISTRY_AUTH_ID) as d2-runpod.
+# Cost: rtx3090 community ~$0.30/hr — confirmation prompt enforced inside
+# deploy_runpod.sh; no auto-start.
+action_avatar_runpod() {
+	prompt_nocache
+	local image_tag="ghcr.io/elfege/anamnesis-avatar-worker:cuda-runpod"
+	display_block "avatar-worker (RunPod): build + push $image_tag"
+	local nocache_flag=""
+	$DO_NOCACHE && nocache_flag="--no-cache"
+	# Build the image (locally — RunPod doesn't expose a build daemon).
+	if ! run bash -c "cd '$SCRIPT_DIR/avatar_worker' && docker build $nocache_flag -t '$image_tag' -f Dockerfile.runpod ."; then
+		echo -e "${YELLOW}  Local build failed — you can still try building on the pod via docker exec after start (slow).${NC}"
+		return 1
+	fi
+	# Push (best-effort — if auth not set up, deploy_runpod.sh will fail to
+	# pull, and the user can rerun after `docker login ghcr.io`).
+	if ! run docker push "$image_tag"; then
+		echo -e "${YELLOW}  Push failed — make sure 'docker login ghcr.io' is configured. Pod start will fail until pushed.${NC}"
+		read -r -p "  Continue to spin up the pod anyway? [y/N] " ans
+		[[ ! "$ans" =~ ^(y|Y|yes|YES)$ ]] && return 1
+	fi
+	display_block "Spinning RunPod pod (profile=avatar, GPU=rtx3090)"
+	echo -e "${DIM}  Confirmation prompt enforced inside deploy_runpod.sh; pod adds itself as AVATAR_WORKER_URL_5 in .env on success.${NC}"
+	run bash -c "RUNPOD_PROFILE=avatar '$SCRIPT_DIR/deploy_runpod.sh' start --gpu rtx3090"
+}
+
 action_d2() {
 	local target="${1:-server}"  # default to server (most stable)
 	prompt_nocache
@@ -335,12 +364,15 @@ menu_main() {
 		echo -e "  ${BOLD}δ² engine${NC}                    ${DIM}(continual-learning research, opt-in)${NC}"
 		echo -e "   6) Build + start δ² engine…          ${DIM}→ server / office / runpod / all${NC}"
 		echo
+		echo -e "  ${BOLD}Avatar (XTTS + SadTalker)${NC}"
+		echo -e "   7) Build + start avatar-worker on RunPod  ${DIM}→ rtx3090 ~\$0.30/hr, additive to local workers${NC}"
+		echo
 		echo -e "  ${BOLD}Maintenance${NC}"
 		echo -e "   5) Just prune Docker resources       ${DIM}→ local only${NC}"
 		echo
 		echo "   0) Exit"
 		echo
-		read -r -p "  Select [0-6]: " choice
+		read -r -p "  Select [0-7]: " choice
 		case "$choice" in
 			1) action_local ;;
 			2) action_all ;;
@@ -348,6 +380,7 @@ menu_main() {
 			4) action_remote_workers ;;
 			5) DO_PRUNE=true; run_prune ;;
 			6) menu_d2 ;;
+			7) action_avatar_runpod ;;
 			0|q|Q|"") return 0 ;;
 			*) echo -e "  ${YELLOW}?${NC}" ;;
 		esac
@@ -419,6 +452,7 @@ else
 		d2:office)       action_d2 office ;;
 		d2:runpod)       action_d2 runpod ;;
 		d2:all)          action_d2 all ;;
+		avatar:runpod)   action_avatar_runpod ;;
 		*)
 			echo -e "${RED}Unknown --action=$ACTION${NC}"
 			exit 2
