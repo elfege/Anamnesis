@@ -84,8 +84,11 @@ if [[ -n "$DOCKERFILES" ]]; then
     while IFS= read -r f; do
         [[ -f "$f" ]] || continue
         for pattern in "${!FORBIDDEN_COPYS[@]}"; do
-            if grep -nE "$pattern" "$f" >/dev/null 2>&1; then
-                line=$(grep -nE "$pattern" "$f" | head -1)
+            # Match only lines where COPY is the first non-whitespace token.
+            # Skips '#' comment lines (Dockerfile.example documents what NOT
+            # to do via commented COPY examples) and stringified mentions.
+            if grep -nE "^[[:space:]]*$pattern" "$f" >/dev/null 2>&1; then
+                line=$(grep -nE "^[[:space:]]*$pattern" "$f" | head -1)
                 VIOLATIONS+=("FORBIDDEN COPY in $f line ${line%%:*}: ${FORBIDDEN_COPYS[$pattern]}")
             fi
         done
