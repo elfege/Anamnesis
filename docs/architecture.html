@@ -359,15 +359,48 @@
             </svg>
             <h1>ANAMNESIS</h1>
         </div>
-        <div class="subtitle">Episodic Memory System for Claude Instances — Engineering Architecture</div>
+        <div class="subtitle">Self-hosted continual-learning + embodied-AI platform — Engineering Architecture</div>
         <div class="meta">
             <span><span class="badge">FastAPI</span></span>
             <span><span class="badge">MongoDB Atlas Local</span></span>
             <span><span class="badge">sentence-transformers</span></span>
             <span><span class="badge">Docker</span></span>
-            <span style="color:var(--muted)">2026 · Multi-machine · Elfege Leylavergne</span>
+            <span><span class="badge">δ² optimizer</span></span>
+            <span><span class="badge">LoRA hot-load</span></span>
+            <span><span class="badge">RunPod</span></span>
+            <span><span class="badge">Together.ai</span></span>
+            <span style="color:var(--muted)">Last updated 2026-05-05 · Multi-machine · Elfege Leylavergne</span>
         </div>
     </header>
+
+    <!-- ─── Update banner ─────────────────────────────────────── -->
+    <section style="background:rgba(88,166,255,0.06); border-left:3px solid var(--accent,#58a6ff); padding:14px 18px; margin:18px 0; border-radius:6px">
+        <h3 style="margin:0 0 8px 0; color:var(--accent,#58a6ff)">What's new — 2026-05-05</h3>
+        <p style="margin:0 0 8px 0">
+            The platform has grown beyond episodic memory. <strong>Anamnesis is now a
+            self-hosted continual-learning + embodied-AI platform.</strong> Episodic memory
+            is one piece of a larger system that also includes:
+        </p>
+        <ul style="margin:6px 0 0 22px; padding:0">
+            <li><strong>δ² (delta-squared)</strong> — novel continual-learning optimizer with bassin tension reservoir. From-scratch Transformer training (<code>d2/train.py</code>) + LoRA fine-tuning (<code>d2/finetune_lora.py</code>) paths both supported.</li>
+            <li><strong>Multi-backend chat</strong> — single resource selector routes to eight inference backends (3 local Ollama, Claude API, Claude CLI, Together.ai with 80 models, RunPod cloud GPU, in-house δ² engine).</li>
+            <li><strong>LoRA hot-loading</strong> — δ² engine now exposes <code>/load_lora</code>, <code>/unload_lora</code>, <code>/lora_status</code>. Dashboard "Load for chat" button per adapter; auto-unload on tab close via <code>sendBeacon</code>; 30-min server-side idle watchdog.</li>
+            <li><strong>Training Catalog</strong> — unified dashboard surface with 7 project tasks (Pareto sweeps, personal arms, smoke runs, WikiText-103). Start / Re-run / View results buttons. Conflict + 60-second duplicate protection.</li>
+            <li><strong>Settings system</strong> — gear icon (top-right of dashboard) opens a full-viewport settings view with 9 categories backed by Mongo. UI overrides .env which overrides hardcoded defaults.</li>
+            <li><strong>Direct Ingestion</strong> — drag-drop PDF/.docx/.md upload + URL ingest endpoint with SSRF defense. SHA-256 dedup. Per-episode Delete + optional blocklist that the crawler and uploader both honor.</li>
+            <li><strong>Belle / Avatar pipeline</strong> — Together.ai + RunPod added to the LLM backend dropdown. Animation default ON, autoplay-resilient video, "animating" status indicator.</li>
+            <li><strong>Avatar-on-RunPod</strong> — <code>avatar_worker/Dockerfile.runpod</code> + <code>deploy_runpod.sh</code> avatar profile + first-deployment prompt in <code>deploy.sh</code> option 2.</li>
+            <li><strong>Resource Status panel</strong> — fixed top-right of dashboard, polls every 30s. Per-machine CPU / RAM / GPU bars via <code>/host</code> endpoint on each container.</li>
+        </ul>
+        <p style="margin:10px 0 0 0; color:var(--muted); font-size:0.92em">
+            Honest scientific finding: across 50 Pareto sweep runs spanning α₂ ∈ [1e-4..1e4]
+            and η ∈ [1e-7..1e-1] on permuted-MNIST + SmallMLP, <strong>δ²-additive shows no
+            measurable improvement over vanilla SGD</strong>. Either the bassin nudge is
+            arithmetically negligible (α₂ ≤ 10) or destroys learning entirely (α₂ ≥ 100).
+            No Goldilocks regime found in this benchmark. To salvage the optimizer's claim,
+            either find a benchmark where it actually helps OR reformulate the bassin dynamics.
+        </p>
+    </section>
 
     <!-- ─── TOC ─────────────────────────────────── -->
     <nav class="toc">
