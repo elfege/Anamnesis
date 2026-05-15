@@ -92,6 +92,30 @@ def get_blocklist_collection():
     return _db["ingestion_blocklist"]
 
 
+def get_bassin_ingest_collection():
+    """Return the d2_bassin_ingest_log collection — authoritative durable
+    record of every interaction signal posted to the bassin (per MSG-248).
+
+    Hybrid storage: full payload here, vector cached on the d² engine side.
+    If the engine restarts and loses its cache, the collection is the
+    truth-source for re-vectorization.
+
+    Schema per document (insert-only — never mutated):
+        _id:        ObjectId (auto)
+        kind:       "rewrite" | "feedback" | "critique" | "manual" | "restore-negative"
+        source:     str — calling app, e.g. "0_JOB_APPLICATIONS_2026"
+        app_id:     str | None — caller-supplied identifier (request id, draft id, etc.)
+        payload:    dict — interaction-specific raw fields (full text)
+        embedding:  list[float] | None — 1024-d vector if computed at ingest
+        embed_text: str | None — exact text that was embedded (for replay)
+        ts:         datetime — caller-supplied or server-side
+        received_at: datetime — server clock at insert
+    """
+    if _db is None:
+        raise RuntimeError("MongoDB not connected. Call connect_to_mongo() first.")
+    return _db["d2_bassin_ingest_log"]
+
+
 def get_db():
     """Return the raw Motor database handle.
 
