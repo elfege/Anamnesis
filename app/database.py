@@ -92,6 +92,33 @@ def get_blocklist_collection():
     return _db["ingestion_blocklist"]
 
 
+def get_bassin_persistent_collection():
+    """Return the d2_bassin_persistent collection — feeds posted to the
+    multi-dim bassin via POST /api/d2/bassin/feed (per MSG-253/254).
+
+    Distinct from d2_bassin_ingest_log:
+      - ingest_log: one doc per UI interaction (rewrite/critique/etc.).
+        Provenance + replayable training data. Chain-linked.
+      - persistent:  one doc per FED vector + relation_type tag. Direct
+        material for the multi-dim bassin in the optimizer. Loaded into
+        bassin[relation_idx] at training start.
+
+    Schema per document (insert-only):
+        _id:           ObjectId
+        relation_type: "critiques" | "rewrites" | "negates" | "sublates" |
+                       "restores" | "refuses" | "amplifies"
+        embedding:     list[float] (1024-d, BAAI/bge-large-en-v1.5)
+        text:          str (the text that was embedded; for replay)
+        source:        str — calling app
+        app_id:        str | None
+        ts:            datetime
+        received_at:   datetime
+    """
+    if _db is None:
+        raise RuntimeError("MongoDB not connected. Call connect_to_mongo() first.")
+    return _db["d2_bassin_persistent"]
+
+
 def get_bassin_ingest_collection():
     """Return the d2_bassin_ingest_log collection — authoritative durable
     record of every interaction signal posted to the bassin (per MSG-248).

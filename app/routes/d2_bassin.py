@@ -37,7 +37,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from database import get_bassin_ingest_collection
+from database import get_bassin_ingest_collection, get_bassin_persistent_collection
 from embedding import get_embedding
 
 logger = logging.getLogger("anamnesis.routes.d2_bassin")
@@ -74,6 +74,12 @@ class BassinIngestRequest(BaseModel):
     ]] = Field(
         None,
         description="Hegelian-flavored typing of how this row relates to its parent. Useful for chain-aware training later.",
+    )
+    # Multi-dim conditioning axes (per BASSIN_MULTIDIM_SCHEMA.md). All
+    # optional; missing keys default to null. Same shape as feed/.
+    axes: Optional[dict] = Field(
+        None,
+        description="Multi-dim conditioning axes (negation_type, structural_role, domain_axis, content_kind, temporal_phase, trust, …). See BASSIN_MULTIDIM_SCHEMA.md.",
     )
 
 
@@ -212,6 +218,8 @@ async def ingest(req: BassinIngestRequest) -> dict[str, Any]:
         "parent_ingest_id": parent_id_str,
         "chain_layer": req.chain_layer,
         "relation_to_parent": req.relation_to_parent,
+        # MSG-255 conditioning axes
+        "axes": req.axes or {},
     }
     result = await coll.insert_one(doc)
     ingest_id = str(result.inserted_id)
@@ -232,6 +240,172 @@ async def ingest(req: BassinIngestRequest) -> dict[str, Any]:
         "ingest_id": ingest_id,
         "embedded": embedded_vec is not None,
         "engine_cache": engine_err,  # None on success; string explanation otherwise
+    }
+
+
+# ─── Multi-dim bassin: feed endpoint (per MSG-253 / MSG-254 follow-up) ──
+
+RELATION_TYPES = (
+    "critiques", "rewrites", "negates", "sublates",
+    "restores", "refuses", "amplifies",
+)
+
+
+class BassinFeedRequest(BaseModel):
+    """Direct feed into the multi-dim semantic-graph bassin.
+
+    The bassin is NOT a flat list of vectors — it's a DAG where each new
+    entry auto-attaches to existing entries via embedding similarity.
+    "One subject/topic/story can relate more or less to existing ones and
+    add layers not just to one entry but to multiple entries" (Elfege,
+    2026-05-15). The relation_type tags this entry's POSITION in the
+    7-axis space (critiques / sublates / etc.); chain_layer captures DEPTH
+    in the dialectical chain. Both are recoverable from the graph if not
+    explicitly set.
+
+    Either `text` (will be embedded server-side) OR `vector` (1024-d float
+    list, presumed to come from the same embedder) — at least one required.
+    """
+    relation_type: Literal[
+        "critiques", "rewrites", "negates", "sublates",
+        "restores", "refuses", "amplifies",
+    ]
+    text: Optional[str] = Field(None, description="Text to embed (1024-d). Mutually optional with vector.")
+    vector: Optional[list[float]] = Field(None, description="Pre-computed 1024-d embedding.")
+    source: str = Field(..., description="Calling app, e.g. '0_JOB_APPLICATIONS_2026'")
+    app_id: Optional[str] = None
+    ts: Optional[str] = None
+    # ── MSG-253 follow-up: multi-layer chain awareness ───────────────────
+    chain_layer: Optional[int] = Field(
+        None, ge=0, le=64,
+        description="Explicit chain depth. 0 = root, 1 = first critique, 2 = rewrite-as-reply, etc.",
+    )
+    # Multi-dim conditioning axes (per BASSIN_MULTIDIM_SCHEMA.md). All
+    # optional; missing keys default to null. Extensible: callers may add
+    # new keys; unknown keys are stored verbatim.
+    axes: Optional[dict] = Field(
+        None,
+        description="Multi-dim conditioning axes (negation_type, structural_role, domain_axis, content_kind, temporal_phase, trust, …). Strings only; server stores verbatim. See BASSIN_MULTIDIM_SCHEMA.md.",
+    )
+
+
+@router.post("/feed")
+async def feed(req: BassinFeedRequest) -> dict[str, Any]:
+    """Feed one vector + relation_type into the persistent multi-dim bassin.
+
+    Writes to the d2_bassin_persistent Mongo collection (authoritative).
+    Best-effort POST to the d² engine /bassin/insert if available.
+    Returns the new document's _id.
+
+    The optimizer's multi-dim bassin (when enabled with relation_dim>0)
+    loads from this collection at training start, slicing by relation_type
+    into bassin[relation_idx, *param_shape].
+    """
+    if not req.text and not req.vector:
+        raise HTTPException(status_code=422, detail="provide at least one of: text, vector")
+
+    # Resolve vector
+    vec: Optional[list[float]] = req.vector
+    text_for_storage = req.text or ""
+    if vec is None and req.text:
+        try:
+            vec = get_embedding(req.text)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"embedding failed: {e}")
+    if vec is None:
+        raise HTTPException(status_code=500, detail="no vector resolved")
+    if len(vec) != 1024:
+        raise HTTPException(
+            status_code=422,
+            detail=f"vector must be 1024-dimensional (got {len(vec)})",
+        )
+
+    # Resolve timestamps
+    received_at = datetime.now(timezone.utc)
+    ts_dt: datetime
+    if req.ts:
+        try:
+            ts_dt = datetime.fromisoformat(req.ts.replace("Z", "+00:00"))
+        except Exception:
+            ts_dt = received_at
+    else:
+        ts_dt = received_at
+
+    # Authoritative write
+    coll = get_bassin_persistent_collection()
+    doc = {
+        "relation_type": req.relation_type,
+        "embedding": vec,
+        "text": text_for_storage,
+        "source": req.source,
+        "app_id": req.app_id,
+        "ts": ts_dt,
+        "received_at": received_at,
+        "chain_layer": req.chain_layer,
+        "axes": req.axes or {},  # null-safe; empty dict means "no axes supplied"
+    }
+    result = await coll.insert_one(doc)
+    feed_id = str(result.inserted_id)
+    logger.info(
+        f"bassin feed: relation={req.relation_type} source={req.source} "
+        f"app_id={req.app_id} _id={feed_id}"
+    )
+
+    # Best-effort engine cache push (same channel as ingest — engine
+    # currently 404s, expected during rollout)
+    body = {
+        "vec": vec,
+        "kind": "feed",
+        "relation_type": req.relation_type,
+        "source": req.source,
+        "app_id": req.app_id,
+        "ts": req.ts,
+    }
+    engine_err: Optional[str] = None
+    if D2_ENDPOINT_URL:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                r = await client.post(f"{D2_ENDPOINT_URL}/bassin/insert", json=body)
+                if r.status_code != 200:
+                    engine_err = f"engine returned {r.status_code}"
+        except Exception as e:
+            engine_err = f"{type(e).__name__}: {str(e)[:120]}"
+
+    return {
+        "ok": True,
+        "feed_id": feed_id,
+        "relation_type": req.relation_type,
+        "vector_dim": len(vec),
+        "engine_cache": engine_err,
+    }
+
+
+@router.get("/feed/stats")
+async def feed_stats() -> dict[str, Any]:
+    """Per-relation count + most-recent ts for the multi-dim bassin store."""
+    coll = get_bassin_persistent_collection()
+    total = await coll.count_documents({})
+    pipeline = [{"$group": {"_id": "$relation_type", "n": {"$sum": 1}}}]
+    by_relation: dict[str, int] = {}
+    async for r in coll.aggregate(pipeline):
+        by_relation[r["_id"] or "<unknown>"] = r["n"]
+    # Ensure all relations are represented (with 0 if empty)
+    for rel in RELATION_TYPES:
+        by_relation.setdefault(rel, 0)
+    most_recent = await coll.find_one(
+        {}, projection={"received_at": 1, "relation_type": 1, "source": 1},
+        sort=[("received_at", -1)],
+    )
+    return {
+        "total": total,
+        "by_relation": by_relation,
+        "most_recent": (
+            {
+                "received_at": most_recent["received_at"].isoformat(),
+                "relation_type": most_recent.get("relation_type"),
+                "source": most_recent.get("source"),
+            } if most_recent else None
+        ),
     }
 
 
