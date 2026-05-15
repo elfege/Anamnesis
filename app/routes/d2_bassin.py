@@ -50,12 +50,31 @@ D2_ENDPOINT_URL = os.environ.get("D2_ENDPOINT_URL", "").rstrip("/")
 # ─── Schema ────────────────────────────────────────────────────────────
 
 class BassinIngestRequest(BaseModel):
-    """Per MSG-248 stub schema."""
+    """Per MSG-248 stub schema, extended for MSG-253 chain awareness."""
     kind: Literal["rewrite", "feedback", "critique", "manual", "restore-negative"]
     payload: dict
     source: str = Field(..., description="Calling app, e.g. '0_JOB_APPLICATIONS_2026'")
     app_id: Optional[str] = Field(None, description="Caller's identifier (request id, draft id…)")
     ts: Optional[str] = Field(None, description="ISO8601 UTC; server clock used if omitted")
+    # ── MSG-253: chain-aware ingestion ─────────────────────────────────
+    # Lets callers surface the dialectical chain (critique→rewrite→critique-of-rewrite→…)
+    # explicitly instead of leaving it implicit in app_id+ts. Optional; if omitted,
+    # the row is treated as chain-root. parent_ingest_id is the Mongo _id (string)
+    # of the immediate predecessor in the chain.
+    parent_ingest_id: Optional[str] = Field(
+        None,
+        description="Mongo _id of the immediate predecessor (e.g. the critique a rewrite is replying to).",
+    )
+    chain_layer: Optional[int] = Field(
+        None, ge=0, le=64,
+        description="0 = root materials; 1 = first critique; 2 = rewrite-as-reply; etc. Caller-assigned.",
+    )
+    relation_to_parent: Optional[Literal[
+        "critiques", "rewrites", "negates", "sublates", "restores", "refuses", "amplifies"
+    ]] = Field(
+        None,
+        description="Hegelian-flavored typing of how this row relates to its parent. Useful for chain-aware training later.",
+    )
 
 
 # ─── Per-kind text extractor ───────────────────────────────────────────
@@ -168,6 +187,18 @@ async def ingest(req: BassinIngestRequest) -> dict[str, Any]:
 
     # 3. Authoritative durable write — Mongo
     coll = get_bassin_ingest_collection()
+    # Resolve parent_ingest_id (validate it points at an existing doc; if it
+    # doesn't, store the supplied string anyway with a warning — the chain
+    # may be ahead of our knowledge during async fan-in).
+    parent_id_str: Optional[str] = req.parent_ingest_id
+    if parent_id_str:
+        try:
+            from bson import ObjectId
+            parent = await coll.find_one({"_id": ObjectId(parent_id_str)}, projection={"_id": 1})
+            if not parent:
+                logger.info(f"bassin ingest: parent_ingest_id={parent_id_str} not found yet (storing anyway)")
+        except Exception as e:
+            logger.warning(f"bassin ingest: invalid parent_ingest_id={parent_id_str} ({e})")
     doc = {
         "kind": req.kind,
         "source": req.source,
@@ -177,6 +208,10 @@ async def ingest(req: BassinIngestRequest) -> dict[str, Any]:
         "embed_text": text or None,
         "ts": ts_dt,
         "received_at": received_at,
+        # MSG-253 chain fields (None when caller doesn't set them)
+        "parent_ingest_id": parent_id_str,
+        "chain_layer": req.chain_layer,
+        "relation_to_parent": req.relation_to_parent,
     }
     result = await coll.insert_one(doc)
     ingest_id = str(result.inserted_id)
@@ -198,6 +233,49 @@ async def ingest(req: BassinIngestRequest) -> dict[str, Any]:
         "embedded": embedded_vec is not None,
         "engine_cache": engine_err,  # None on success; string explanation otherwise
     }
+
+
+@router.get("/ingest/chain/{leaf_id}")
+async def ingest_chain(leaf_id: str, max_depth: int = 64) -> dict[str, Any]:
+    """Walk parent_ingest_id chain from leaf back to root (per MSG-253).
+
+    Returns the chain ordered root→leaf with each step's kind, layer,
+    relation_to_parent, and a short payload preview. Useful for callers
+    that want to confirm their DAG is being preserved AND for future
+    chain-aware training routines that need to reconstruct the full
+    dialectical sequence from any endpoint.
+
+    `max_depth` cap protects against accidental cycles (shouldn't exist
+    since parent_ingest_id is a Mongo ObjectId of a prior doc, but be safe).
+    """
+    from bson import ObjectId
+    coll = get_bassin_ingest_collection()
+    chain: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    cur_id: Optional[str] = leaf_id
+    while cur_id and len(chain) < max_depth:
+        if cur_id in seen:
+            break  # cycle defense
+        seen.add(cur_id)
+        try:
+            doc = await coll.find_one({"_id": ObjectId(cur_id)})
+        except Exception:
+            break
+        if not doc:
+            break
+        chain.append({
+            "ingest_id": str(doc["_id"]),
+            "kind": doc.get("kind"),
+            "chain_layer": doc.get("chain_layer"),
+            "relation_to_parent": doc.get("relation_to_parent"),
+            "ts": doc.get("ts").isoformat() if doc.get("ts") else None,
+            "source": doc.get("source"),
+            "app_id": doc.get("app_id"),
+            "embed_text_preview": (doc.get("embed_text") or "")[:200],
+        })
+        cur_id = doc.get("parent_ingest_id")
+    chain.reverse()  # root → leaf
+    return {"chain": chain, "depth": len(chain), "truncated": len(chain) == max_depth}
 
 
 @router.get("/ingest/stats")
