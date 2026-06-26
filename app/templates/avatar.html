@@ -349,6 +349,12 @@
              unloads every ollama model. See avatar/emergency.py.            -->
         <button id="panicBtn" onclick="panic()" title="EMERGENCY STOP — kills every avatar GPU job + unloads ollama models. Bypasses the WebSocket; works even if the regular Stop is wedged."
                 style="margin-left:10px; background:#c93f3f; color:#fff; font-weight:600; padding:4px 10px; border-radius:6px; border:1px solid #ff5e5e; cursor:pointer; letter-spacing:0.04em; box-shadow:0 0 0 1px rgba(255,94,94,0.25)">⛔ KILL</button>
+        <!-- 🛡 Install cert link — per MSG-346 — serves shared MOBIUS CA so
+             https://mobius.anamnesis (and every other mobius.* hostname) is
+             trusted with one install, no per-app re-import. -->
+        <a href="/install-cert" target="_blank" rel="noopener"
+           title="Install the MOBIUS Local CA so this device trusts https://mobius.anamnesis (and every other mobius.* hostname — one cert)"
+           style="margin-left:8px; background:transparent; color:#cfd5dd; font-size:12px; padding:4px 10px; border-radius:6px; border:1px solid #30363d; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; gap:4px">🛡 Install cert</a>
       </div>
       <div class="voice-bar">
         <label for="voiceSel" style="font-size:12px">Voice:</label>

@@ -10,6 +10,18 @@
 </head>
 <body>
     <header style="position:relative">
+        <!-- ─── 🛡 Install cert link (top-right of header) — per MSG-346 ─── -->
+        <a href="/install-cert" target="_blank" rel="noopener"
+           title="Install the MOBIUS Local CA so this device trusts https://mobius.anamnesis (and every other mobius.* hostname — one cert)"
+           style="position:absolute; top:14px; right:354px; z-index:60;
+                  background:transparent; border:1px solid var(--border,#30363d);
+                  color:var(--text-secondary,#8b949e);
+                  border-radius:8px; height:36px; padding:0 10px;
+                  text-decoration:none; font-size:13px; line-height:34px;
+                  display:inline-flex; align-items:center; gap:6px;">
+            🛡 <span style="font-size:11px">Install cert</span>
+        </a>
+
         <!-- ─── Settings gear (top-right of header) ─────────── -->
         <button id="settings-gear-btn" type="button" aria-label="Open settings"
                 title="Settings"

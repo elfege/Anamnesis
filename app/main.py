@@ -43,6 +43,7 @@ from scheduler import (
 from training_pipeline import run_training_pipeline
 from consolidation import run_consolidation_cycle
 from routes.consolidation import router as consolidation_router
+from routes.cert import router as cert_router
 from models_registry import seed_models_registry
 
 # ─── Logging ─────────────────────────────────────────────────────
@@ -195,6 +196,7 @@ app.include_router(training_catalog_router)
 app.include_router(uploads_router)
 app.include_router(settings_router)
 app.include_router(consolidation_router)
+app.include_router(cert_router)
 
 
 @app.get("/health")

@@ -123,6 +123,10 @@ services:
       # ── Avatar/persona source samples (images, audio — read-write
       #    so UI-uploaded sources persist on host alongside manually placed files)
       - ./samples:/app/samples
+      # ── Shared MOBIUS.PROXY CA cert (ro) — served by /install-cert so
+      #    users can install the "NVR Local CA" from any Anamnesis page.
+      #    Per MSG-346: one cert, no device re-import on rotation.
+      - ~/0_MOBIUS.PROXY/certs/ca.pem:/etc/ssl/mobius_ca.pem:ro
     depends_on:
       anamnesis-mongo:
         condition: service_healthy
