@@ -51,6 +51,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("anamnesis")
 
+# In-memory ring buffer powering the Avatar Debug terminal — attaches to the
+# root logger so every named logger feeds it.
+import debug_logs as _debug_logs
+_debug_logs.install(level=getattr(logging, LOG_LEVEL, logging.INFO))
+
 
 # ─── Lifespan ────────────────────────────────────────────────────
 
@@ -83,6 +88,14 @@ async def lifespan(app: FastAPI):
 
     logger.info("Ensuring vector search index exists...")
     await ensure_vector_index()
+
+    logger.info("Hydrating RunPod pod registry from MongoDB...")
+    try:
+        from avatar.runpod_pods import hydrate_from_db
+        n = await hydrate_from_db()
+        logger.info(f"RunPod pod registry: {n} pod(s) loaded.")
+    except Exception as e:
+        logger.warning(f"RunPod registry hydration failed (non-fatal): {e}")
 
     logger.info("Seeding models registry...")
     await seed_models_registry()

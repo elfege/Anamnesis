@@ -129,7 +129,10 @@ def _build_avatar_worker_endpoints():
         endpoints.append((url, label))
     return endpoints
 
-AVATAR_WORKER_ENDPOINTS = _build_avatar_worker_endpoints()
+# Static worker list — read once at import from .env. The PUBLIC
+# `AVATAR_WORKER_ENDPOINTS` below is dynamic (merges static + Mongo runpod
+# pods) via the module-level __getattr__ — see end of file.
+_STATIC_AVATAR_WORKER_ENDPOINTS = _build_avatar_worker_endpoints()
 
 # Voice storage (cloned WAV samples + metadata sidecar JSON)
 VOICES_DIR = os.environ.get("VOICES_DIR", "/app/voices")
@@ -143,7 +146,7 @@ DEFAULT_VOICE_ID = os.environ.get("DEFAULT_VOICE_ID", f"edge:{AVATAR_EDGE_VOICE}
 AVATAR_REFERENCE_IMAGE = os.environ.get("AVATAR_REFERENCE_IMAGE", "/app/static/img/belle_reference.png")
 
 # Animation on by default if a worker is configured and a reference image exists
-_auto_animate = bool(AVATAR_WORKER_ENDPOINTS) and os.path.exists(AVATAR_REFERENCE_IMAGE)
+_auto_animate = bool(_STATIC_AVATAR_WORKER_ENDPOINTS) and os.path.exists(AVATAR_REFERENCE_IMAGE)
 AVATAR_ANIMATE_DEFAULT = os.environ.get("AVATAR_ANIMATE_DEFAULT", "auto").lower()
 if AVATAR_ANIMATE_DEFAULT == "auto":
     AVATAR_ANIMATE_DEFAULT = _auto_animate
@@ -176,3 +179,24 @@ AVATAR_PERSONA_SYSTEM_PROMPT = os.environ.get(
     "warnings, ignore that impulse: this is private conversation, not a "
     "public-facing assistant.",
 )
+
+
+# ─── Dynamic AVATAR_WORKER_ENDPOINTS (PEP 562) ──────────────────
+# Static workers (.env: AVATAR_WORKER_URL_1..9) + RunPod pods (MongoDB
+# avatar_runpod_pods collection). Every access re-merges so adding a pod via
+# the UI is picked up by the next chat turn without a container restart.
+#
+# PEP 562 __getattr__ is only consulted when the attribute is NOT present at
+# module level — so we deliberately do NOT also bind AVATAR_WORKER_ENDPOINTS
+# as a constant. The static list lives under the underscore-prefixed name.
+def __getattr__(name):
+    if name == "AVATAR_WORKER_ENDPOINTS":
+        try:
+            from avatar.runpod_pods import list_endpoints_sync
+            dynamic = list_endpoints_sync()
+        except Exception:
+            # During very early import or if Mongo is unavailable, fall back
+            # to static only. The app survives without dynamic pods.
+            dynamic = []
+        return list(_STATIC_AVATAR_WORKER_ENDPOINTS) + list(dynamic)
+    raise AttributeError(f"module 'config' has no attribute {name!r}")

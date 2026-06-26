@@ -43,7 +43,10 @@ fi
     echo "# Source: AWS Secrets Manager / ${SECRET_NAME}"
     echo "# Generated: $(date -Iseconds)"
     echo ""
-    echo "$SECRET_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"'
+    # @sh shell-quotes the value (single-quoted, internal single quotes escaped).
+    # Without this, values containing spaces, parens, "·", "(GPU)", etc. break
+    # `set -a; source .env` — bash treats `(GPU)` as a subshell invocation.
+    echo "$SECRET_JSON" | jq -r 'to_entries[] | "\(.key)=" + (.value | tostring | @sh)'
 } > "$ENV_FILE"
 
 chmod 600 "$ENV_FILE"

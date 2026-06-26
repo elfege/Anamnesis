@@ -125,9 +125,21 @@ start_pod() {
 
     if [[ -f "$POD_STATE_FILE" ]]; then
         echo "Warning: a pod state file already exists at $POD_STATE_FILE"
-        echo "If a pod is already running, run './deploy_runpod.sh stop' first"
-        echo "or delete this file if it's stale: rm $POD_STATE_FILE"
-        exit 1
+        local stale_pod_id
+        # State file is plain text containing just the pod_id (see line ~245),
+        # NOT JSON — read it raw.
+        stale_pod_id=$(head -1 "$POD_STATE_FILE" 2>/dev/null | tr -d '[:space:]' || echo "")
+        [[ -n "$stale_pod_id" ]] && echo "  Recorded pod_id: $stale_pod_id"
+        echo "If a pod is still running on RunPod, './deploy_runpod.sh stop' is the safe choice"
+        echo "(otherwise you'll orphan a billing pod and only delete the local pointer)."
+        read -r -p "Delete this state file and proceed to create a NEW pod? [y/N] " del_conf
+        if [[ "$del_conf" =~ ^(y|Y|yes|YES)$ ]]; then
+            rm -f "$POD_STATE_FILE"
+            echo "Removed $POD_STATE_FILE"
+        else
+            echo "Aborted — state file kept."
+            exit 1
+        fi
     fi
 
     echo "Creating RunPod pod: profile=$PROFILE, GPU=$gpu_alias ($gpu_id), image=$DOCKER_IMAGE"
@@ -217,7 +229,7 @@ start_pod() {
         --arg env "$env_block" \
         --arg disk "$container_disk" \
         '{
-        query: "mutation { podFindAndDeployOnDemand(input: { cloudType: COMMUNITY, gpuCount: 1, volumeInGb: 50, containerDiskInGb: \($disk), gpuTypeId: \"\($gpu)\", name: \"\($name)\", imageName: \"\($img)\", ports: \"\($ports)\", \($env)\($auth) }) { id desiredStatus runtime { ports { ip publicPort privatePort isIpPublic } } } }"
+        query: "mutation { podFindAndDeployOnDemand(input: { cloudType: COMMUNITY, gpuCount: 1, volumeInGb: 50, volumeMountPath: \"/workspace\", containerDiskInGb: \($disk), gpuTypeId: \"\($gpu)\", name: \"\($name)\", imageName: \"\($img)\", ports: \"\($ports)\", \($env)\($auth) }) { id desiredStatus runtime { ports { ip publicPort privatePort isIpPublic } } } }"
     }')
 
     local response
@@ -275,8 +287,10 @@ start_pod() {
         sleep 5
     done
 
-    # ── Register URL in worker_registry and append to .env ───────────────
-    register_worker "$public_url" "runpod-$gpu_alias-$pod_id"
+    # ── Register URL with anamnesis-app ──────────────────────────────────
+    # Avatar profile: POST to /api/avatar/runpod/pods (MongoDB), no .env touch.
+    # Trainer/d2 profiles: legacy .env write + worker_registry POST.
+    register_worker "$public_url" "runpod · $gpu_alias" "$pod_id"
     echo ""
     echo "RunPod is live: $public_url"
     echo "  Pod ID: $pod_id  (saved to $POD_STATE_FILE)"
@@ -330,16 +344,38 @@ status_pod() {
 register_worker() {
     local url="$1"
     local label="$2"
-    # Per-profile env keys so the avatar pod doesn't overwrite the d²/trainer
-    # endpoint vars in .env. Slot allocation in AVATAR_WORKER_URL_N: slot 5
-    # is reserved for the runpod avatar worker (1..4 = local server/office
-    # workers; 5..9 = cloud).
+    local pod_id="${3:-}"
+
+    # Avatar profile uses the MongoDB-backed pod registry (POST /api/avatar/runpod/pods).
+    # No .env writes — the URL is derived in-app from pod_id+port. This removes
+    # the 5-step manual chain (AWS edit → pull_env.sh → docker restart → ...)
+    # that plagued every prior pod cycle.
+    if [[ "$PROFILE" == "avatar" ]]; then
+        if [[ -z "$pod_id" ]]; then
+            echo "register_worker: avatar profile requires pod_id (arg 3) — skipping" >&2
+            return 0
+        fi
+        # Port 3013 is hard-coded in the avatar worker (Dockerfile ENV WORKER_PORT=3013).
+        local port=3013
+        local gpu_type="cuda"  # all runpod profiles ship CUDA
+        echo "Registering pod with anamnesis-app: pod_id=$pod_id port=$port"
+        curl -sf -X POST "http://192.168.10.20:3010/api/avatar/runpod/pods" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+                    --arg pod_id "$pod_id" \
+                    --argjson port "$port" \
+                    --arg label "$label" \
+                    --arg gpu_type "$gpu_type" \
+                    '{pod_id: $pod_id, port: $port, label: $label, gpu_type: $gpu_type}')" \
+            >/dev/null 2>&1 \
+            && echo "  → registered (next chat turn will see the pod in the worker pool)" \
+            || echo "  → registry POST failed (anamnesis-app unreachable?) — add manually in UI"
+        return 0
+    fi
+
+    # Non-avatar profiles keep the legacy .env behavior (trainer / d2 don't
+    # have a Mongo registry yet — they use AWS Secrets via .env).
     case "$PROFILE" in
-        avatar)
-            local env_key_url="AVATAR_WORKER_URL_5"
-            local env_key_label="AVATAR_WORKER_LABEL_5"
-            local env_label_value="runpod · ${1##*//}"
-            ;;
         d2)
             local env_key_url="D2_ENDPOINT_URL"
             local env_key_label=""
@@ -351,28 +387,16 @@ register_worker() {
     esac
 
     if [[ -f "$ENV_FILE" ]]; then
-        # Remove any prior matching lines plus the long-lived RUNPOD_ENDPOINT_URL
-        # (used by chat.py's _probe_runpod for trainer/d2 profiles only — the
-        # avatar profile doesn't touch it).
         local strip_args=( -e "^${env_key_url}=" )
         [[ -n "$env_key_label" ]] && strip_args+=( -e "^${env_key_label}=" )
-        if [[ "$PROFILE" != "avatar" ]]; then
-            strip_args+=( -e '^RUNPOD_ENDPOINT_URL=' )
-        fi
+        strip_args+=( -e '^RUNPOD_ENDPOINT_URL=' )
         grep -v "${strip_args[@]}" "$ENV_FILE" > "$ENV_FILE.tmp" || true
         echo "${env_key_url}=${url}" >> "$ENV_FILE.tmp"
-        if [[ -n "$env_key_label" ]]; then
-            echo "${env_key_label}=runpod · 3090 24GB" >> "$ENV_FILE.tmp"
-        fi
-        if [[ "$PROFILE" != "avatar" ]]; then
-            echo "RUNPOD_ENDPOINT_URL=${url}" >> "$ENV_FILE.tmp"
-        fi
+        echo "RUNPOD_ENDPOINT_URL=${url}" >> "$ENV_FILE.tmp"
         mv "$ENV_FILE.tmp" "$ENV_FILE"
     fi
 
-    # POST to the worker registry API (if available — non-fatal if not).
-    # The kind is profile-tagged so the dashboard can group runpod-avatar
-    # rows distinctly from runpod-d2 rows.
+    # POST to the dashboard worker_registry (trainer/d2 visibility).
     curl -s -X POST "http://192.168.10.20:3010/api/workers/register" \
         -H "Content-Type: application/json" \
         -d "$(jq -n --arg url "$url" --arg label "$label" --arg kind "runpod-${PROFILE}" \
@@ -382,11 +406,18 @@ register_worker() {
 
 unregister_worker() {
     local pod_id="$1"
+
+    # Avatar profile: delete from the MongoDB pod registry.
+    if [[ "$PROFILE" == "avatar" ]]; then
+        echo "Unregistering pod $pod_id from anamnesis-app..."
+        curl -sf -X DELETE "http://192.168.10.20:3010/api/avatar/runpod/pods/${pod_id}" \
+            >/dev/null 2>&1 \
+            && echo "  → removed from worker pool" \
+            || echo "  → DELETE returned non-OK (already gone, or anamnesis-app down)"
+        return 0
+    fi
+
     case "$PROFILE" in
-        avatar)
-            local env_key_url="AVATAR_WORKER_URL_5"
-            local env_key_label="AVATAR_WORKER_LABEL_5"
-            ;;
         d2)
             local env_key_url="D2_ENDPOINT_URL"
             local env_key_label=""
@@ -400,9 +431,7 @@ unregister_worker() {
     if [[ -f "$ENV_FILE" ]]; then
         local strip_args=( -e "^${env_key_url}=" )
         [[ -n "$env_key_label" ]] && strip_args+=( -e "^${env_key_label}=" )
-        if [[ "$PROFILE" != "avatar" ]]; then
-            strip_args+=( -e '^RUNPOD_ENDPOINT_URL=' )
-        fi
+        strip_args+=( -e '^RUNPOD_ENDPOINT_URL=' )
         grep -v "${strip_args[@]}" "$ENV_FILE" > "$ENV_FILE.tmp" || true
         mv "$ENV_FILE.tmp" "$ENV_FILE"
     fi

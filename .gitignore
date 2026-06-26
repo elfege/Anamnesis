@@ -69,3 +69,20 @@ checkpoints/
 # Pre-push security check script (intentionally untracked — easy to edit per machine)
 scripts/security_check.sh
 app/uploads/
+
+# Bind-mounted container state (per canonical rule 2026-06-11) — survives
+# rebuild/restart, captured by ~/-based backup, NEVER tracked in git.
+.miopen_cache/
+.hf_cache/
+.torch_cache/
+.mongo_data/
+.mongo_configdb/
+.anamnesis_voices/
+.model_cache/
+
+# RunPod pod state files (ephemeral per pod cycle)
+.runpod_pod_id
+.runpod_pod_id.*
+
+# Voice sample storage (bind mount, not in repo)
+voices_data/
