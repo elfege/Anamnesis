@@ -268,65 +268,72 @@ $(function () {
     // ── Machine Roots ──
     var _availableMounts = []; // populated from /api/crawler/available-mounts
 
-    function _mount_select(selectedName) {
-        var opts = '<option value="">-- select mount --</option>';
-        _availableMounts.forEach(function (m) {
-            var sel = (m.name === selectedName) ? " selected" : "";
-            opts += '<option value="' + m.name + '"' + sel + '>' + m.name + ' (' + m.path + ')</option>';
-        });
-        return '<select class="config-input mount-select" data-field="machine">' + opts + '</select>';
+    function _machine_root_row(mount, checked) {
+        var fileCountColor = mount.jsonl_empty ? "var(--text-secondary)" : "var(--success)";
+        var rowOpacity = mount.jsonl_empty ? "opacity:0.55" : "";
+        return '<tr style="' + rowOpacity + '">' +
+            '<td><input type="checkbox" class="machine-root-check" data-mount="' + mount.name + '" ' + (checked ? "checked" : "") + '></td>' +
+            '<td><code>/sources/' + mount.name + '</code></td>' +
+            '<td style="color:var(--text-secondary);font-size:12px">' + mount.host_path + '</td>' +
+            '<td style="text-align:right;color:' + fileCountColor + ';font-variant-numeric:tabular-nums">' +
+                mount.jsonl_file_count.toLocaleString() +
+            '</td>' +
+            '</tr>';
     }
 
-    function _machine_root_row(machine, path) {
-        return '<tr>' +
-            '<td>' + _mount_select(machine) + '</td>' +
-            '<td><input type="text" class="config-input" data-field="path" value="' + (path || "").replace(/"/g, "&quot;") + '" readonly style="color:var(--text-secondary)"></td>' +
-            '<td><button class="btn-small btn-danger-outline btn-remove-row" title="Remove">✕</button></td>' +
+    function _machine_stale_row(machineName, path) {
+        return '<tr style="opacity:0.5">' +
+            '<td><input type="checkbox" class="machine-root-check" data-mount="' + machineName + '" data-stale="1"></td>' +
+            '<td><code style="text-decoration:line-through">' + path + '</code></td>' +
+            '<td style="color:var(--danger);font-size:12px">mount not detected — uncheck to remove on save</td>' +
+            '<td style="text-align:right;color:var(--text-secondary)">—</td>' +
             '</tr>';
     }
 
     function load_machine_roots() {
         $.getJSON("/api/crawler/available-mounts", function (mountData) {
-            _availableMounts = mountData.mounts || [];
+            var mounts = mountData.mounts || [];
+            _availableMounts = mounts;
             $.getJSON("/api/crawler/config", function (cfg) {
+                var saved = cfg.machine_roots || {};
+                var savedKeys = Object.keys(saved);
+                var detectedNames = mounts.map(function (m) { return m.name; });
                 var tbody = $("#machine-roots-body").empty();
-                var roots = cfg.machine_roots || {};
-                Object.keys(roots).forEach(function (machine) {
-                    tbody.append(_machine_root_row(machine, roots[machine]));
+                mounts.forEach(function (m) {
+                    var checked = savedKeys.indexOf(m.name) !== -1;
+                    tbody.append(_machine_root_row(m, checked));
                 });
+                var stale = savedKeys.filter(function (k) { return detectedNames.indexOf(k) === -1; });
+                stale.forEach(function (k) { tbody.append(_machine_stale_row(k, saved[k])); });
+                if (stale.length) {
+                    $("#machine-roots-stale-warning").text(
+                        stale.length + " saved entry/ies no longer match a detected container mount. " +
+                        "Leave them unchecked and save to prune."
+                    ).show();
+                } else {
+                    $("#machine-roots-stale-warning").hide();
+                }
             });
         });
     }
 
-    // Auto-fill path when mount is selected
-    $("#machine-roots-table").on("change", ".mount-select", function () {
-        var name = $(this).val();
-        var mount = _availableMounts.find(function (m) { return m.name === name; });
-        var pathInput = $(this).closest("tr").find('[data-field="path"]');
-        pathInput.val(mount ? mount.path : "");
-    });
-
-    $("#btn-add-machine-root").on("click", function () {
-        $("#machine-roots-body").append(_machine_root_row("", ""));
-    });
-
-    $("#machine-roots-table").on("click", ".btn-remove-row", function () {
-        $(this).closest("tr").remove();
-    });
+    $("#btn-refresh-machine-roots").on("click", load_machine_roots);
 
     $("#btn-save-machine-roots").on("click", function () {
         var roots = {};
-        $("#machine-roots-body tr").each(function () {
-            var key = $(this).find('[data-field="machine"]').val().trim();
-            var val = $(this).find('[data-field="path"]').val().trim();
-            if (key && val) roots[key] = val;
+        $("#machine-roots-body .machine-root-check:checked").each(function () {
+            var name = $(this).data("mount");
+            roots[name] = "/sources/" + name;
         });
         $.ajax({
             url: "/api/crawler/config/machine-roots",
             method: "PUT",
             contentType: "application/json",
             data: JSON.stringify({machine_roots: roots}),
-            success: function () { _status_flash("#machine-roots-status", "Saved!", "success"); },
+            success: function () {
+                _status_flash("#machine-roots-status", "Saved (" + Object.keys(roots).length + " mounts selected)", "success");
+                load_machine_roots();
+            },
             error: function (xhr) { _status_flash("#machine-roots-status", "Error: " + (xhr.responseJSON?.detail || xhr.statusText), "danger"); },
         });
     });
@@ -388,67 +395,76 @@ $(function () {
     });
 
 
-    // ── JSONL Source Roots ──
-    function _jsonl_root_row(machine, path) {
-        return '<tr>' +
-            '<td>' + _mount_select(machine) + '</td>' +
-            '<td><input type="text" class="config-input" data-field="path" value="' + (path || "").replace(/"/g, "&quot;") + '" readonly style="color:var(--text-secondary)"></td>' +
-            '<td><button class="btn-small btn-danger-outline btn-remove-row" title="Remove">✕</button></td>' +
+    // ── JSONL Source Roots (checkbox-driven, auto-enumerated from mounts) ──
+    function _jsonl_root_row(mount, checked) {
+        var fileCountColor = mount.jsonl_empty ? "var(--text-secondary)" : "var(--success)";
+        var rowOpacity = mount.jsonl_empty ? "opacity:0.55" : "";
+        return '<tr style="' + rowOpacity + '">' +
+            '<td><input type="checkbox" class="jsonl-root-check" data-mount="' + mount.name + '" ' + (checked ? "checked" : "") + '></td>' +
+            '<td><code>/sources/' + mount.name + '/.claude/projects</code></td>' +
+            '<td style="color:var(--text-secondary);font-size:12px">' + mount.host_path + '</td>' +
+            '<td style="text-align:right;color:' + fileCountColor + ';font-variant-numeric:tabular-nums">' +
+                mount.jsonl_file_count.toLocaleString() +
+            '</td>' +
+            '</tr>';
+    }
+
+    function _stale_row(machineName, path) {
+        // Mount no longer exists but was previously saved — show it crossed-out with a remove control.
+        return '<tr style="opacity:0.5">' +
+            '<td><input type="checkbox" class="jsonl-root-check" data-mount="' + machineName + '" data-stale="1"></td>' +
+            '<td><code style="text-decoration:line-through">' + path + '</code></td>' +
+            '<td style="color:var(--danger);font-size:12px">mount not detected — uncheck to remove on save</td>' +
+            '<td style="text-align:right;color:var(--text-secondary)">—</td>' +
             '</tr>';
     }
 
     function load_jsonl_roots() {
-        // Ensure mounts are loaded first (may already be cached from crawler tab)
-        var proceed = function () {
+        $.getJSON("/api/crawler/available-mounts", function (mountData) {
+            var mounts = mountData.mounts || [];
+            _availableMounts = mounts;
             $.getJSON("/api/crawler/config/jsonl-roots", function (cfg) {
+                var saved = cfg.roots || {};
+                var savedKeys = Object.keys(saved);
+                var detectedNames = mounts.map(function (m) { return m.name; });
                 var tbody = $("#jsonl-roots-body").empty();
-                var roots = cfg.roots || {};
-                Object.keys(roots).forEach(function (machine) {
-                    tbody.append(_jsonl_root_row(machine, roots[machine]));
+                mounts.forEach(function (m) {
+                    var checked = savedKeys.indexOf(m.name) !== -1;
+                    tbody.append(_jsonl_root_row(m, checked));
                 });
+                // Surface stale entries (saved in Mongo but no matching mount detected)
+                var stale = savedKeys.filter(function (k) { return detectedNames.indexOf(k) === -1; });
+                stale.forEach(function (k) { tbody.append(_stale_row(k, saved[k])); });
+                if (stale.length) {
+                    $("#jsonl-roots-stale-warning").text(
+                        stale.length + " saved entry/ies no longer match a detected container mount. " +
+                        "Leave them unchecked and save to prune."
+                    ).show();
+                } else {
+                    $("#jsonl-roots-stale-warning").hide();
+                }
             });
-        };
-        if (_availableMounts.length) {
-            proceed();
-        } else {
-            $.getJSON("/api/crawler/available-mounts", function (mountData) {
-                _availableMounts = mountData.mounts || [];
-                proceed();
-            });
-        }
+        });
     }
 
-    // Auto-fill path when mount is selected (append .claude/projects)
-    $("#jsonl-roots-table").on("change", ".mount-select", function () {
-        var name = $(this).val();
-        var mount = _availableMounts.find(function (m) { return m.name === name; });
-        var pathInput = $(this).closest("tr").find('[data-field="path"]');
-        pathInput.val(mount ? mount.path + "/.claude/projects" : "");
-    });
-
-    $("#btn-add-jsonl-root").on("click", function () {
-        if (!_availableMounts.length) {
-            $.getJSON("/api/crawler/available-mounts", function (mountData) {
-                _availableMounts = mountData.mounts || [];
-                $("#jsonl-roots-body").append(_jsonl_root_row("", ""));
-            });
-        } else {
-            $("#jsonl-roots-body").append(_jsonl_root_row("", ""));
-        }
-    });
-
-    $("#jsonl-roots-table").on("click", ".btn-remove-row", function () {
-        $(this).closest("tr").remove();
-    });
+    $("#btn-refresh-jsonl-roots").on("click", load_jsonl_roots);
 
     $("#btn-save-jsonl-roots").on("click", function () {
-        var roots = _collect_table_dict("jsonl-roots-body");
+        var roots = {};
+        $("#jsonl-roots-body .jsonl-root-check:checked").each(function () {
+            var name = $(this).data("mount");
+            // Path is mechanically derived from the mount name — no user typing.
+            roots[name] = "/sources/" + name + "/.claude/projects";
+        });
         $.ajax({
             url: "/api/crawler/config/jsonl-roots",
             method: "PUT",
             contentType: "application/json",
             data: JSON.stringify({roots: roots}),
-            success: function () { _status_flash("#jsonl-roots-status", "Saved!", "success"); },
+            success: function () {
+                _status_flash("#jsonl-roots-status", "Saved (" + Object.keys(roots).length + " mounts selected)", "success");
+                load_jsonl_roots();
+            },
             error: function (xhr) { _status_flash("#jsonl-roots-status", "Error: " + (xhr.responseJSON?.detail || xhr.statusText), "danger"); },
         });
     });
@@ -2523,11 +2539,25 @@ $(function () {
         });
 
         function render_error(xhr) {
-            var msg = "Error";
-            try { msg = (xhr.responseJSON && xhr.responseJSON.detail) || xhr.statusText || msg; }
-            catch (e) {}
+            // Prefer FastAPI's {"detail": "..."} body; fall back to raw text; show HTTP code so
+            // the operator can tell a 413 (too big) from a 415 (wrong type) at a glance.
+            var detail = "";
+            if (xhr.responseJSON && xhr.responseJSON.detail) {
+                detail = (typeof xhr.responseJSON.detail === "string")
+                    ? xhr.responseJSON.detail
+                    : JSON.stringify(xhr.responseJSON.detail);
+            } else if (xhr.responseText) {
+                try {
+                    var parsed = JSON.parse(xhr.responseText);
+                    detail = (parsed && parsed.detail) ? parsed.detail : xhr.responseText;
+                } catch (e) {
+                    detail = xhr.responseText.substring(0, 400);
+                }
+            }
+            if (!detail) detail = xhr.statusText || "Unknown error";
+            var prefix = xhr.status ? ("HTTP " + xhr.status + " — ") : "Error: ";
             $result.removeClass("upload-ok upload-dup").addClass("upload-err")
-                   .text("Error: " + msg);
+                   .text(prefix + detail);
         }
 
         // Click → open file picker

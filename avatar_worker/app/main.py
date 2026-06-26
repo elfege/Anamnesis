@@ -18,6 +18,7 @@ import config
 import xtts
 import demucs_extract
 import sadtalker
+import musetalk
 
 logging.basicConfig(
     level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO")),
@@ -44,49 +45,94 @@ def _vram_mb() -> tuple[Optional[int], Optional[int]]:
         return None, None
 
 
+_SERVICE_START_TS = __import__("time").time()
+
+
 @app.get("/host")
 async def host_telemetry():
-    """Box-level telemetry — CPU/RAM/GPU/hostname. Mirrors /host on other services.
+    """Box-level telemetry — CPU/RAM/GPU/hostname. Mirrors the canonical
+    /host shape exposed by app/routes/host.py on anamnesis-app, so the
+    Anamnesis Resource Status panel's probe parser (app/routes/resources.py)
+    renders this row identically to dellserver's and server's. Aligned
+    2026-06-08 — prior shape was flat fields (cpu_count, ram_total_mb...)
+    which the parser ignored, showing the row as ok=true but cpu/ram/gpus=null.
 
-    Used by Anamnesis dashboard MACHINES probe to render a row for this
-    worker's host (especially useful for RunPod pods where the box identity
-    is otherwise opaque).
+    Schema contract (all sub-fields optional — return null/empty rather than
+    fake zeros when data isn't available):
+      service, hostname, uptime_s, machine, worker_id, gpu_type,
+      cpu  = {percent, cores, load_1, load_5},
+      ram  = {used_gb, total_gb, percent},
+      gpus = [{name, vram_total_mib, vram_used_mib, vram_free_mib, vram_percent,
+               util_pct, temp_c, power_w}],
+      roles = [str],
+      cpu_probe_error / gpu_probe_error  (optional)
     """
     import socket
     import platform
+    import time as _time
 
     info: dict = {
+        "service": "avatar-worker",
         "hostname": socket.gethostname(),
+        "uptime_s": int(_time.time() - _SERVICE_START_TS),
         "platform": platform.platform(),
         "machine": config.MACHINE_NAME,
         "worker_id": config.WORKER_ID,
         "gpu_type": config.GPU_TYPE,
+        "cpu": None,
+        "ram": None,
+        "gpus": [],
+        "roles": ["avatar-worker", "xtts", "sadtalker", "demucs", "musetalk"],
     }
 
-    # CPU + RAM via psutil (optional dep — graceful when missing).
+    # CPU + RAM via psutil. Canonical nested-dict shape the dashboard expects.
     try:
         import psutil
+        cpu_pct = psutil.cpu_percent(interval=0.5)
+        cores = psutil.cpu_count(logical=True) or 0
+        try:
+            la1, la5, _la15 = os.getloadavg()
+        except (OSError, AttributeError):
+            la1, la5 = None, None
+        info["cpu"] = {
+            "percent": round(cpu_pct, 1),
+            "cores": cores,
+            "load_1": round(la1, 2) if la1 is not None else None,
+            "load_5": round(la5, 2) if la5 is not None else None,
+        }
         vm = psutil.virtual_memory()
-        info["cpu_count"] = psutil.cpu_count(logical=True)
-        info["cpu_percent"] = psutil.cpu_percent(interval=0.05)
-        info["ram_total_mb"] = int(vm.total // (1024 * 1024))
-        info["ram_free_mb"] = int(vm.available // (1024 * 1024))
+        info["ram"] = {
+            "used_gb": round(vm.used / (1024 ** 3), 2),
+            "total_gb": round(vm.total / (1024 ** 3), 2),
+            "percent": round(vm.percent, 1),
+        }
+    except ImportError:
+        info["cpu_probe_error"] = "psutil not installed"
     except Exception as exc:
-        info["psutil_error"] = str(exc)[:120]
+        info["cpu_probe_error"] = f"{type(exc).__name__}: {str(exc)[:120]}"
 
-    # GPU info via torch
+    # GPU via torch (works on both CUDA and ROCm — torch.cuda is the API
+    # surface AMD ROCm uses too). util_pct/temp_c/power_w aren't exposed
+    # by torch; mark null. Future: shell out to rocm-smi --json for those.
     try:
         import torch
         if torch.cuda.is_available():
-            info["gpu_name"] = torch.cuda.get_device_name(0)
-            total = torch.cuda.get_device_properties(0).total_memory // (1024 * 1024)
+            name = torch.cuda.get_device_name(0)
+            total = torch.cuda.get_device_properties(0).total_memory
             free, _ = torch.cuda.mem_get_info(0)
-            info["gpu_total_mb"] = int(total)
-            info["gpu_free_mb"] = int(free // (1024 * 1024))
-        else:
-            info["gpu_name"] = None
+            used = total - free
+            info["gpus"] = [{
+                "name": name,
+                "vram_total_mib": int(total // (1024 * 1024)),
+                "vram_used_mib": int(used // (1024 * 1024)),
+                "vram_free_mib": int(free // (1024 * 1024)),
+                "vram_percent": round(100.0 * used / total, 1) if total else None,
+                "util_pct": None,
+                "temp_c": None,
+                "power_w": None,
+            }]
     except Exception as exc:
-        info["gpu_error"] = str(exc)[:120]
+        info["gpu_probe_error"] = f"{type(exc).__name__}: {str(exc)[:120]}"
 
     return info
 
@@ -95,9 +141,12 @@ async def host_telemetry():
 async def health():
     """Rich health response — schema agreed with Anamnesis side (intercom MSG-119)."""
     sadtalker_ready = await sadtalker.is_ready()
+    musetalk_ready = await musetalk.is_ready()
     capabilities = ["xtts", "demucs"]
     if sadtalker_ready:
         capabilities.append("sadtalker")
+    if musetalk_ready:
+        capabilities.append("musetalk")
 
     vram_total, vram_free = _vram_mb()
 
@@ -112,10 +161,12 @@ async def health():
         "model_loaded": {
             "xtts": xtts.is_loaded(),
             "sadtalker": sadtalker_ready,
+            "musetalk": musetalk_ready,
         },
         # Legacy fields kept for back-compat with older Anamnesis clients
-        "backends": ["xtts", "demucs", "sadtalker"],
+        "backends": ["xtts", "demucs", "sadtalker", "musetalk"],
         "sadtalker_ready": sadtalker_ready,
+        "musetalk_ready": musetalk_ready,
     }
 
 
@@ -221,6 +272,49 @@ async def sadtalker_route(
 async def sadtalker_cancel():
     """Kill any in-flight SadTalker subprocess. Idempotent."""
     killed = await sadtalker.cancel_all()
+    return {"killed": killed}
+
+
+# ─── MuseTalk ─────────────────────────────────────────────────
+
+@app.post("/musetalk/animate")
+async def musetalk_route(
+    audio: UploadFile = File(...),
+    image: UploadFile = File(...),
+):
+    """Produce lip-synced video from audio + reference face via MuseTalk.
+
+    Same multipart contract as /sadtalker/animate so the orchestrator's
+    MuseTalkClient can use the same call pattern. Unlike SadTalker, MuseTalk
+    needs ~real-time on a 16GB ROCm card — typically <10s for a 3s clip
+    after the one-time MIOpen kernel autotune is warmed."""
+    tmp = Path(tempfile.mkdtemp(prefix="musetalk_"))
+    audio_path = tmp / f"audio{Path(audio.filename or 'audio.wav').suffix or '.wav'}"
+    image_path = tmp / f"image{Path(image.filename or 'image.png').suffix or '.png'}"
+    out_dir = tmp / "out"
+
+    with open(audio_path, "wb") as f:
+        f.write(await audio.read())
+    with open(image_path, "wb") as f:
+        f.write(await image.read())
+
+    # MuseTalk's UNet (~1.5GB fp16) + VAE (~300MB) + face_alignment fits
+    # comfortably in 16GB alongside XTTS — no auto-unload needed on office.
+    # On smaller cards, callers should /xtts/unload before invoking.
+
+    try:
+        mp4 = await musetalk.animate(str(audio_path), str(image_path), str(out_dir))
+    except Exception as e:
+        logger.exception("MuseTalk failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return FileResponse(mp4, media_type="video/mp4", filename="anim.mp4")
+
+
+@app.post("/musetalk/cancel")
+async def musetalk_cancel():
+    """Kill any in-flight MuseTalk subprocess. Idempotent."""
+    killed = await musetalk.cancel_all()
     return {"killed": killed}
 
 

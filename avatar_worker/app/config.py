@@ -38,3 +38,15 @@ SADTALKER_ENHANCER = os.environ.get("SADTALKER_ENHANCER", "")
 # On tight-VRAM hosts (e.g. GTX 1660 SUPER 6GB), unload XTTS before running
 # SadTalker so both fit sequentially. Cost: ~5s reload on next XTTS call.
 AUTO_UNLOAD_XTTS = os.environ.get("AUTO_UNLOAD_XTTS", "true").lower() in ("true", "1", "yes")
+
+# ── MuseTalk ──────────────────────────────────────────────────
+# Tencent's diffusion-based real-time lip-sync model (~real-time on 16GB ROCm
+# vs SadTalker's 30-120s). Repo lives at /opt/MuseTalk (bind-mounted) and the
+# pinned deps (diffusers 0.30.2, accelerate 0.28.0, decord, face_alignment)
+# live in a PYTHONUSERBASE overlay so they don't clobber XTTS's transformers 5.x.
+MUSETALK_DIR = os.environ.get("MUSETALK_DIR", "/opt/MuseTalk")
+MUSETALK_VERSION = os.environ.get("MUSETALK_VERSION", "v15")  # "v15" or "v1"
+MUSETALK_USE_FLOAT16 = os.environ.get("MUSETALK_USE_FLOAT16", "true").lower() in ("true", "1", "yes")
+# PYTHONUSERBASE path passed to subprocess so it picks up the overlay. Compose
+# already exports this env var globally; setting here as fallback for dev runs.
+MUSETALK_PYENV = os.environ.get("PYTHONUSERBASE", "/opt/MuseTalk_pyenv")

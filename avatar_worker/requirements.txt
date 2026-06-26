@@ -2,3 +2,15 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 python-multipart>=0.0.20
 psutil>=5.9
+# MuseTalk inference deps — pinned to match the upstream MuseTalk repo
+# (TMElyralab/MuseTalk requirements.txt). transformers stays at 5.x from
+# the per-backend pip block below because MuseTalk only needs WhisperModel
+# and AutoFeatureExtractor, both still present in transformers 5.x.
+diffusers==0.30.2
+accelerate==0.28.0
+decord
+ffmpeg-python
+moviepy
+more_itertools
+omegaconf
+huggingface_hub

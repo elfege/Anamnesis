@@ -18,27 +18,73 @@ services:
       AUTO_UNLOAD_XTTS: "false"
       # Plenty of VRAM — crank to full 512 with gfpgan enhancer.
       SADTALKER_SIZE: "512"
-      SADTALKER_ENHANCER: "gfpgan"
+      # GFPGAN disabled for diagnostic — the "underwater / no lip motion"
+      # symptom is most often this enhancer over-smoothing the output. With
+      # ENHANCER=none, raw SadTalker output is grainier but motion is honest.
+      # Re-enable once motion is confirmed to be present.
+      SADTALKER_ENHANCER: "none"
       LOG_LEVEL: INFO
       SADTALKER_DIR: /opt/SadTalker
       SADTALKER_CHECKPOINT_DIR: /opt/SadTalker/checkpoints
+      MUSETALK_DIR: /opt/MuseTalk
+      MUSETALK_VERSION: v15
+      MUSETALK_USE_FLOAT16: "true"
+      # Persistent pip-overlay so MuseTalk's pinned deps (diffusers 0.30.2,
+      # accelerate 0.28.0, decord, face-detection, ffmpeg-python, moviepy,
+      # more_itertools) survive container recreations without being baked
+      # into the image — bake will follow once the smoke test confirms the
+      # full dep set. PYTHONUSERBASE points pip-user at this mounted path.
+      PYTHONUSERBASE: /opt/MuseTalk_pyenv
+      PATH: /opt/MuseTalk_pyenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     volumes:
+      # Source bind-mount — lets us iterate on app/*.py without a full image
+      # rebuild on office (ROCm torch bake is ~10 min). Source-of-truth lives
+      # on dellserver, rsync'd to office's worktree, then mounted here. Added
+      # 2026-06-08 to land the /host probe endpoint without rebuilding.
+      - ./app:/app:ro
       # SadTalker checkpoints — persistent location on host
       - ${SADTALKER_HOST_DIR:-/home/elfege/models/SadTalker}:/opt/SadTalker:ro
+      # MuseTalk repo + weights — bind-mounted so we can edit configs and
+      # patch source files (preprocessing.py is patched to drop mmpose) on
+      # the host and have changes reflected without a container rebuild.
+      # NOT read-only because MuseTalk writes pickle coord caches alongside
+      # its results/ tree at runtime.
+      - ${MUSETALK_HOST_DIR:-/home/elfege/models/MuseTalk}:/opt/MuseTalk
+      # MuseTalk-specific pip env that overlays the system site-packages.
+      - ${MUSETALK_PYENV_HOST_DIR:-/home/elfege/models/MuseTalk_pyenv}:/opt/MuseTalk_pyenv
       # ROCm runtime
       - /opt/rocm-6.3.3:/opt/rocm-6.3.3:ro
       - /usr/bin/rocm-smi:/usr/bin/rocm-smi:ro
       # Model caches — avoid re-downloading on rebuild
       - avatar_worker_hf_cache:/root/.cache/huggingface
       - avatar_worker_torch_cache:/root/.cache/torch
+      # MIOpen kernel autotune cache — the FIRST MuseTalk run on this RX 6800
+      # (gfx1030 with 30 CUs) takes ~15 min because the rocm-shipped DB ships
+      # gfx1030_36 only and the runtime has to autotune from scratch. Persist
+      # the resulting .ukdb so subsequent runs (and container recreates) are
+      # sub-second per kernel lookup. Established 2026-06-08.
+      - avatar_worker_miopen_cache:/root/.cache/miopen
     devices:
       - /dev/kfd
       - /dev/dri
     group_add:
       - "44"
       - "992"
+    # MIOpen's autotune (ConvMlirIgemmFwd / ConvHipImplicitGemmV4R4Fwd searches)
+    # opens thousands of compiled-kernel cache fds when there's no pre-baked
+    # gfx1030_30 entry (RX 6800 has 30 CUs; the rocm-shipped DB only covers
+    # gfx1030_36 = RX 6800XT). With the default 1024 nofile limit it crashes
+    # mid-search with `sqlite_db.cpp Internal error … unable to open database
+    # file` (EMFILE on /tmp/miopen_userdb/gfx1030_30.ukdb-wal). 65535 is enough
+    # headroom for the worst MuseTalk UNet kernel set. Established 2026-06-08
+    # by strace on a failed MuseTalk smoke run.
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     restart: unless-stopped
 
 volumes:
   avatar_worker_hf_cache:
   avatar_worker_torch_cache:
+  avatar_worker_miopen_cache:

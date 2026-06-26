@@ -388,7 +388,11 @@ async def host_info():
     except Exception:
         pass
 
-    # GPU probe — nvidia-smi (rich query: util, temp, power, used/free/total)
+    # GPU probe — nvidia-smi (rich query: util, temp, power, used/free/total).
+    # Patch 2026-06-08 (per sibling MSG-321): previously stderr was DEVNULL and
+    # returncode was ignored, so an NVML driver/library mismatch (exit 255 with
+    # empty stdout) looked indistinguishable from "no GPU". Now we capture
+    # stderr and surface the actual failure as gpu_probe_error.
     try:
         proc = await asyncio.create_subprocess_exec(
             "nvidia-smi",
@@ -396,10 +400,11 @@ async def host_info():
             "utilization.gpu,temperature.gpu,power.draw",
             "--format=csv,noheader,nounits",
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
+        stderr = b""
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=2.0)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=2.0)
         except asyncio.TimeoutError:
             try:
                 proc.kill()
@@ -425,6 +430,13 @@ async def host_info():
                     })
                 except ValueError:
                     pass
+        # If nvidia-smi exited non-zero AND parsed no GPUs, the probe failed —
+        # don't conflate that with "no GPU on this host." Surface the actual
+        # stderr line so the dashboard shows the real reason (e.g. driver/library
+        # version mismatch from an upgrade without reboot).
+        if not info["gpus"] and proc.returncode not in (0, None) and "gpu_probe_error" not in info:
+            stderr_lines = stderr.decode(errors="replace").strip().splitlines()
+            info["gpu_probe_error"] = stderr_lines[0] if stderr_lines else f"nvidia-smi exited {proc.returncode}"
     except FileNotFoundError:
         info["gpu_probe_error"] = "nvidia-smi not in PATH"
     except Exception as e:

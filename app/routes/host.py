@@ -49,10 +49,10 @@ async def _nvidia_smi_probe() -> tuple[list[dict[str, Any]], str | None]:
             "utilization.gpu,temperature.gpu,power.draw",
             "--format=csv,noheader,nounits",
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=2.0)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=2.0)
         except asyncio.TimeoutError:
             try:
                 proc.kill()
@@ -84,6 +84,12 @@ async def _nvidia_smi_probe() -> tuple[list[dict[str, Any]], str | None]:
                 })
             except ValueError:
                 pass
+    # nvidia-smi can exit non-zero with empty stdout and the reason on stderr
+    # (e.g. NVML driver/library mismatch). Don't let that read as "no GPU" —
+    # surface it so the panel distinguishes "no GPU" from "probe failed".
+    if not gpus and proc.returncode not in (0, None):
+        lines = stderr.decode(errors="replace").strip().splitlines()
+        return [], (lines[0] if lines else f"nvidia-smi exited {proc.returncode}")
     return gpus, None
 
 

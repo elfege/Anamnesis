@@ -8,6 +8,7 @@ Backends:
 All backends yield (kind, text) tuples, where kind ∈ {"token", "endpoint", "error"}.
 Backend selection happens per-request — no global state change.
 """
+import asyncio
 import json
 import logging
 import os
@@ -91,43 +92,116 @@ async def _stream_ollama(
     user_message: str,
     model: Optional[str],
     previous_messages: Optional[list[dict]],
+    sampling: Optional[dict] = None,
 ) -> AsyncIterator[tuple[str, str]]:
+    # Read-timeout policy:
+    #   - 12s when the model is already loaded (ollama emits headers + tokens
+    #     within ~2s once warm). Catches the zombie-runner wedge fast.
+    #   - 90s on cold load (model not in /api/ps). Small models like llama3.2
+    #     load in 15-30s on RX 6800, but qwen2.5:14b can take 60s+ to swap
+    #     into VRAM from disk. 90s covers both without false-positiving a
+    #     legitimate cold load as a wedge.
+    WARM_READ_TIMEOUT_S = 12.0
+    COLD_READ_TIMEOUT_S = 90.0
+
     model = model or OLLAMA_DEFAULT_MODEL
-    endpoint = await _find_ollama_endpoint()
-    if not endpoint:
-        yield ("error", "No Ollama endpoint reachable")
+
+    if OLLAMA_URL:
+        candidates = [(OLLAMA_URL, "custom")]
+    else:
+        candidates = [(u, l) for (u, l, _gpu) in OLLAMA_ENDPOINTS]
+    if not candidates:
+        yield ("error", "No Ollama endpoints configured")
         return
-    base, label, _ = endpoint
-    yield ("endpoint", f"ollama:{label}")
 
     messages = [{"role": "system", "content": system + _lang_instruction(_detect_language(user_message))}]
     if previous_messages:
         messages.extend(previous_messages)
     messages.append({"role": "user", "content": user_message})
-
     payload = {"model": model, "stream": True, "messages": messages}
+    # Layer-2 overrides (advanced settings): only keys with non-None values
+    # are forwarded. Ollama applies its defaults to anything we omit.
+    if sampling:
+        opts = {k: v for k, v in sampling.items()
+                if v is not None and k in ("temperature", "top_p", "top_k", "repeat_penalty")}
+        if opts:
+            payload["options"] = opts
+            logger.info(f"Ollama sampling overrides: {opts}")
 
-    try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            async with client.stream("POST", f"{base}/api/chat", json=payload) as r:
-                if r.status_code != 200:
-                    text = await r.aread()
-                    yield ("error", f"Ollama {r.status_code}: {text.decode()[:200]}")
-                    return
-                async for line in r.aiter_lines():
-                    if not line.strip():
+    last_err: Optional[str] = None
+    for base, label in candidates:
+        # Probe: is ollama up AND is our model already loaded?
+        # /api/tags = reachability. /api/ps = currently-resident models.
+        # The ps probe lets us distinguish a slow cold-load (legit, give it time)
+        # from a wedged runner (zombie subprocess, no time will help).
+        model_warm = False
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as c:
+                resp = await c.get(f"{base}/api/tags")
+                if resp.status_code != 200:
+                    last_err = f"{label}: /api/tags {resp.status_code}"
+                    logger.warning(f"Ollama probe {label} failed: {last_err}")
+                    continue
+                try:
+                    ps_resp = await c.get(f"{base}/api/ps")
+                    if ps_resp.status_code == 200:
+                        loaded = [m.get("name", "") for m in ps_resp.json().get("models", [])]
+                        # ollama suffixes ":latest" sometimes; match by prefix.
+                        model_warm = any(n.split(":")[0] == model.split(":")[0] for n in loaded)
+                except Exception:
+                    pass  # /api/ps optional — fall back to cold-timeout
+        except Exception as exc:
+            last_err = f"{label}: probe failed ({exc})"
+            logger.warning(f"Ollama probe {label} failed: {exc}")
+            continue
+
+        read_timeout = WARM_READ_TIMEOUT_S if model_warm else COLD_READ_TIMEOUT_S
+        if not model_warm:
+            logger.info(f"Ollama {label}: model {model!r} not in /api/ps — using cold-load timeout {COLD_READ_TIMEOUT_S}s")
+        chat_timeout = httpx.Timeout(connect=5.0, read=read_timeout, write=10.0, pool=5.0)
+        got_first = False
+        try:
+            async with httpx.AsyncClient(timeout=chat_timeout) as client:
+                async with client.stream("POST", f"{base}/api/chat", json=payload) as r:
+                    if r.status_code != 200:
+                        body = await r.aread()
+                        last_err = f"{label}: chat HTTP {r.status_code} {body.decode(errors='replace')[:200]}"
+                        logger.warning(f"Ollama {label} chat returned {r.status_code}")
                         continue
-                    try:
-                        data = json.loads(line)
-                    except Exception:
-                        continue
-                    content = (data.get("message") or {}).get("content", "")
-                    if content:
-                        yield ("token", content)
-                    if data.get("done"):
-                        return
-    except Exception as exc:
-        yield ("error", str(exc))
+                    async for line in r.aiter_lines():
+                        if not line.strip():
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except Exception:
+                            continue
+                        content = (data.get("message") or {}).get("content", "")
+                        if content:
+                            if not got_first:
+                                yield ("endpoint", f"ollama:{label}")
+                                got_first = True
+                            yield ("token", content)
+                        if data.get("done"):
+                            return
+                    if got_first:
+                        return  # full stream completed cleanly
+        except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as exc:
+            last_err = f"{label}: chat timed out ({type(exc).__name__})"
+            logger.warning(f"Ollama {label} chat timeout — falling through to next endpoint")
+            # Fire-and-forget self-heal. Doesn't block this request; next request
+            # finds the endpoint restarted (cooldown-gated to avoid thrashing).
+            try:
+                from avatar import recovery
+                asyncio.create_task(recovery.try_heal(base, reason=f"chat {type(exc).__name__}"))
+            except Exception as heal_exc:
+                logger.warning(f"recovery scheduling failed: {heal_exc}")
+            continue
+        except Exception as exc:
+            last_err = f"{label}: chat failed ({exc})"
+            logger.warning(last_err)
+            continue
+
+    yield ("error", f"All Ollama endpoints failed. Last: {last_err or 'unknown'}")
 
 
 # ─── Backend: Claude API ────────────────────────────────────────
@@ -229,6 +303,26 @@ async def _stream_anamnesis_gpt(
                         logger.warning(f"AnamnesisGPT {url} returned {r.status_code}: {text[:200]}")
                         continue
                     yield ("endpoint", f"anamnesis_gpt:{url}")
+                    # The 1.5B demo has no reliable EOS, and the trainer's
+                    # /generate accepts no `stop` param (confirmed w/ the δ²
+                    # chat, intercom MSG-319). Left unbounded it role-plays
+                    # BOTH sides of the dialogue — emitting literal "User:" /
+                    # "Assistant:" turn labels — until max_tokens guillotines
+                    # it mid-word. Fix client-side: cut the stream at the first
+                    # turn label. Buffer a short tail so a label split across
+                    # token boundaries ("Assis" + "tant:") is still caught.
+                    stops = ("User:", "Assistant:", "System:")
+                    holdback = max(len(s) for s in stops) - 1
+                    buf = ""
+
+                    def _earliest_stop(text: str) -> int:
+                        idx = -1
+                        for s in stops:
+                            i = text.find(s)
+                            if i != -1 and (idx == -1 or i < idx):
+                                idx = i
+                        return idx
+
                     async for line in r.aiter_lines():
                         if not line.startswith("data:"):
                             continue
@@ -240,10 +334,21 @@ async def _stream_anamnesis_gpt(
                         except Exception:
                             continue
                         if ev.get("done"):
-                            return
+                            break
                         token = ev.get("token", "")
-                        if token:
-                            yield ("token", token)
+                        if not token:
+                            continue
+                        buf += token
+                        cut = _earliest_stop(buf)
+                        if cut != -1:
+                            if cut > 0:
+                                yield ("token", buf[:cut])
+                            return  # drop the hallucinated continuation
+                        if len(buf) > holdback:
+                            yield ("token", buf[:-holdback])
+                            buf = buf[-holdback:]
+                    if buf:
+                        yield ("token", buf)  # flush tail (no stop label seen)
                     return  # success on this endpoint
         except Exception as exc:
             logger.warning(f"AnamnesisGPT endpoint {url} failed: {exc}")
@@ -385,10 +490,17 @@ async def stream_reply(
     model: Optional[str] = None,
     previous_messages: Optional[list[dict]] = None,
     backend: str = "ollama",
+    sampling: Optional[dict] = None,
 ) -> AsyncIterator[tuple[str, str]]:
-    """Dispatch to the requested backend. Yields (kind, text) tuples."""
+    """Dispatch to the requested backend. Yields (kind, text) tuples.
+
+    sampling: optional dict of ollama-style overrides — keys among
+    {temperature, top_p, top_k, repeat_penalty}. Only non-None values
+    are forwarded. Currently honored by the ollama backend only; other
+    backends ignore (they have their own knobs and we haven't wired them
+    through yet)."""
     if backend == "ollama":
-        async for evt in _stream_ollama(system, user_message, model, previous_messages):
+        async for evt in _stream_ollama(system, user_message, model, previous_messages, sampling=sampling):
             yield evt
     elif backend == "claude":
         async for evt in _stream_claude(system, user_message, model, previous_messages):

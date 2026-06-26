@@ -52,10 +52,14 @@
         color:var(--text,#e6edf3); box-shadow:0 6px 16px rgba(0,0,0,0.35);
         line-height:1.4;
     ">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+        <!-- Drag handle: header bar. mousedown anywhere on this bar (except on the
+             buttons inside it) starts a drag. Position persists in localStorage so
+             it survives reload. Double-click the grip resets to top-right. -->
+        <div id="res-status-drag-handle" style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;cursor:move;user-select:none" title="Drag to reposition · double-click to reset">
             <div style="display:flex;align-items:center;gap:6px">
+                <span style="color:var(--muted,#7d8590);font-size:10px;letter-spacing:1px" aria-hidden="true">⠿</span>
                 <strong style="font-size:12px;letter-spacing:0.3px">Resource Status</strong>
-                <span class="d2-help" id="res-status-help" data-what="Resource Status mini-panel — what each row and color means" data-audience="dummy" aria-label="help" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                <span class="d2-help" id="res-status-help" data-what="Resource Status mini-panel — what each row and color means" data-audience="dummy" aria-label="help" role="button" tabindex="0" style="cursor:help"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
             </div>
             <button id="res-status-toggle" aria-label="collapse" style="
                 background:transparent;border:0;color:var(--muted,#7d8590);
@@ -93,6 +97,33 @@
             /* Collapse the panel into the flow on narrow screens to avoid
                covering the tabs nav. */
             #res-status-panel { position:static; width:auto; max-width:100%; margin:10px 14px; }
+        }
+
+        /* Per-tab embedded Resource Status — collapsed by default via <details>.
+           Sits at top of each compute-triggering tab so operators can expand it
+           in-context without scrolling up to the floating top-right panel. */
+        details.res-status-tab-wrapper {
+            margin: 0 0 16px 0;
+            background: var(--card, #161b22);
+            border: 1px solid var(--border, #30363d);
+            border-radius: 8px;
+        }
+        details.res-status-tab-wrapper > summary {
+            list-style: none; cursor: pointer; padding: 8px 14px;
+            font-size: 12px; font-weight: 600; letter-spacing: 0.3px;
+            color: var(--text, #e6edf3);
+            display: flex; align-items: center; gap: 8px;
+            user-select: none;
+        }
+        details.res-status-tab-wrapper > summary::-webkit-details-marker { display: none; }
+        details.res-status-tab-wrapper > summary::before {
+            content: "▸"; display: inline-block; transition: transform 120ms ease;
+            color: var(--muted, #7d8590); font-size: 10px; width: 10px;
+        }
+        details.res-status-tab-wrapper[open] > summary::before { transform: rotate(90deg); }
+        details.res-status-tab-wrapper .res-status-tab-body {
+            padding: 4px 14px 12px 14px; max-height: 60vh; overflow-y: auto;
+            font-size: 11.5px; line-height: 1.4;
         }
     </style>
 
@@ -294,6 +325,15 @@
 
     <!-- ─── Crawler Tab ────────────────────────────────────────── -->
     <section id="tab-crawler" class="tab-content">
+        <details class="res-status-tab-wrapper res-status-mount">
+            <summary>Resource Status</summary>
+            <div class="res-status-tab-body" data-res-body>
+                <div data-res-content style="display:flex;flex-direction:column;gap:5px">
+                    <div style="color:var(--muted,#7d8590)">probing …</div>
+                </div>
+                <div data-res-checked style="margin-top:8px;font-size:10px;color:var(--muted,#7d8590);font-family:monospace"></div>
+            </div>
+        </details>
         <div class="crawler-controls">
             <button id="btn-crawl-now">Run Crawl Now</button>
             <button id="btn-refresh-crawler">Refresh Status</button>
@@ -328,18 +368,23 @@
         <h3>Machine Roots <button class="btn-help" data-help="machine-roots" title="Help" aria-label="Help"><svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button></h3>
         <div class="settings-panel">
             <div class="project-description" style="margin-bottom:12px">
-                <p>Directories scanned for projects (by <code>docker-compose.yml</code> presence) and scripts (<code>0_SCRIPTS/</code>). Paths are as seen <em>inside the container</em> via volume mounts.</p>
+                <p>Container mounts under <code>/sources/</code> are auto-detected from <code>docker-compose</code> bindings. Check the ones the crawler should scan for projects (<code>docker-compose.yml</code> presence) and scripts (<code>0_SCRIPTS/</code>).</p>
             </div>
             <table id="machine-roots-table">
-                <thead><tr><th>Machine</th><th>Path (in container)</th><th></th></tr></thead>
+                <thead><tr>
+                    <th style="width:42px">Crawl</th>
+                    <th>Mount</th>
+                    <th>Host path (bind source)</th>
+                    <th style="text-align:right">JSONL files</th>
+                </tr></thead>
                 <tbody id="machine-roots-body"></tbody>
             </table>
             <div class="settings-row" style="margin-top:8px">
-                <button id="btn-add-machine-root" class="btn-secondary">+ Add Machine</button>
-                <button id="btn-save-machine-roots" class="btn-primary">Save Machine Roots</button>
-
+                <button id="btn-save-machine-roots" class="btn-primary">Save Selection</button>
+                <button id="btn-refresh-machine-roots" class="btn-secondary">Refresh</button>
                 <span id="machine-roots-status" class="settings-status"></span>
             </div>
+            <p id="machine-roots-stale-warning" style="margin-top:8px;font-size:12px;color:#f0ad4e;display:none"></p>
         </div>
 
         <h3>Named Sources <button class="btn-help" data-help="named-sources" title="Help" aria-label="Help"><svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 6.1c.1-1.1 1-2 2.2-2 1.3 0 2.2.8 2.2 2 0 .9-.5 1.4-1.4 1.9-.6.4-.8.7-.8 1.4v.3M8 11.3v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button></h3>
@@ -522,6 +567,15 @@
 
     <!-- ─── JSONL Ingester Tab ────────────────────────────────── -->
     <section id="tab-jsonl" class="tab-content">
+        <details class="res-status-tab-wrapper res-status-mount">
+            <summary>Resource Status</summary>
+            <div class="res-status-tab-body" data-res-body>
+                <div data-res-content style="display:flex;flex-direction:column;gap:5px">
+                    <div style="color:var(--muted,#7d8590)">probing …</div>
+                </div>
+                <div data-res-checked style="margin-top:8px;font-size:10px;color:var(--muted,#7d8590);font-family:monospace"></div>
+            </div>
+        </details>
         <div class="crawler-controls">
             <button id="btn-jsonl-ingest">Run JSONL Ingestion</button>
             <button id="btn-refresh-jsonl">Refresh Status</button>
@@ -584,22 +638,37 @@
         <h3>Source Roots</h3>
         <div class="settings-panel">
             <div class="project-description" style="margin-bottom:12px">
-                <p>Directories containing Claude Code <code>.claude/projects</code> JSONL conversation logs. Paths are inside the container.</p>
+                <p>Container mounts under <code>/sources/</code> are auto-detected from <code>docker-compose</code> bindings (configured via <code>SOURCE_N</code> / <code>SOURCE_N_NAME</code> in <code>.env</code>). Check the ones the JSONL ingester should scan for <code>.claude/projects</code> conversation logs.</p>
             </div>
             <table id="jsonl-roots-table">
-                <thead><tr><th>Machine</th><th>Path (in container)</th><th></th></tr></thead>
+                <thead><tr>
+                    <th style="width:42px">Ingest</th>
+                    <th>Mount</th>
+                    <th>Host path (bind source)</th>
+                    <th style="text-align:right">JSONL files</th>
+                </tr></thead>
                 <tbody id="jsonl-roots-body"></tbody>
             </table>
             <div class="settings-row" style="margin-top:8px">
-                <button id="btn-add-jsonl-root" class="btn-secondary">+ Add Machine</button>
-                <button id="btn-save-jsonl-roots" class="btn-primary">Save Source Roots</button>
+                <button id="btn-save-jsonl-roots" class="btn-primary">Save Selection</button>
+                <button id="btn-refresh-jsonl-roots" class="btn-secondary">Refresh</button>
                 <span id="jsonl-roots-status" class="settings-status"></span>
             </div>
+            <p id="jsonl-roots-stale-warning" style="margin-top:8px;font-size:12px;color:#f0ad4e;display:none"></p>
         </div>
     </section>
 
     <!-- ─── Chat Tab ─────────────────────────────────────────── -->
     <section id="tab-chat" class="tab-content">
+        <details class="res-status-tab-wrapper res-status-mount">
+            <summary>Resource Status</summary>
+            <div class="res-status-tab-body" data-res-body>
+                <div data-res-content style="display:flex;flex-direction:column;gap:5px">
+                    <div style="color:var(--muted,#7d8590)">probing …</div>
+                </div>
+                <div data-res-checked style="margin-top:8px;font-size:10px;color:var(--muted,#7d8590);font-family:monospace"></div>
+            </div>
+        </details>
 
         <!-- Toolbar -->
         <div class="chat-toolbar">
@@ -687,6 +756,15 @@
 
     <!-- ─── Embedding Tab ────────────────────────────────────── -->
     <section id="tab-embedding" class="tab-content">
+        <details class="res-status-tab-wrapper res-status-mount">
+            <summary>Resource Status</summary>
+            <div class="res-status-tab-body" data-res-body>
+                <div data-res-content style="display:flex;flex-direction:column;gap:5px">
+                    <div style="color:var(--muted,#7d8590)">probing …</div>
+                </div>
+                <div data-res-checked style="margin-top:8px;font-size:10px;color:var(--muted,#7d8590);font-family:monospace"></div>
+            </div>
+        </details>
 
         <h3>Active Model</h3>
         <div class="settings-panel" id="embedding-active-info">
@@ -750,6 +828,15 @@
 
     <!-- ─── Training Tab ────────────────────────────────────── -->
     <section id="tab-training" class="tab-content">
+        <details class="res-status-tab-wrapper res-status-mount">
+            <summary>Resource Status</summary>
+            <div class="res-status-tab-body" data-res-body>
+                <div data-res-content style="display:flex;flex-direction:column;gap:5px">
+                    <div style="color:var(--muted,#7d8590)">probing …</div>
+                </div>
+                <div data-res-checked style="margin-top:8px;font-size:10px;color:var(--muted,#7d8590);font-family:monospace"></div>
+            </div>
+        </details>
         <div class="project-description" style="margin-bottom:16px">
             <p><strong>What this is:</strong> The Training Catalog below lists every kind of training this project can fire — bench sweeps on permuted-MNIST, the WikiText-103 LM bench, and the personal-corpus LoRA arm — with one-click Start, Re-run last, and a Live Status link. Cards show last-run age, run count, target host, and an honest wall-time + cost estimate.</p>
             <p style="margin-top:6px;color:var(--muted)">
@@ -1037,6 +1124,15 @@
 
     <!-- ─── δ² Tab — continual-learning research ────────────── -->
     <section id="tab-d2" class="tab-content">
+        <details class="res-status-tab-wrapper res-status-mount">
+            <summary>Resource Status</summary>
+            <div class="res-status-tab-body" data-res-body>
+                <div data-res-content style="display:flex;flex-direction:column;gap:5px">
+                    <div style="color:var(--muted,#7d8590)">probing …</div>
+                </div>
+                <div data-res-checked style="margin-top:8px;font-size:10px;color:var(--muted,#7d8590);font-family:monospace"></div>
+            </div>
+        </details>
 
         <!-- ── Hero summary: what this thing is, in one paragraph ── -->
         <div class="d2-hero" style="background:linear-gradient(135deg, rgba(110,168,254,0.08), rgba(110,168,254,0.02));border:1px solid var(--border);border-radius:8px;padding:16px 20px;margin-bottom:16px">
@@ -2803,328 +2899,10 @@ flowchart TD
         }
     </script>
 
-    <!-- ─── Resource Status mini-panel (poll /api/resources/status) ─── -->
-    <script>
-    (function () {
-        // Poll cadence: 30s (per task spec). First call fires immediately.
-        const POLL_MS = 30000;
-        const HELP_TEXT =
-`Resource Status — at-a-glance health of every backend the platform talks to.
+    <!-- Resource Status mini-panel — shared with avatar.html, polls /api/resources/status -->
+    <script src="/static/js/resource_status_panel.js?v={{ asset_version }}"></script>
 
-Color key:
-  GREEN  — reachable / configured / healthy
-  AMBER  — reachable but degraded (e.g. δ² engine up but model not loaded)
-  RED    — unreachable, key missing, or probe error
-  GREY   — not configured (no env var set)
-
-Rows:
-  Ollama x3 — three local Ollama endpoints (OLLAMA_URL_1/2/3). Tooltip shows
-              the URL, version, and last successful probe time.
-  Together.ai — hosted stock-model inference (key set / not set).
-  Anthropic API — Claude direct API (key set / not set; CLI is separate).
-  RunPod — management key + active pod ID if any.
-  δ² engine — /health probe; surfaces model_loaded / training_status / bassin_size.
-  Hosts — TCP reachability of server (192.168.10.15) + this machine on SSH:22.
-  GPUs — nvidia-smi memory free/total over SSH where SSH keys allow.
-
-Polls every 30 s. Read-only.`;
-
-        const panel = document.getElementById('res-status-panel');
-        if (!panel) return;
-        const content = document.getElementById('res-status-content');
-        const checked = document.getElementById('res-status-checked');
-        const body    = document.getElementById('res-status-body');
-        const toggle  = document.getElementById('res-status-toggle');
-        let collapsed = false;
-        toggle.addEventListener('click', () => {
-            collapsed = !collapsed;
-            body.style.display = collapsed ? 'none' : '';
-            toggle.textContent = collapsed ? '+' : '−';
-        });
-
-        const helpBtn = document.getElementById('res-status-help');
-        if (helpBtn) {
-            // Reuse the canonical tooltip pattern. The δ² code wires .d2-help
-            // via data-what; this panel falls back to a plain alert/popup if
-            // the d² tooltip handler isn't bound (e.g. we're not on the δ²
-            // tab yet). Either way the user gets the help text.
-            helpBtn.addEventListener('click', (e) => {
-                const tt = document.getElementById('d2-tooltip');
-                if (tt && tt.style) {
-                    tt.innerHTML =
-                        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">' +
-                        '<strong style="font-size:12px">Resource Status</strong>' +
-                        '<button onclick="document.getElementById(\'d2-tooltip\').style.display=\'none\'" style="background:none;border:0;color:var(--muted);cursor:pointer;font-size:14px">×</button>' +
-                        '</div>' +
-                        '<pre style="white-space:pre-wrap;font-family:inherit;margin:6px 0 0 0;font-size:11px;line-height:1.45">' + HELP_TEXT + '</pre>';
-                    const r = helpBtn.getBoundingClientRect();
-                    tt.style.left = (r.left - 290) + 'px';
-                    tt.style.top  = (r.bottom + 6 + window.scrollY) + 'px';
-                    tt.style.display = 'block';
-                    e.stopPropagation();
-                } else {
-                    alert(HELP_TEXT);
-                }
-            });
-        }
-
-        function row(klass, label, meta, title) {
-            const div = document.createElement('div');
-            div.className = 'res-row';
-            if (title) div.title = title;
-            div.innerHTML =
-                '<span class="res-dot ' + klass + '"></span>' +
-                '<span class="res-label">' + escape(label) + '</span>' +
-                (meta ? '<span class="res-meta">' + escape(meta) + '</span>' : '');
-            return div;
-        }
-        function section(text) {
-            const d = document.createElement('div');
-            d.className = 'res-section-title';
-            d.textContent = text;
-            return d;
-        }
-        // Compact "label  [▒▒▒░░] 42%  meta" bar — used by Machines section.
-        // bcls is one of res-dot-ok/warn/err, reused as the fill color.
-        function barRow(label, percent, bcls, meta) {
-            const wrap = document.createElement('div');
-            wrap.style.display = 'flex';
-            wrap.style.alignItems = 'center';
-            wrap.style.gap = '4px';
-            wrap.style.lineHeight = '1.3';
-            const fillColor = bcls === 'res-dot-ok' ? '#4caf50'
-                            : bcls === 'res-dot-warn' ? '#f5a623'
-                            : '#d4556e';
-            const p = Math.max(0, Math.min(100, percent || 0));
-            wrap.innerHTML =
-                '<span style="display:inline-block;width:34px;flex:0 0 auto">' + escape(label) + '</span>' +
-                '<span style="display:inline-block;width:54px;height:6px;background:#222;border-radius:3px;overflow:hidden;flex:0 0 auto">' +
-                  '<span style="display:block;height:100%;width:' + p.toFixed(0) + '%;background:' + fillColor + '"></span>' +
-                '</span>' +
-                '<span style="width:34px;text-align:right;flex:0 0 auto">' + p.toFixed(0) + '%</span>' +
-                '<span style="flex:1;color:var(--muted,#7d8590);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escape(meta || '') + '</span>';
-            return wrap;
-        }
-        function escape(s) {
-            return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-        }
-
-        async function refresh() {
-            try {
-                const r = await fetch('/api/resources/status');
-                if (!r.ok) {
-                    content.innerHTML = '<div style="color:#d4556e">probe failed (HTTP ' + r.status + ')</div>';
-                    return;
-                }
-                const d = await r.json();
-                content.innerHTML = '';
-
-                // Ollama section — distinguish "stale" (1-2 transient failures) from "down" (3+)
-                content.appendChild(section('Ollama (' + (d.ollama || []).length + ')'));
-                for (const o of (d.ollama || [])) {
-                    let cls, meta;
-                    if (o.ok) {
-                        cls = 'res-dot-ok';
-                        meta = 'v' + (o.version || '?');
-                    } else if (o.stale) {
-                        cls = 'res-dot-warn';
-                        meta = 'stale (' + (o.consecutive_failures || 1) + ')';
-                    } else {
-                        cls = 'res-dot-err';
-                        meta = 'down';
-                    }
-                    const title = (o.url || '') +
-                                  (o.last_ok ? '\nlast OK: ' + o.last_ok : '') +
-                                  (o.consecutive_failures ? '\nconsecutive failures: ' + o.consecutive_failures : '') +
-                                  (o.error ? '\nerror: ' + o.error : '');
-                    content.appendChild(row(cls, o.label || o.url, meta, title));
-                }
-
-                // API keys
-                content.appendChild(section('API keys'));
-                const t = d.together_ai || {};
-                content.appendChild(row(
-                    t.configured ? 'res-dot-ok' : 'res-dot-off',
-                    'Together.ai',
-                    t.configured ? (t.masked || 'set') : 'not set',
-                    t.configured ? 'configured' : 'TOGETHER_AI_KEY env var missing'
-                ));
-                const a = d.anthropic || {};
-                content.appendChild(row(
-                    a.configured ? 'res-dot-ok' : 'res-dot-off',
-                    'Anthropic API',
-                    a.configured ? (a.masked || 'set') : 'not set',
-                    a.configured ? 'configured' : 'ANTHROPIC_API_KEY env var missing'
-                ));
-
-                // RunPod
-                content.appendChild(section('RunPod'));
-                const rp = d.runpod || {};
-                let rpClass = 'res-dot-off', rpMeta = 'not set';
-                if (rp.configured) {
-                    if (rp.active_pod && rp.active_pod.pod_id) {
-                        rpClass = 'res-dot-ok';
-                        rpMeta = rp.active_pod.pod_id.slice(0, 8) + ' ' + (rp.active_pod.gpu || '');
-                    } else {
-                        rpClass = 'res-dot-warn';
-                        rpMeta = 'no pod';
-                    }
-                }
-                content.appendChild(row(rpClass, 'RunPod', rpMeta,
-                    rp.configured ? ('key set' + (rp.active_pod ? '\npod: ' + rp.active_pod.pod_id : '\nno active pod')) : 'RUNPOD_API_KEY missing'
-                ));
-
-                // δ² engine
-                content.appendChild(section('δ² engine'));
-                const d2 = d.d2_engine || {};
-                let d2Class = 'res-dot-off', d2Meta = 'not set';
-                if (d2.configured) {
-                    if (d2.ok && d2.active_lora_adapter) {
-                        d2Class = 'res-dot-ok';
-                        d2Meta  = 'live · ' + d2.active_lora_adapter;
-                    }
-                    else if (d2.ok && d2.model_loaded) { d2Class = 'res-dot-ok'; d2Meta = 'live · model loaded'; }
-                    else if (d2.ok)               { d2Class = 'res-dot-warn'; d2Meta = (d2.training_status || 'idle') + ' · no model'; }
-                    else                          { d2Class = 'res-dot-err'; d2Meta = 'unreachable'; }
-                }
-                content.appendChild(row(d2Class, 'δ² engine', d2Meta,
-                    (d2.endpoint || 'no endpoint') +
-                    (d2.bassin_size != null ? '\nbassin: ' + d2.bassin_size : '') +
-                    (d2.error ? '\nerror: ' + d2.error : '')
-                ));
-
-                // Hosts (TCP reach). Mark which hosts also have a /host
-                // telemetry endpoint (small "·t" hint) so the user knows
-                // which rows are augmented in the MACHINES section below.
-                content.appendChild(section('Hosts'));
-                const _machineHostFrags = (d.machines || [])
-                    .filter(mm => mm.host_endpoint && mm.host)
-                    .map(mm => mm.host);
-                for (const h of (d.hosts || [])) {
-                    const cls = h.ok ? 'res-dot-ok' : 'res-dot-err';
-                    const meta = h.ok ? (h.rtt_ms + 'ms') : 'down';
-                    let label = h.label;
-                    for (const ip of _machineHostFrags) {
-                        if (h.host && (h.host.indexOf(ip) >= 0 || ip.indexOf(h.host) >= 0)) {
-                            label += ' ·t';  // ·t = telemetry available
-                            break;
-                        }
-                    }
-                    content.appendChild(row(cls, label, meta, h.host + ':' + h.port + (h.error ? '\nerror: ' + h.error : '')));
-                }
-
-                // ─── MACHINES ───────────────────────────────────────────────
-                // One card per known box: hostname + dot, CPU% bar, RAM% bar,
-                // each GPU with VRAM% + util%. Click hostname to collapse
-                // details. Replaces the legacy "GPU memory" section.
-                if ((d.machines || []).length) {
-                    content.appendChild(section('Machines'));
-                    for (const m of d.machines) {
-                        let cls = 'res-dot-err';
-                        if (m.ok)              cls = 'res-dot-ok';
-                        else if (m.stale)      cls = 'res-dot-warn';
-                        else if (!m.host_endpoint) cls = 'res-dot-off';
-
-                        const header = document.createElement('div');
-                        header.className = 'res-row';
-                        header.style.cursor = 'pointer';
-                        // Prefer the user-meaningful label (server / dellserver / office)
-                        // over the container's docker-assigned hostname (e.g. 870d3ad991e5).
-                        // If both exist and differ, show "label · hostname" so you can still
-                        // see the container ID for debugging.
-                        const labelClean = (m.label || '').replace(/\s*\([^)]*\)\s*$/, '').trim();   // strip "(192.168.x.y)"
-                        let hostName;
-                        if (labelClean && m.hostname && labelClean !== m.hostname) {
-                            hostName = labelClean + ' · ' + m.hostname;
-                        } else {
-                            hostName = labelClean || m.hostname || m.host || '?';
-                        }
-                        let status;
-                        if (m.ok)              status = 'live';
-                        else if (m.stale)      status = 'stale (' + (m.consecutive_failures||1) + ')';
-                        else if (!m.host_endpoint) status = 'no telemetry';
-                        else                   status = 'down';
-                        header.innerHTML =
-                            '<span class="res-dot ' + cls + '"></span>' +
-                            '<span class="res-label">' + escape(hostName) + '</span>' +
-                            '<span class="res-meta">' + escape(status) + '</span>';
-                        if (m.error) header.title = m.error;
-                        content.appendChild(header);
-
-                        const det = document.createElement('div');
-                        det.style.margin = '2px 0 6px 17px';
-                        det.style.fontSize = '10px';
-                        det.style.fontFamily = 'monospace';
-                        det.style.color = 'var(--muted,#7d8590)';
-
-                        if (!m.ok && !m.host_endpoint) {
-                            det.textContent = '(no probe agent — install /host endpoint to see telemetry)';
-                        } else if (!m.ok) {
-                            det.textContent = m.error || 'unreachable';
-                        } else {
-                            if (m.cpu) {
-                                const p = m.cpu.percent != null ? m.cpu.percent : 0;
-                                const bcls = p < 60 ? 'res-dot-ok' : (p < 85 ? 'res-dot-warn' : 'res-dot-err');
-                                const la = (m.cpu.load_1 != null) ? ('  la ' + m.cpu.load_1 + '/' + (m.cpu.load_5 != null ? m.cpu.load_5 : '?')) : '';
-                                det.appendChild(barRow('CPU', p, bcls,
-                                    (m.cpu.cores ? m.cpu.cores + 'c' : '') + la));
-                            }
-                            if (m.ram) {
-                                const p = m.ram.percent != null ? m.ram.percent : 0;
-                                const bcls = p < 60 ? 'res-dot-ok' : (p < 85 ? 'res-dot-warn' : 'res-dot-err');
-                                det.appendChild(barRow('RAM', p, bcls,
-                                    m.ram.used_gb + '/' + m.ram.total_gb + ' GB'));
-                            }
-                            for (const g of (m.gpus || [])) {
-                                const vp = g.vram_percent != null ? g.vram_percent : 0;
-                                const up = g.util_pct     != null ? g.util_pct     : 0;
-                                const bcls = vp < 60 ? 'res-dot-ok' : (vp < 85 ? 'res-dot-warn' : 'res-dot-err');
-                                const extra = (g.temp_c != null ? ' ' + g.temp_c + '°C' : '')
-                                            + (g.power_w != null ? ' ' + g.power_w + 'W' : '');
-                                det.appendChild(barRow(
-                                    'GPU ' + (g.name || '?').replace(/^NVIDIA\s+/i,'').slice(0,20),
-                                    vp, bcls,
-                                    'vram ' + (g.vram_used_mib||0) + '/' + (g.vram_total_mib||0) + ' MiB · util ' + up + '%' + extra
-                                ));
-                            }
-                            if (!(m.gpus || []).length) {
-                                const noGpu = document.createElement('div');
-                                noGpu.textContent = 'GPU: none';
-                                det.appendChild(noGpu);
-                            }
-                            const meta2 = document.createElement('div');
-                            meta2.style.marginTop = '2px';
-                            const upMin = m.uptime_s != null ? Math.floor(m.uptime_s/60) + 'm' : '?';
-                            meta2.textContent = (m.roles || []).join(',') + ' · up ' + upMin;
-                            det.appendChild(meta2);
-                            for (const k of ['cpu_probe_error','gpu_probe_error']) {
-                                if (m[k]) {
-                                    const e = document.createElement('div');
-                                    e.style.color = '#d4556e';
-                                    e.textContent = k + ': ' + m[k];
-                                    det.appendChild(e);
-                                }
-                            }
-                        }
-                        content.appendChild(det);
-                        header.addEventListener('click', () => {
-                            det.style.display = (det.style.display === 'none') ? '' : 'none';
-                        });
-                    }
-                }
-
-                checked.textContent = 'checked: ' + (d.checked_at || '?');
-            } catch (e) {
-                content.innerHTML = '<div style="color:#d4556e">fetch error: ' + escape(e.message || e) + '</div>';
-            }
-        }
-
-        refresh();
-        setInterval(refresh, POLL_MS);
-    })();
-    </script>
-
-    <script src="/static/js/dashboard.js"></script>
+    <script src="/static/js/dashboard.js?v={{ asset_version }}"></script>
 
     <!-- ─── Centralized Settings — full-viewport view ───────── -->
     <div id="settings-view" style="display:none; position:fixed; inset:0;

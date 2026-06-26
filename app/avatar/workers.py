@@ -34,13 +34,24 @@ def order_endpoints(
         return list(endpoints)
 
     needle = preferred_worker.lower()
-    matched = [(u, l) for (u, l) in endpoints if needle in l.lower()]
-    others = [(u, l) for (u, l) in endpoints if needle not in l.lower()]
+    # UI sometimes passes the worker_id ('server-cuda-1660') and sometimes a
+    # label substring ('server'). Worker_ids use hyphens; labels use spaces +
+    # symbols. Match either: direct substring OR all hyphen-split tokens
+    # individually present (case-insensitive).
+    tokens = [t for t in needle.replace("_", "-").split("-") if t]
+
+    def _matches(label_lower: str) -> bool:
+        if needle in label_lower:
+            return True
+        return bool(tokens) and all(t in label_lower for t in tokens)
+
+    matched = [(u, l) for (u, l) in endpoints if _matches(l.lower())]
+    others  = [(u, l) for (u, l) in endpoints if not _matches(l.lower())]
 
     if not matched:
         logger.warning(
-            f"preferred_worker={preferred_worker!r} did not match any endpoint label; "
-            f"falling back to full chain"
+            f"preferred_worker={preferred_worker!r} did not match any endpoint label "
+            f"(labels: {[l for _, l in endpoints]!r}) — falling back to full chain"
         )
         return list(endpoints)
 
@@ -82,7 +93,11 @@ async def probe_worker(url: str, label: str, timeout: float = 3.0) -> dict:
             result["reachable"] = True
             result["worker_id"] = data.get("worker_id") or label
             result["gpu_type"] = data.get("gpu_type")
-            result["capabilities"] = data.get("capabilities", [])
+            # Worker schema drift: server returns "capabilities", office (ROCm)
+            # returns "backends". Accept either — without this, the office RX 6800
+            # is invisible to routing and all sadtalker traffic falls onto the
+            # server GTX 1660 SUPER (6 GB VRAM, borderline).
+            result["capabilities"] = data.get("capabilities") or data.get("backends", [])
     except Exception as exc:
         result["error"] = str(exc)
     return result

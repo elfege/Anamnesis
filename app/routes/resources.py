@@ -395,12 +395,14 @@ def _known_machines() -> list[tuple[str, str, str | None, list[str]]]:
             f"{D2_ENDPOINT_URL.rstrip('/')}/host",
             ["d2-engine", "trainer-sidecar", "ollama"],
         ))
-    # Office (192.168.10.110) — Ollama only, no /host. Show as "no telemetry".
+    # Office (192.168.10.110) — avatar-worker-office exposes /host on :3013
+    # since 2026-06-08 (was previously Ollama-only with no probe agent).
+    # Roles list reflects what office actually serves: avatar worker + local Ollama.
     machines.append((
         "office (192.168.10.110)",
         "192.168.10.110",
-        None,
-        ["ollama"],
+        "http://192.168.10.110:3013/host",
+        ["avatar-worker", "xtts", "sadtalker", "ollama"],
     ))
 
     # RunPod-hosted avatar worker (XTTS + SadTalker) — surfaced when slot 5

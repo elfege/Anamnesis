@@ -366,15 +366,167 @@ def _parse_plain_text(filepath: str) -> str:
         return ""
 
 
+def _parse_xlsx(filepath: str) -> str:
+    """Extract text from a modern Excel (.xlsx/.xlsm) workbook via openpyxl.
+
+    Per sheet: header line ``=== Sheet: <name> ===`` followed by rows joined by
+    tabs.  Empty rows skipped.  Date/number cells become their str() form.
+    """
+    try:
+        import openpyxl
+    except ImportError:
+        logger.warning("openpyxl not installed — skipping xlsx: %s", filepath)
+        return ""
+    try:
+        wb = openpyxl.load_workbook(filepath, data_only=True, read_only=True)
+    except Exception as e:
+        logger.warning(f"Failed to open xlsx {filepath}: {e}")
+        return ""
+
+    chunks: list[str] = []
+    try:
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            # Chart-only sheets (Chartsheet) have no rows to iterate. Skip silently.
+            if not hasattr(ws, "iter_rows"):
+                continue
+            sheet_lines: list[str] = []
+            for row in ws.iter_rows(values_only=True):
+                if not any(c is not None and str(c).strip() for c in row):
+                    continue
+                sheet_lines.append("\t".join(
+                    "" if c is None else str(c).strip() for c in row
+                ))
+            if sheet_lines:
+                chunks.append(f"=== Sheet: {sheet_name} ===\n" + "\n".join(sheet_lines))
+    finally:
+        try:
+            wb.close()
+        except Exception:
+            pass
+    return "\n\n".join(chunks)
+
+
+def _parse_xls(filepath: str) -> str:
+    """Extract text from a legacy Excel (.xls) workbook via xlrd<2.0.
+
+    Newer xlrd dropped .xls support, so requirements pin xlrd<2.0.  Same output
+    shape as _parse_xlsx: per-sheet header + tab-joined rows.
+    """
+    try:
+        import xlrd
+    except ImportError:
+        logger.warning("xlrd not installed — skipping xls: %s", filepath)
+        return ""
+    try:
+        wb = xlrd.open_workbook(filepath)
+    except Exception as e:
+        logger.warning(f"Failed to open xls {filepath}: {e}")
+        return ""
+
+    chunks: list[str] = []
+    for sheet_idx in range(wb.nsheets):
+        ws = wb.sheet_by_index(sheet_idx)
+        sheet_lines: list[str] = []
+        for r in range(ws.nrows):
+            row = ws.row_values(r)
+            if not any(str(c).strip() for c in row):
+                continue
+            sheet_lines.append("\t".join(str(c).strip() for c in row))
+        if sheet_lines:
+            chunks.append(f"=== Sheet: {ws.name} ===\n" + "\n".join(sheet_lines))
+    return "\n\n".join(chunks)
+
+
+def _parse_doc(filepath: str) -> str:
+    """Extract text from a legacy Word (.doc) binary file via antiword.
+
+    Requires the `antiword` system binary (installed in the Anamnesis image).
+    Falls back to empty string if antiword is missing or fails — .doc has no
+    good pure-Python parser; LibreOffice headless is the heavyweight alternative.
+    """
+    import shutil
+    import subprocess
+    if not shutil.which("antiword"):
+        logger.debug("antiword not in PATH — skipping doc: %s", filepath)
+        return ""
+    try:
+        result = subprocess.run(
+            ["antiword", "-w", "0", filepath],
+            capture_output=True, timeout=30, check=False,
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "antiword failed (%d) on %s: %s",
+                result.returncode, filepath, result.stderr.decode("utf-8", errors="replace")[:200],
+            )
+            return ""
+        return result.stdout.decode("utf-8", errors="replace").strip()
+    except subprocess.TimeoutExpired:
+        logger.warning(f"antiword timeout on {filepath}")
+        return ""
+    except Exception as e:
+        logger.warning(f"Failed to parse doc {filepath}: {e}")
+        return ""
+
+
+def _parse_eml(filepath: str) -> str:
+    """Extract headers + text body from an .eml message file.
+
+    Headers included: From, To, Cc, Subject, Date.  Body: prefer text/plain
+    parts; fall back to text/html stripped to text if no plain alternative.
+    Multipart messages traversed; attachments skipped.
+    """
+    try:
+        from email import policy
+        from email.parser import BytesParser
+    except ImportError:
+        return ""
+    try:
+        with open(filepath, "rb") as f:
+            msg = BytesParser(policy=policy.default).parse(f)
+    except Exception as e:
+        logger.warning(f"Failed to parse eml {filepath}: {e}")
+        return ""
+
+    header_lines = []
+    for h in ("From", "To", "Cc", "Subject", "Date"):
+        val = msg.get(h, "")
+        if val:
+            header_lines.append(f"{h}: {val}")
+
+    body_text = ""
+    try:
+        # get_body() returns the best body part respecting prefer list.
+        body_part = msg.get_body(preferencelist=("plain", "html"))
+        if body_part is not None:
+            raw = body_part.get_content()
+            if body_part.get_content_subtype() == "html":
+                # Crude HTML→text: strip tags.  Good enough for indexing.
+                import re as _re
+                raw = _re.sub(r"<[^>]+>", " ", raw)
+                raw = _re.sub(r"\s+", " ", raw).strip()
+            body_text = raw
+    except Exception as e:
+        logger.debug(f"eml body extract failed for {filepath}: {e}")
+
+    return "\n".join(header_lines) + ("\n\n" + body_text if body_text else "")
+
+
 # Supported document extensions → parser function
 _DOC_PARSERS = {
     ".docx":  _parse_docx,
+    ".doc":   _parse_doc,          # legacy Word binary — requires antiword
     ".pdf":   _parse_pdf,
     ".odt":   _parse_odt,
     ".pages": _parse_pages,
+    ".xlsx":  _parse_xlsx,
+    ".xlsm":  _parse_xlsx,         # macro-enabled, same format internally
+    ".xls":   _parse_xls,          # legacy Excel binary — requires xlrd<2.0
     ".md":    _parse_plain_text,
     ".txt":   _parse_plain_text,
     ".rtf":   _parse_plain_text,   # plain-text extraction (formatting lost)
+    ".eml":   _parse_eml,
 }
 
 
@@ -623,7 +775,8 @@ async def _scan_teachings_dir() -> int:
 async def _scan_documents_dir() -> int:
     """Scan the documents directory for supported document files.
 
-    Supported formats: .docx, .pdf, .odt, .pages, .md, .txt, .rtf
+    Supported formats: .docx, .doc, .pdf, .odt, .pages, .xlsx, .xlsm, .xls,
+    .md, .txt, .rtf, .eml
     Each file = one episode.
     """
     if not os.path.isdir(DOCUMENTS_DIR):

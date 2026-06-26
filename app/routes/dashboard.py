@@ -63,11 +63,23 @@ async def dashboard(request: Request):
             "description": f"All projects with docker-compose.yml + 0_SCRIPTS/ on {machine_name}",
         })
 
+    # Cache-bust for /static/js/* — MAX mtime across all .js files in the bundle.
+    # Stops browsers from serving stale JS when ANY file in the bundle changes
+    # (previously only tracked dashboard.js, so edits to resource_status_panel.js
+    # or future siblings wouldn't tick the version).
+    js_dir = "/app/static/js"
+    try:
+        mtimes = [os.path.getmtime(os.path.join(js_dir, f))
+                  for f in os.listdir(js_dir) if f.endswith(".js")]
+        asset_version = str(int(max(mtimes))) if mtimes else "0"
+    except OSError:
+        asset_version = "0"
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "stats": stats,
         "sources": sources,
         "jsonl_source_roots": JSONL_SOURCE_ROOTS,
+        "asset_version": asset_version,
     })
 
 

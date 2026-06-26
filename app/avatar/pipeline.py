@@ -59,12 +59,35 @@ class AvatarPipeline:
         session_id: Optional[str] = None,
         backend: str = "ollama",
         model: Optional[str] = None,
-        preferred_worker: Optional[str] = None,
+        # ── Per-service worker preference (Phase 2, 2026-06-08) ──
+        # TTS (XTTS) and Animation (SadTalker) have very different VRAM
+        # profiles — SadTalker wants 8–16 GB headroom, XTTS is happy on 4 GB.
+        # Separate selectors let the operator route each independently from
+        # the UI gear menu. Both fall back to `preferred_worker` if unset
+        # (legacy single-selector callers + server-side defaulting).
+        preferred_tts_worker: Optional[str] = None,
+        preferred_animation_worker: Optional[str] = None,
+        preferred_worker: Optional[str] = None,  # legacy back-compat fallback
+        # Animation engine choice (Phase 2.5, 2026-06-08). Default sadtalker
+        # so existing callers keep working. Other values: 'musetalk', 'hallo2'.
+        # Pipeline routes to the corresponding client module; if the client
+        # for the chosen engine isn't installed yet, the call raises a clear
+        # RuntimeError instead of silently falling back.
+        animation_engine: str = "sadtalker",
         no_fallback: bool = False,
+        # ── Advanced overrides (Layer 1 + Layer 2, added 2026-06-11) ──
+        # Both default to None / {} meaning "use server-side default config
+        # and ollama sampling defaults". Non-None values flow through to the
+        # LLM call as a system-prompt replacement and ollama options dict.
+        system_prompt_override: Optional[str] = None,
+        sampling: Optional[dict] = None,
         on_token=None,
         on_audio=None,
         on_video=None,
     ) -> PipelineResult:
+        # Resolve per-service preferences with legacy fallback.
+        tts_worker  = preferred_tts_worker  or preferred_worker
+        anim_worker = preferred_animation_worker or preferred_worker
         result = PipelineResult(session_id=session_id)
         t0 = time.monotonic()
         animate = animate if animate is not None else config.AVATAR_ANIMATE_DEFAULT
@@ -90,11 +113,12 @@ class AvatarPipeline:
         parts: list[str] = []
         endpoint_label = None
         async for kind, text in avatar_llm.stream_reply(
-            config.AVATAR_PERSONA_SYSTEM_PROMPT,
+            system_prompt_override or config.AVATAR_PERSONA_SYSTEM_PROMPT,
             user_message,
             previous_messages=prior_messages,
             backend=backend,
             model=model,
+            sampling=sampling,
         ):
             if kind == "token":
                 parts.append(text)
@@ -145,7 +169,7 @@ class AvatarPipeline:
         try:
             result.audio_path = await synthesize_with_voice(
                 voice_spec, result.text, audio_path,
-                preferred_worker=preferred_worker, no_fallback=no_fallback,
+                preferred_worker=tts_worker, no_fallback=no_fallback,
             )
             result.timings["tts_ms"] = int((time.monotonic() - t_tts) * 1000)
             result.timings["voice_id"] = voice_id or config.DEFAULT_VOICE_ID
@@ -165,13 +189,28 @@ class AvatarPipeline:
             else:
                 t_anim = time.monotonic()
                 video_path = os.path.join(audio_dir, "anim.mp4")
+                # Animation-engine dispatch (Phase 2.5). Default sadtalker.
+                # MuseTalk + Hallo2 client modules live alongside sadtalker_client;
+                # absent clients raise so the user sees the gap (not a silent skip).
+                engine = (animation_engine or "sadtalker").lower()
+                result.timings["anim_engine"] = engine
                 try:
-                    # SadTalker needs WAV, not MP3
+                    # All current engines need WAV, not MP3
                     wav_for_anim = os.path.join(audio_dir, "speech_for_anim.wav")
                     await asyncio.to_thread(_mp3_to_wav, result.audio_path, wav_for_anim)
-                    result.video_path = await self._sadtalker.animate(
+                    if engine == "sadtalker":
+                        animator = self._sadtalker
+                    elif engine == "musetalk":
+                        from avatar.animation.musetalk_client import MuseTalkClient
+                        animator = MuseTalkClient()
+                    elif engine == "hallo2":
+                        from avatar.animation.hallo2_client import Hallo2Client
+                        animator = Hallo2Client()
+                    else:
+                        raise RuntimeError(f"Unknown animation engine: {engine!r}")
+                    result.video_path = await animator.animate(
                         wav_for_anim, ref, video_path,
-                        preferred_worker=preferred_worker, no_fallback=no_fallback,
+                        preferred_worker=anim_worker, no_fallback=no_fallback,
                     )
                     result.timings["anim_ms"] = int((time.monotonic() - t_anim) * 1000)
                     if on_video:

@@ -38,7 +38,11 @@
       display: flex; align-items: center; justify-content: center;
     }
     .avatar-container img, .avatar-container video {
-      width: 100%; height: 100%; object-fit: cover;
+      /* Honor the source image's native aspect ratio (no crop of forehead /
+         chin). Letterbox sides if the panel is wider than the image. */
+      max-width: 100%; max-height: 100%;
+      width: auto; height: auto;
+      object-fit: contain;
     }
     .avatar-name {
       padding: 12px; text-align: center; font-size: 14px;
@@ -61,10 +65,21 @@
       padding: 12px 20px; border-bottom: 1px solid var(--border);
       display: flex; align-items: center; justify-content: space-between;
       gap: 16px; flex-wrap: wrap;
+      /* Reserve the top-right zone occupied by the fixed Resource Status
+         panel (#res-status-wrapper, position:fixed right:14px, ~155px wide)
+         so toolbar items can never slide underneath it. Reset below 820px,
+         where that panel drops into normal flow (media query further down). */
+      padding-right: 175px;
     }
     .chat-header-left { display: flex; align-items: center; gap: 12px; }
     .chat-header h1 { font-size: 18px; font-weight: 600; }
-    .backend-info { font-size: 11px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
+    /* Cap this: JS swaps in a long "llm · workers: <labels>" string (incl.
+       "runpod · cloud (not deployed yet)") after the WS connects. Unconstrained
+       it grew the toolbar row and forced a wrap that slid under the fixed
+       Resource Status panel. Truncate to one ellipsized line so the row is
+       stable regardless of how long that async string turns out to be. */
+    .backend-info { font-size: 11px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace;
+      min-width: 0; max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
     .home-btn {
       background: var(--surface2); border: 1px solid var(--border); color: var(--text);
@@ -230,9 +245,74 @@
     .settings-row label { font-size: 12px; color: var(--text-dim); }
     .settings-row select { width: 100%; }
     .settings-footer { font-size: 11px; color: var(--text-dim); margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border); }
+
+    /* Resource Status panel — collapsed by default via <details>. Same dot/row styles as dashboard. */
+    .res-row { display:flex; align-items:center; gap:8px; }
+    .res-dot { width:9px; height:9px; border-radius:50%; flex:0 0 auto; box-shadow:0 0 4px rgba(0,0,0,0.35) inset; }
+    .res-dot-ok    { background:#4caf50; }
+    .res-dot-warn  { background:#f5a623; }
+    .res-dot-err   { background:#d4556e; }
+    .res-dot-off   { background:#555; }
+    .res-label { flex:1; }
+    .res-meta  { color:var(--muted,#7d8590); font-size:10px; font-family:monospace; }
+    .res-section-title {
+        color:var(--muted,#7d8590); font-size:10px; text-transform:uppercase;
+        letter-spacing:0.4px; margin:8px 0 2px 0;
+    }
+    .res-section-title:first-child { margin-top:0; }
+    #res-status-wrapper {
+        position:fixed; top:14px; right:14px; z-index:90;
+        max-width:300px;
+        background:var(--card,#161b22); border:1px solid var(--border,#30363d);
+        border-radius:8px; font-size:11.5px;
+        color:var(--text,#e6edf3); box-shadow:0 6px 16px rgba(0,0,0,0.35);
+    }
+    #res-status-wrapper > summary {
+        list-style:none; cursor:pointer; padding:8px 12px;
+        font-size:12px; font-weight:600; letter-spacing:0.3px;
+        display:flex; align-items:center; gap:6px;
+        user-select:none;
+    }
+    #res-status-wrapper > summary::-webkit-details-marker { display:none; }
+    #res-status-wrapper > summary::before {
+        content:"▸"; display:inline-block; transition:transform 120ms ease;
+        color:var(--muted,#7d8590); font-size:10px; width:10px;
+    }
+    #res-status-wrapper[open] > summary::before { transform:rotate(90deg); }
+    #res-status-panel {
+        padding:4px 12px 12px 12px; max-height:calc(100vh - 70px); overflow-y:auto;
+        line-height:1.4;
+    }
+    @media (max-width: 820px) {
+        #res-status-wrapper { position:static; max-width:100%; margin:10px; }
+        .chat-header { padding-right: 20px; }  /* panel is in-flow here; no reserve needed */
+    }
   </style>
 </head>
 <body>
+  <!-- Resource Status — collapsed by default. Click summary to expand. -->
+  <details id="res-status-wrapper">
+    <summary>
+      Resource Status
+      <span class="d2-help" id="res-status-help" data-what="Resource Status — backend health, polled every 30s" aria-label="help" role="button" tabindex="0" style="margin-left:auto;color:var(--muted,#7d8590);cursor:help">?</span>
+    </summary>
+    <div id="res-status-panel">
+      <div id="res-status-body">
+        <div id="res-status-content" style="display:flex;flex-direction:column;gap:5px">
+          <div style="color:var(--muted,#7d8590)">probing …</div>
+        </div>
+        <div id="res-status-checked" style="margin-top:8px;font-size:10px;color:var(--muted,#7d8590);font-family:monospace"></div>
+      </div>
+    </div>
+  </details>
+  <div id="d2-tooltip" style="display:none;position:absolute;background:var(--card,#161b22);border:1px solid var(--border,#30363d);border-radius:6px;padding:10px 12px;max-width:340px;z-index:100;box-shadow:0 6px 16px rgba(0,0,0,0.35);font-size:11px;color:var(--text,#e6edf3)"></div>
+  <!-- defer: this was a render-blocking <script> mid-<body>. Uncached, the
+       browser painted the half-parsed page (only the resource panel above)
+       before the toolbar laid out → the "stacked wrong" flash that fixed
+       itself on a cached reload. defer lets the whole body parse first; the
+       IIFE still runs against fully-present DOM (and now catches every mount). -->
+  <script src="/static/js/resource_status_panel.js" defer></script>
+
   <!-- Sessions drawer (slide-out from left) -->
   <div class="sessions-backdrop" id="sessionsBackdrop"></div>
   <aside class="sessions-drawer" id="sessionsDrawer">
@@ -246,7 +326,7 @@
 
   <div class="avatar-panel">
     <div class="avatar-container">
-      <img id="avatarImage" src="/static/img/belle_reference.png" alt="Avatar">
+      <img id="avatarImage" src="/static/img/belle_display.png?v={{ display_image_version }}" alt="Avatar">
       <video id="avatarVideo" autoplay style="display:none;"></video>
     </div>
     <div class="avatar-name">
@@ -263,6 +343,12 @@
         <a href="/dashboard" class="home-btn" title="Back to Anamnesis">← Home</a>
         <button class="sessions-toggle" id="sessionsToggleBtn" title="Conversations">☰</button>
         <h1>Avatar</h1>
+        <!-- EMERGENCY STOP — panic button. Plain HTTP, never goes through the
+             WS. Always visible. Click → POST /api/avatar/emergency-stop →
+             kills every SadTalker / MuseTalk subprocess on every worker AND
+             unloads every ollama model. See avatar/emergency.py.            -->
+        <button id="panicBtn" onclick="panic()" title="EMERGENCY STOP — kills every avatar GPU job + unloads ollama models. Bypasses the WebSocket; works even if the regular Stop is wedged."
+                style="margin-left:10px; background:#c93f3f; color:#fff; font-weight:600; padding:4px 10px; border-radius:6px; border:1px solid #ff5e5e; cursor:pointer; letter-spacing:0.04em; box-shadow:0 0 0 1px rgba(255,94,94,0.25)">⛔ KILL</button>
       </div>
       <div class="voice-bar">
         <label for="voiceSel" style="font-size:12px">Voice:</label>
@@ -289,23 +375,195 @@
         <select id="modelSel"></select>
       </div>
       <div class="settings-row">
-        <label>Worker</label>
-        <select id="workerSel"></select>
+        <label title="GPU worker for text-to-speech (XTTS / Edge / ParoleSonore voice clone)">TTS Worker</label>
+        <select id="ttsWorkerSel"></select>
+      </div>
+      <div class="settings-row">
+        <label title="Which animation engine renders the talking head. SadTalker = current (slow, post-render). MuseTalk = real-time lip overlay (preferred, work-in-progress). Hallo2 = high realism (planned).">Animation Engine</label>
+        <select id="animEngineSel">
+          <option value="sadtalker">SadTalker (current, 30–120s post-render)</option>
+          <option value="musetalk">MuseTalk (~real-time on warm cache; first call may take 5-15 min for autotune)</option>
+          <option value="hallo2" disabled>Hallo2 (high realism — planned)</option>
+        </select>
+      </div>
+      <div class="settings-row">
+        <label title="GPU worker for the chosen animation engine. Capabilities are filtered to the selected engine.">Animation Worker</label>
+        <select id="animWorkerSel"></select>
+      </div>
+      <!-- RunPod controls — only visible when a RunPod-class worker is selected.
+           Lets the operator pick GPU tier (cheap → premium) and provision a pod
+           that will fulfill animation requests. Pod URL gets written back to
+           AVATAR_WORKER_URL_5 on success. -->
+      <div class="settings-row" id="runpodControlsRow" style="display:none;flex-direction:column;gap:6px;border:1px solid #30363d;border-radius:6px;padding:8px;margin-top:4px;background:#0f1418">
+        <label style="font-weight:600">RunPod GPU tier</label>
+        <select id="runpodGpuSel">
+          <option value="rtx3090">RTX 3090 24GB · ~$0.22-0.45/hr · budget — fits SadTalker / MuseTalk</option>
+          <option value="rtx4090" selected>RTX 4090 24GB · ~$0.40/hr · default — good for SadTalker / MuseTalk</option>
+          <option value="a100">A100 80GB · ~$1.50/hr · headroom for Hallo2 + larger models</option>
+          <option value="h100">H100 80GB · ~$2.50/hr · max speed / experiments</option>
+        </select>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button id="btnProvisionRunpod" type="button" style="padding:6px 10px;cursor:pointer;background:#1f6feb;color:#fff;border:0;border-radius:4px;flex:0 0 auto">Provision pod</button>
+          <span id="runpodProvisionStatus" style="font-size:11px;color:var(--text-dim,#7d8590);flex:1"></span>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim,#7d8590);line-height:1.4">
+          Triggers <code>RUNPOD_PROFILE=avatar RUNPOD_GPU_TIER=&lt;tier&gt; ./deploy_runpod.sh</code> on dellserver.
+          Pod URL writes back to <code>AVATAR_WORKER_URL_5</code>. Stop with <code>RUNPOD_PROFILE=avatar ./deploy_runpod.sh stop</code>.
+          Billing is per-second once running — terminate when done.
+        </div>
       </div>
       <div class="settings-row" style="align-items:center">
-        <label for="noFallbackChk" title="If set, only the preferred worker is tried; no fallback chain">No fallback</label>
+        <label for="noFallbackChk" title="If set, only the preferred worker is tried for each service; no fallback chain">No fallback (both)</label>
         <input type="checkbox" id="noFallbackChk" style="width:auto">
       </div>
+
+      <!-- ── Advanced (Sampling + Persona) ─────────────────────── -->
+      <details id="advancedDetails" style="margin-top:10px;border-top:1px solid #30363d;padding-top:8px">
+        <summary style="cursor:pointer;user-select:none;font-size:12px;color:var(--text-dim);padding:4px 0">
+          ▸ Advanced — sampling &amp; persona
+        </summary>
+
+        <!-- Sampling params (Layer 2) -->
+        <div style="margin-top:8px;padding:8px;border:1px solid #30363d;border-radius:6px;background:#0f1418">
+          <div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;letter-spacing:0.04em">SAMPLING (LAYER 2)</div>
+
+          <div class="settings-row" style="align-items:center">
+            <label for="tempInp" title="Higher = more creative + variable, lower = more deterministic. Default 0.8. Drop to 0.6 if you see token gibberish ('范范范' / repeating fragments).">
+              temperature <span class="adv-help" data-help="Controls randomness in token sampling. Range 0.0–2.0. 0 = always pick most-likely token (deterministic, repetitive). 0.7–0.8 = ollama default (balanced). 1.0+ = creative but risks collapse on long contexts (the 范范范 garbage we saw)." style="color:#8b95a0;cursor:help">?</span>
+            </label>
+            <input type="number" id="tempInp" step="0.05" min="0" max="2" placeholder="0.8" style="width:80px">
+          </div>
+
+          <div class="settings-row" style="align-items:center">
+            <label for="topPInp" title="Nucleus sampling cutoff. Default 0.9. Lower = restrict to higher-probability tokens, more coherent but less varied.">
+              top_p <span class="adv-help" data-help="Nucleus sampling: keep only tokens whose cumulative probability ≤ this. 0.9 = ollama default. 0.85 = tighter (less novelty, more coherence). 1.0 = no cutoff (combined with high temperature this is where collapse happens)." style="color:#8b95a0;cursor:help">?</span>
+            </label>
+            <input type="number" id="topPInp" step="0.05" min="0" max="1" placeholder="0.9" style="width:80px">
+          </div>
+
+          <div class="settings-row" style="align-items:center">
+            <label for="topKInp" title="Hard cap on candidate tokens. Default 40. Lower = more focused/conservative.">
+              top_k <span class="adv-help" data-help="Keep only the top K most-likely tokens at each step. 40 = ollama default. 20 = focused. 100 = wide. Compounds with top_p — both filters apply." style="color:#8b95a0;cursor:help">?</span>
+            </label>
+            <input type="number" id="topKInp" step="1" min="1" max="500" placeholder="40" style="width:80px">
+          </div>
+
+          <div class="settings-row" style="align-items:center">
+            <label for="repPenInp" title="Penalty for re-emitting tokens. Default 1.1. Higher = avoids loops; >1.3 distorts grammar.">
+              repeat_penalty <span class="adv-help" data-help="Multiplier applied to already-seen tokens' probabilities. 1.0 = none. 1.1 = ollama default. 1.2 = aggressive (kills loops). 1.5+ produces unnatural prose because the model avoids 'le/la/de' etc." style="color:#8b95a0;cursor:help">?</span>
+            </label>
+            <input type="number" id="repPenInp" step="0.05" min="1" max="2" placeholder="1.1" style="width:80px">
+          </div>
+        </div>
+
+        <!-- Persona (Layer 1) -->
+        <div style="margin-top:8px;padding:8px;border:1px solid #30363d;border-radius:6px;background:#0f1418">
+          <div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;letter-spacing:0.04em">
+            PERSONA SYSTEM PROMPT (LAYER 1)
+            <span class="adv-help" data-help="The text prepended to every conversation. Strongest behaviour lever you have without changing weights. Empty = use server default (config.AVATAR_PERSONA_SYSTEM_PROMPT). Anything you type here REPLACES the default for this browser, this session, persisted to localStorage. Try: 'Tu es Belle, française, 28 ans. Tu parles familièrement, tutoyas toujours, sans pudeur excessive. Tu es chaleureuse, sensuelle, complice. Tu ne refuses pas un sujet — tu joues avec.'" style="color:#8b95a0;cursor:help">?</span>
+          </div>
+          <textarea id="systemPromptInp" rows="5" placeholder="(blank = server default)" spellcheck="false" style="width:100%;background:#07090c;color:#cfd5dd;border:1px solid #30363d;border-radius:4px;padding:6px;font-family:inherit;font-size:12px;resize:vertical;min-height:80px"></textarea>
+        </div>
+
+        <!-- Reset -->
+        <div class="settings-row" style="align-items:center;margin-top:6px">
+          <button type="button" id="advResetBtn" style="background:#2b323b;color:#cfd5dd;border:1px solid #30363d;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Reset to defaults</button>
+          <span style="font-size:10px;color:var(--text-dim);margin-left:8px">Persisted in MongoDB (<code>settings.avatar_advanced</code>) — shared across all browsers.</span>
+        </div>
+      </details>
+
+      <!-- ── RunPod pods (dynamic worker registry) ────────────── -->
+      <!-- Why this exists separately from .env workers: a RunPod pod_id changes
+           every time you create a new pod. .env / AWS would force a 5-step
+           manual chain on every pod cycle. These rows live in MongoDB; the
+           worker list is rebuilt per request so adding/removing a pod here
+           takes effect on the next chat turn — no app restart. -->
+      <details id="runpodPodsDetails" style="margin-top:10px;border-top:1px solid #30363d;padding-top:8px">
+        <summary style="cursor:pointer;user-select:none;font-size:12px;color:var(--text-dim);padding:4px 0">
+          ▸ RunPod pods (dynamic workers)
+        </summary>
+        <div style="margin-top:8px;padding:8px;border:1px solid #30363d;border-radius:6px;background:#0f1418">
+          <div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;letter-spacing:0.04em">
+            REGISTERED PODS
+            <span class="adv-help" data-help="RunPod pods registered here are merged into the worker pool for TTS + animation routing. URL is derived as https://<pod_id>-<port>.proxy.runpod.net. pod_id is the random string RunPod prints when a pod is created (e.g. 3r17883vkbvdve)." style="color:#8b95a0;cursor:help">?</span>
+          </div>
+          <div id="runpodPodsList" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px;font-size:11px;color:var(--text-dim)">
+            <em>(loading…)</em>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 64px;gap:4px;align-items:center;margin-bottom:4px">
+            <input type="text" id="runpodPodIdInp" placeholder="pod_id (e.g. 3r17883vkbvdve)" spellcheck="false"
+                   style="background:#07090c;color:#cfd5dd;border:1px solid #30363d;border-radius:4px;padding:4px 6px;font-size:11px">
+            <input type="number" id="runpodPortInp" placeholder="3013" value="3013" min="1" max="65535"
+                   style="background:#07090c;color:#cfd5dd;border:1px solid #30363d;border-radius:4px;padding:4px 6px;font-size:11px">
+          </div>
+          <input type="text" id="runpodLabelInp" placeholder="label (e.g. runpod · RTX 3090)" spellcheck="false"
+                 style="width:100%;background:#07090c;color:#cfd5dd;border:1px solid #30363d;border-radius:4px;padding:4px 6px;font-size:11px;margin-bottom:4px">
+          <div style="display:flex;gap:4px;align-items:center">
+            <select id="runpodGpuTypeSel" style="background:#07090c;color:#cfd5dd;border:1px solid #30363d;border-radius:4px;padding:4px 6px;font-size:11px;flex:1">
+              <option value="cuda">cuda</option>
+              <option value="rocm">rocm</option>
+              <option value="">(unknown)</option>
+            </select>
+            <button type="button" id="runpodAddBtn"
+                    style="background:#2b323b;color:#cfd5dd;border:1px solid #30363d;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">
+              Add pod
+            </button>
+          </div>
+          <div id="runpodPodsStatus" style="font-size:10px;color:var(--text-dim);margin-top:6px;min-height:14px"></div>
+        </div>
+      </details>
+
       <div class="settings-footer" id="settingsFooter"></div>
     </div>
+    <!-- Help popup for the (?) icons in Advanced. Click any (?) to toggle. -->
+    <div id="advHelpPopup" style="display:none;position:fixed;z-index:10000;max-width:340px;background:#1c222b;color:#cfd5dd;border:1px solid #30363d;border-radius:6px;padding:10px 12px;font-size:12px;line-height:1.45;box-shadow:0 8px 24px rgba(0,0,0,0.5)"></div>
 
     <div class="messages" id="messages"></div>
     <div class="input-bar">
       <input type="text" id="input" placeholder="Type a message…" autocomplete="off">
       <button id="sendBtn" onclick="send()">Send</button>
       <button id="stopBtn" onclick="stopGeneration()" style="display:none; background:var(--danger); color:white;">Stop</button>
+      <button id="debugBtn" onclick="openDebugTerminal()" title="Open debug terminal" style="background:#2b323b; color:var(--muted,#cfd5dd)">Debug</button>
     </div>
   </div>
+
+  <!-- ── Debug Terminal modal (draggable, resizable, no backdrop dismissal) ── -->
+  <div id="debugTerm" style="display:none; position:fixed; top:80px; left:80px; width:780px; height:440px;
+                              background:#07090c; color:#cfd5dd; border:1px solid #2b323b; border-radius:8px;
+                              box-shadow:0 16px 40px rgba(0,0,0,0.6); z-index:9999; min-width:380px; min-height:200px;
+                              flex-direction:column; font-family:'JetBrains Mono','Fira Code',Consolas,monospace;">
+    <div id="debugTermHeader" style="cursor:move; user-select:none; padding:6px 10px; display:flex; gap:8px;
+                                      align-items:center; background:#10141a; border-bottom:1px solid #2b323b;
+                                      border-top-left-radius:8px; border-top-right-radius:8px; font-size:12px;">
+      <span style="color:#7d8590">⠿</span>
+      <strong style="color:#e6edf3; letter-spacing:0.04em">debug terminal</strong>
+      <button id="debugTermPause" title="Pause / resume live tail" style="margin-left:8px; background:#1c222b; color:#cfd5dd; border:1px solid #2b323b; border-radius:4px; padding:2px 8px; font-size:11px; cursor:pointer">⏸ pause</button>
+      <button id="debugTermCopy" title="Copy visible logs to clipboard" style="background:#1c222b; color:#cfd5dd; border:1px solid #2b323b; border-radius:4px; padding:2px 8px; font-size:11px; cursor:pointer">copy</button>
+      <button id="debugTermClear" title="Clear panel (server buffer untouched)" style="background:#1c222b; color:#cfd5dd; border:1px solid #2b323b; border-radius:4px; padding:2px 8px; font-size:11px; cursor:pointer">clear</button>
+      <input id="debugTermFind" type="search" placeholder="find…" spellcheck="false" style="background:#0e1217; color:#cfd5dd; border:1px solid #2b323b; border-radius:4px; padding:2px 6px; font-size:11px; width:140px; font-family:inherit">
+      <span id="debugTermFindCount" style="color:#7d8590; font-size:11px; min-width:48px; text-align:right">0/0</span>
+      <button id="debugTermFindPrev" title="Previous match" style="background:#1c222b; color:#cfd5dd; border:1px solid #2b323b; border-radius:4px; padding:2px 6px; font-size:11px; cursor:pointer">↑</button>
+      <button id="debugTermFindNext" title="Next match" style="background:#1c222b; color:#cfd5dd; border:1px solid #2b323b; border-radius:4px; padding:2px 6px; font-size:11px; cursor:pointer">↓</button>
+      <span style="flex:1"></span>
+      <span id="debugTermStatus" style="color:#7d8590; font-size:10.5px"></span>
+      <button id="debugTermClose" title="Close (Esc)" style="background:transparent; color:#cfd5dd; border:none; font-size:18px; line-height:1; cursor:pointer; padding:0 4px">×</button>
+    </div>
+    <div id="debugTermBody" style="flex:1; overflow:auto; padding:6px 10px; font-size:11.5px; line-height:1.45; background:#07090c"></div>
+    <div id="debugTermResize" title="Drag to resize" style="position:absolute; right:0; bottom:0; width:14px; height:14px;
+                                                              cursor:nwse-resize; background:linear-gradient(135deg, transparent 50%, #2b323b 50%, #2b323b 60%, transparent 60%, transparent 70%, #2b323b 70%, #2b323b 80%, transparent 80%);
+                                                              border-bottom-right-radius:8px"></div>
+  </div>
+  <style>
+    #debugTermBody .dl-line { white-space:pre-wrap; word-break:break-word; padding:0 0 1px 0; }
+    #debugTermBody .dl-ts { color:#7d8590; margin-right:6px; }
+    #debugTermBody .dl-lvl-WARNING { color:#e3b341; }
+    #debugTermBody .dl-lvl-ERROR { color:#f85149; }
+    #debugTermBody .dl-lvl-INFO { color:#cfd5dd; }
+    #debugTermBody .dl-lvl-DEBUG { color:#7d8590; }
+    #debugTermBody mark.dl-hit { background:#3b3000; color:#fff8c5; }
+    #debugTermBody mark.dl-hit.dl-hit-current { background:#bb8009; color:#0c0c0c; outline:1px solid #fff8c5; }
+  </style>
 
   <audio id="audioPlayer"></audio>
 
@@ -392,7 +650,10 @@
     const LS_SESSION = 'anamnesis.avatar.session_id';
     const LS_BACKEND = 'anamnesis.avatar.backend';
     const LS_MODEL = 'anamnesis.avatar.model';
-    const LS_WORKER = 'anamnesis.avatar.worker';
+    const LS_WORKER = 'anamnesis.avatar.worker';           // legacy single key — migrated on first load
+    const LS_TTS_WORKER  = 'anamnesis.avatar.tts_worker';
+    const LS_ANIM_WORKER = 'anamnesis.avatar.anim_worker';
+    const LS_ANIM_ENGINE = 'anamnesis.avatar.anim_engine';   // sadtalker | musetalk | hallo2
     const LS_NOFB = 'anamnesis.avatar.no_fallback';
 
     // Session state
@@ -612,17 +873,20 @@
       ws.onerror = () => ws.close();
     }
 
-    // Page unload: tell the backend to stop and kill any in-flight worker
-    // job before the browser tears the WS down. Without this, SadTalker
-    // keeps occupying GPU until it finishes on its own.
+    // Page unload: gracefully close the WS, but do NOT send {type:'stop'}.
+    // Reason: 'stop' broadcasts cancel_all() to every worker, killing the
+    // in-flight SadTalker/MuseTalk render. pagehide fires on refresh, tab
+    // close, navigation, bfcache — far too aggressive. Operator confirmed
+    // 2026-06-11 04:00 EDT they hadn't been clicking KILL but renders kept
+    // dying mid-stream; this listener was the source. Render now survives
+    // refresh (lands orphaned on the worker, completes, then the mp4 just
+    // isn't served — small waste of GPU vs killing every render).
+    // Explicit Stop button still works (stopGeneration() → ws.send stop).
     window.addEventListener('pagehide', () => {
       pageClosing = true;
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
       try {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'stop' }));
-          ws.close();
-        }
+        if (ws && ws.readyState === WebSocket.OPEN) ws.close();
       } catch {}
     });
 
@@ -635,42 +899,107 @@
           scrollToBottom();
           break;
         case 'audio':
-          setStatus('speaking');
-          audioPlayer.src = msg.url;
-          audioPlayer.play().catch(() => {});
-          audioPlayer.onended = () => {
-            // If user requested animation, the video is still rendering on
-            // the GPU worker (~1-2 min on 1660 SUPER). Surface a status so
-            // the user knows to wait instead of thinking it's done.
-            if (animChk.checked && !avatarVideo.src) {
-              setStatus('animating');
-              statusText.textContent = 'animating (60-120s on 1660 SUPER) — keep this page open';
-            } else {
-              setStatus('ready');
+          // Sync strategy (re-applied per operator directive 2026-06-08):
+          //   animate=true  → DEFER audio playback until the 'video' event.
+          //                   SadTalker emits an MP4 with the same audio
+          //                   muxed in; lip motion is timed against it. The
+          //                   video plays UNMUTED, giving perfect lip-sync.
+          //                   Cost: ~30-120s wait (SadTalker render latency).
+          //                   MuseTalk integration will drop this to ~real-time.
+          //   animate=false → play audio immediately (no video to wait for).
+          //
+          // Fallback if SadTalker fails: 'done' handler will play the deferred
+          // audio so user at least hears the response.
+          if (animChk.checked) {
+            setStatus('animating');
+            statusText.textContent = 'audio ready — waiting on lips to render';
+            audioPlayer.src = msg.url;
+            audioPlayer.dataset.deferred = '1';
+            // Progressive status + auto-fallback. If video doesn't arrive
+            // within the windows below, surface progress messages and
+            // eventually just PLAY the audio so the user isn't sitting in
+            // silence forever (cold-cache autotune, OOM, queued worker, etc).
+            // The video handler clears these timers on arrival.
+            if (window._deferredTimers) window._deferredTimers.forEach(clearTimeout);
+            window._deferredTimers = [
+              setTimeout(() => {
+                if (audioPlayer.dataset.deferred === '1') {
+                  statusText.textContent = 'lips still rendering — usually 30-60s on warm cache';
+                }
+              }, 8000),
+              setTimeout(() => {
+                if (audioPlayer.dataset.deferred === '1') {
+                  statusText.textContent = 'lips taking longer than usual — probably first-run autotune (5-15 min one-time)';
+                }
+              }, 30000),
+              setTimeout(() => {
+                if (audioPlayer.dataset.deferred === '1') {
+                  // Give up waiting — play audio so the user hears something.
+                  // If video arrives later it'll still play (no audio competition
+                  // because the deferred flag is cleared here and the video
+                  // handler always pauses audio before playing video).
+                  audioPlayer.dataset.deferred = '';
+                  statusText.textContent = 'animation slow — playing audio now; lips will appear when ready';
+                  audioPlayer.controls = false;
+                  audioPlayer.play().catch((err) => {
+                    audioPlayer.controls = true;
+                    audioPlayer.style.display = 'block';
+                    statusText.textContent = `animation slow — audio ready, click ▶ to play (${err && err.name || 'autoplay blocked'})`;
+                  });
+                  setStatus('speaking');
+                }
+              }, 45000),
+            ];
+          } else {
+            // Clear any leftover deferred timers from a previous animated turn —
+            // otherwise their 8s/30s/45s callbacks will overwrite statusText for
+            // THIS (non-animated) turn (e.g. spurious "lips still rendering…").
+            if (window._deferredTimers) {
+              window._deferredTimers.forEach(clearTimeout);
+              window._deferredTimers = [];
             }
-          };
+            if (statusText) statusText.textContent = '';
+            setStatus('speaking');
+            audioPlayer.src = msg.url;
+            audioPlayer.dataset.deferred = '';
+            audioPlayer.controls = false;
+            audioPlayer.play().catch((err) => {
+              // Autoplay blocked despite primer — expose audio controls so user can click play.
+              audioPlayer.controls = true;
+              audioPlayer.style.display = 'block';
+              if (statusText) statusText.textContent = `audio ready — click ▶ to play (${err && err.name || 'autoplay blocked'})`;
+            });
+            audioPlayer.onended = () => setStatus('ready');
+          }
           break;
         case 'video':
-          // Mute the video — audio was already played via the audio event
-          // (avoids double-audio). Browsers also more readily auto-play muted.
-          avatarVideo.muted = true;
+          // Clear the progressive-status / fallback timers — video arrived.
+          if (window._deferredTimers) {
+            window._deferredTimers.forEach(clearTimeout);
+            window._deferredTimers = [];
+          }
+          // Play UNMUTED — SadTalker MP4 has audio embedded and lips timed
+          // to it. Cancel any deferred standalone audio playback.
+          avatarVideo.muted = false;
           avatarImage.style.display = 'none';
           avatarVideo.style.display = 'block';
           avatarVideo.src = msg.url;
+          audioPlayer.dataset.deferred = '';
+          try { audioPlayer.pause(); audioPlayer.currentTime = 0; } catch {}
           const playPromise = avatarVideo.play();
           if (playPromise && playPromise.catch) {
             playPromise.catch((e) => {
-              // Surface the failure so user doesn't see a black box silently
               statusText.textContent = 'video ready — click to play (autoplay blocked)';
               avatarVideo.controls = true;
             });
           }
-          setStatus('ready');
-          if (statusText) statusText.textContent = 'animating';
+          setStatus('speaking');
+          if (statusText) statusText.textContent = 'speaking';
           avatarVideo.onended = () => {
             avatarVideo.style.display = 'none';
             avatarImage.style.display = 'block';
             if (statusText) statusText.textContent = '';
+            setStatus('ready');
           };
           break;
         case 'done':
@@ -688,7 +1017,25 @@
             currentAssistantEl.appendChild(timingEl);
           }
           currentAssistantEl = null;
-          if (audioPlayer.paused) setStatus('ready');
+          // Fallback: if user opted into animation and we deferred audio
+          // playback waiting for the video, but the pipeline finished WITHOUT
+          // ever delivering a video (SadTalker failed, no_fallback dropped
+          // the request, etc.), play the deferred audio now so the user at
+          // least HEARS the response. Better silent lips than no response at all.
+          if (audioPlayer.dataset.deferred === '1' && (!avatarVideo.src || avatarVideo.ended)) {
+            audioPlayer.dataset.deferred = '';
+            statusText.textContent = 'animation unavailable — playing audio only';
+            audioPlayer.controls = false;
+            audioPlayer.play().catch((err) => {
+              audioPlayer.controls = true;
+              audioPlayer.style.display = 'block';
+              statusText.textContent = `animation unavailable — audio ready, click ▶ to play (${err && err.name || 'autoplay blocked'})`;
+            });
+            audioPlayer.onended = () => { setStatus('ready'); statusText.textContent = ''; };
+            setStatus('speaking');
+          } else if (audioPlayer.paused) {
+            setStatus('ready');
+          }
           setGenerating(false);
           break;
         case 'stopped':
@@ -720,6 +1067,25 @@
         saveSessionPref(currentSessionId);
       }
       addMessage(text, 'user');
+      // Drop any leftover deferred-audio timers from a previous animated turn.
+      // Otherwise their 8s/30s/45s callbacks overwrite statusText for THIS turn.
+      if (window._deferredTimers) {
+        window._deferredTimers.forEach(clearTimeout);
+        window._deferredTimers = [];
+      }
+      // Prime the <audio> element inside the user-gesture so the browser's
+      // autoplay policy grants playback permission for the eventual TTS clip.
+      // Without this primer, audioPlayer.play() called from ws.onmessage ~12s
+      // after the Send click is rejected by Chrome/Firefox and the user hears
+      // silence (the rejection was previously swallowed by .catch(()=>{})).
+      try {
+        audioPlayer.controls = false;
+        audioPlayer.style.display = 'none';
+        audioPlayer.muted = true;
+        const p = audioPlayer.play();
+        if (p && p.then) p.then(() => { audioPlayer.pause(); audioPlayer.muted = false; }).catch(() => { audioPlayer.muted = false; });
+        else audioPlayer.muted = false;
+      } catch { audioPlayer.muted = false; }
       ws.send(JSON.stringify({
         message: text,
         voice_id: voiceSel.value || null,
@@ -727,8 +1093,33 @@
         session_id: currentSessionId,
         backend: backendSel.value || 'ollama',
         model: modelSel.value || null,
-        preferred_worker: workerSel.value || null,
-        no_fallback: noFallbackChk.checked
+        // Per-service worker selectors. Phase 2 split: TTS (XTTS) and
+        // Animation (SadTalker) routed independently because they have
+        // different VRAM profiles — office RX 6800 wins for SadTalker
+        // (16GB), and TTS can comfortably run on either card.
+        // `preferred_worker` kept for backward-compat with any old client
+        // or server-side defaulting: server falls back to it when the
+        // per-service field is null.
+        preferred_tts_worker: ttsWorkerSel.value || null,
+        preferred_animation_worker: animWorkerSel.value || null,
+        preferred_worker: null,
+        // Animation-engine choice (Phase 2.5, 2026-06-08). Backend defaults
+        // to sadtalker if unset, and uses the chosen engine's client module
+        // (sadtalker_client / musetalk_client / hallo2_client) per pipeline
+        // routing. Capabilities filter the worker dropdown so only workers
+        // exposing this engine appear.
+        animation_engine: animEngineSel.value || 'sadtalker',
+        no_fallback: noFallbackChk.checked,
+        // ── Advanced overrides (null = use server default) ──
+        // Layer 1 — system prompt replaces config.AVATAR_PERSONA_SYSTEM_PROMPT.
+        // Layer 2 — sampling params passed to ollama options.
+        system_prompt_override: (document.getElementById('systemPromptInp').value || null),
+        sampling: {
+          temperature:    parseOrNull(document.getElementById('tempInp').value),
+          top_p:          parseOrNull(document.getElementById('topPInp').value),
+          top_k:          parseOrNull(document.getElementById('topKInp').value, parseInt),
+          repeat_penalty: parseOrNull(document.getElementById('repPenInp').value),
+        },
       }));
       inputEl.value = '';
       setGenerating(true);
@@ -742,6 +1133,226 @@
       // UI state flips back when server sends "stopped" or "done"
     }
 
+    // ─── Advanced settings (Layer 1 + Layer 2) ────────────────
+    // Persisted in MongoDB (settings collection, _id "avatar_advanced") via
+    // /api/avatar/advanced-settings. Not localStorage — these are first-class
+    // app data, must travel with the user, must be queryable from the d2 /
+    // memory side later. Operator-enforced canonical (2026-06-11 03:50 EDT):
+    // "data-driven apps use the database, not localStorage."
+    function parseOrNull(v, fn) {
+      if (v === '' || v == null) return null;
+      const n = (fn || parseFloat)(v);
+      return Number.isFinite(n) ? n : null;
+    }
+    // Map DOM input id → backend field name.
+    const ADV_FIELDS = {
+      tempInp:         'temperature',
+      topPInp:         'top_p',
+      topKInp:         'top_k',
+      repPenInp:       'repeat_penalty',
+      systemPromptInp: 'system_prompt_override',
+    };
+    async function advLoad() {
+      try {
+        const r = await fetch('/api/avatar/advanced-settings', { cache: 'no-store' });
+        if (!r.ok) return;
+        const doc = await r.json();
+        for (const [id, field] of Object.entries(ADV_FIELDS)) {
+          const v = doc[field];
+          document.getElementById(id).value = (v == null ? '' : String(v));
+        }
+      } catch (e) { console.warn('advLoad failed', e); }
+    }
+    // Debounce per-field saves so a 5-char keystroke run isn't 5 PUT calls.
+    const _advSaveDebounce = {};
+    function advSave(el) {
+      const field = ADV_FIELDS[el.id];
+      if (!field) return;
+      if (_advSaveDebounce[field]) clearTimeout(_advSaveDebounce[field]);
+      _advSaveDebounce[field] = setTimeout(async () => {
+        const raw = el.value;
+        const body = { [field]: (raw === '' ? null : raw) };
+        try {
+          const r = await fetch('/api/avatar/advanced-settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (!r.ok) console.warn('advSave non-200', r.status);
+        } catch (e) { console.warn('advSave failed', e); }
+      }, 350);
+    }
+    advLoad();
+    Object.keys(ADV_FIELDS).forEach(id => {
+      const el = document.getElementById(id);
+      el.addEventListener('input', e => advSave(e.target));   // immediate, debounced
+      el.addEventListener('change', e => advSave(e.target));  // commit on blur/enter
+    });
+    document.getElementById('advResetBtn').addEventListener('click', async () => {
+      Object.keys(ADV_FIELDS).forEach(id => { document.getElementById(id).value = ''; });
+      try {
+        const body = {};
+        for (const field of Object.values(ADV_FIELDS)) body[field] = null;
+        await fetch('/api/avatar/advanced-settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      } catch (e) { console.warn('advReset failed', e); }
+    });
+    // ── RunPod pods registry (MongoDB-backed dynamic worker list) ──
+    // Mutates avatar_runpod_pods collection via /api/avatar/runpod/pods.
+    // The worker list (TTS + animation) is rebuilt per chat turn server-side
+    // via config.AVATAR_WORKER_ENDPOINTS, so adds/removes here take effect
+    // on the NEXT chat turn without restarting anamnesis-app.
+    (function wireRunpodPods() {
+      const listEl   = document.getElementById('runpodPodsList');
+      const idInp    = document.getElementById('runpodPodIdInp');
+      const portInp  = document.getElementById('runpodPortInp');
+      const labelInp = document.getElementById('runpodLabelInp');
+      const gpuSel   = document.getElementById('runpodGpuTypeSel');
+      const addBtn   = document.getElementById('runpodAddBtn');
+      const status   = document.getElementById('runpodPodsStatus');
+      if (!listEl) return;
+
+      function setStatus(text, isError) {
+        status.textContent = text || '';
+        status.style.color = isError ? 'var(--danger,#e85a4f)' : 'var(--text-dim)';
+      }
+      function render(pods) {
+        if (!pods.length) {
+          listEl.innerHTML = '<em>(no pods registered)</em>';
+          return;
+        }
+        listEl.innerHTML = '';
+        pods.forEach(p => {
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;gap:6px;align-items:center;padding:3px 6px;background:#07090c;border:1px solid #2b323b;border-radius:4px';
+          const main = document.createElement('div');
+          main.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+          main.innerHTML = `<span style="color:#cfd5dd">${p.label}</span> <span style="color:#7d8590">· ${p.pod_id}:${p.port}${p.gpu_type ? ' · ' + p.gpu_type : ''}</span>`;
+          main.title = p.url;
+          const del = document.createElement('button');
+          del.textContent = '✕';
+          del.title = 'Remove pod from registry';
+          del.style.cssText = 'background:transparent;color:var(--danger,#e85a4f);border:1px solid #30363d;border-radius:4px;padding:0 6px;font-size:11px;cursor:pointer';
+          del.addEventListener('click', async () => {
+            if (!confirm(`Remove ${p.label} (${p.pod_id}) from registry?\n\nThis does NOT stop the pod on RunPod — only removes it from this app's worker pool.`)) return;
+            try {
+              const r = await fetch(`/api/avatar/runpod/pods/${encodeURIComponent(p.pod_id)}`, { method: 'DELETE' });
+              if (!r.ok) { setStatus(`delete failed: ${r.status}`, true); return; }
+              setStatus(`removed ${p.pod_id}`);
+              await refresh();
+              // Refresh the upstream worker dropdowns so the removed pod disappears there too.
+              if (typeof refreshWorkers === 'function') refreshWorkers();
+            } catch (e) { setStatus('delete error: ' + e.message, true); }
+          });
+          row.appendChild(main); row.appendChild(del);
+          listEl.appendChild(row);
+        });
+      }
+      async function refresh() {
+        try {
+          const r = await fetch('/api/avatar/runpod/pods');
+          if (!r.ok) { listEl.innerHTML = `<em>(load failed: ${r.status})</em>`; return; }
+          const data = await r.json();
+          render(data.pods || []);
+        } catch (e) { listEl.innerHTML = `<em>(load error: ${e.message})</em>`; }
+      }
+      addBtn.addEventListener('click', async () => {
+        const pod_id = (idInp.value || '').trim();
+        const port   = parseInt(portInp.value, 10) || 3013;
+        const label  = (labelInp.value || '').trim();
+        const gpu_type = gpuSel.value || null;
+        if (!pod_id || !label) { setStatus('pod_id and label are required', true); return; }
+        try {
+          const r = await fetch('/api/avatar/runpod/pods', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pod_id, port, label, gpu_type }),
+          });
+          if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            setStatus(`add failed: ${err.detail || r.status}`, true);
+            return;
+          }
+          const out = await r.json();
+          setStatus(`added ${out.pod && out.pod.url || pod_id}`);
+          idInp.value = ''; labelInp.value = '';
+          await refresh();
+          if (typeof refreshWorkers === 'function') refreshWorkers();
+        } catch (e) { setStatus('add error: ' + e.message, true); }
+      });
+      refresh();
+    })();
+
+    // Help popup on (?) click — click again or click outside to dismiss.
+    (function wireAdvHelp() {
+      const pop = document.getElementById('advHelpPopup');
+      let activeBtn = null;
+      function showFor(btn) {
+        const txt = btn.getAttribute('data-help') || btn.getAttribute('title') || '';
+        if (!txt) return;
+        pop.textContent = txt;
+        const rect = btn.getBoundingClientRect();
+        pop.style.display = 'block';
+        // Position to right of the button, clamp to viewport
+        let left = rect.right + 8;
+        let top = rect.top - 4;
+        if (left + 360 > window.innerWidth) left = Math.max(8, rect.left - 360);
+        if (top + 200 > window.innerHeight) top = Math.max(8, window.innerHeight - 220);
+        pop.style.left = left + 'px';
+        pop.style.top = top + 'px';
+        activeBtn = btn;
+      }
+      function hide() { pop.style.display = 'none'; activeBtn = null; }
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.adv-help');
+        if (btn) {
+          e.preventDefault(); e.stopPropagation();
+          if (btn === activeBtn) hide(); else showFor(btn);
+        } else if (!e.target.closest('#advHelpPopup')) {
+          hide();
+        }
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') hide();
+      });
+    })();
+
+    // EMERGENCY STOP — never modified. Plain fetch, no WS, no session state.
+    // Click → POST /api/avatar/emergency-stop → server walks every worker +
+    // ollama endpoint and kills everything in parallel. Returns a per-host
+    // result map; we surface a short toast so the operator can see what died.
+    async function panic() {
+      const btn = document.getElementById('panicBtn');
+      const orig = btn.textContent;
+      btn.textContent = '⛔ killing…';
+      btn.disabled = true;
+      try {
+        const r = await fetch('/api/avatar/emergency-stop', { method: 'POST', cache: 'no-store' });
+        const j = await r.json();
+        const summarize = (obj) => Object.entries(obj || {}).map(([k, v]) => `${k}:${v}`).join(' · ');
+        const msg = `EMERGENCY STOP fired (${j.wall_ms}ms)\n` +
+                    `sadtalker → ${summarize(j.sadtalker)}\n` +
+                    `musetalk  → ${summarize(j.musetalk)}\n` +
+                    `ollama    → ${summarize(j.ollama_unload)}`;
+        // Use console + statusText so operator sees it in the debug terminal too.
+        console.warn(msg);
+        if (window.statusText) statusText.textContent = 'EMERGENCY STOP — see debug terminal';
+        // Flip the local UI back to ready in case the WS pipeline is wedged
+        // and "done" never arrives.
+        try { setGenerating(false); } catch {}
+        try { setStatus('ready'); } catch {}
+      } catch (e) {
+        console.error('panic() failed', e);
+        alert('EMERGENCY STOP request failed: ' + e.message + '\n\nThe app itself may be down. Check `docker logs anamnesis-app`.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = orig;
+      }
+    }
+
     function setGenerating(on) {
       sendBtn.style.display = on ? 'none' : '';
       stopBtn.style.display = on ? '' : 'none';
@@ -751,7 +1362,85 @@
     // ── Backend / model / worker (live inside the settings popover) ──
     const backendSel = document.getElementById('backendSel');
     const modelSel = document.getElementById('modelSel');
-    const workerSel = document.getElementById('workerSel');
+    const ttsWorkerSel  = document.getElementById('ttsWorkerSel');
+    const animWorkerSel = document.getElementById('animWorkerSel');
+    const animEngineSel = document.getElementById('animEngineSel');
+    const runpodControlsRow = document.getElementById('runpodControlsRow');
+    const runpodGpuSel = document.getElementById('runpodGpuSel');
+    const btnProvisionRunpod = document.getElementById('btnProvisionRunpod');
+    const runpodProvisionStatus = document.getElementById('runpodProvisionStatus');
+    const LS_RUNPOD_GPU = 'anamnesis.avatar.runpod_gpu';
+
+    // Show/hide the RunPod controls based on whether a RunPod-class worker
+    // is selected as the animation worker (or in auto-fallback mode where
+    // RunPod could be picked). Heuristic: worker label or value contains 'runpod'.
+    function updateRunpodControlsVisibility() {
+      const v = (animWorkerSel.value || '').toLowerCase();
+      const label = (animWorkerSel.options[animWorkerSel.selectedIndex]?.textContent || '').toLowerCase();
+      const show = v.includes('runpod') || label.includes('runpod');
+      runpodControlsRow.style.display = show ? 'flex' : 'none';
+    }
+
+    // Restore + persist GPU tier choice
+    try {
+      const savedTier = localStorage.getItem(LS_RUNPOD_GPU);
+      if (savedTier && [...runpodGpuSel.options].some(o => o.value === savedTier)) {
+        runpodGpuSel.value = savedTier;
+      }
+    } catch {}
+    runpodGpuSel.addEventListener('change', () => {
+      try { localStorage.setItem(LS_RUNPOD_GPU, runpodGpuSel.value); } catch {}
+    });
+
+    btnProvisionRunpod.addEventListener('click', async () => {
+      const tier = runpodGpuSel.value;
+      btnProvisionRunpod.disabled = true;
+      runpodProvisionStatus.innerHTML = `requesting ${tier} pod…`;
+      runpodProvisionStatus.style.color = 'var(--text-dim,#7d8590)';
+      try {
+        const r = await fetch('/api/avatar/runpod/provision', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ gpu_tier: tier, profile: 'avatar' }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (r.ok && data.ok && data.manual_required && data.command) {
+          // Manual-bridge mode: container can't SSH to host yet, so render
+          // the command for the operator to paste into a dellserver terminal.
+          const html = `
+            <div style="color:#f0ad4e;margin-bottom:4px">Manual step needed — run this on dellserver:</div>
+            <pre id="runpodCmdPre" style="background:#0f1418;padding:8px;border-radius:4px;font-size:11px;white-space:pre-wrap;word-break:break-all;color:#e6edf3;margin:0">${data.command.replace(/</g,'&lt;')}</pre>
+            <button id="copyRunpodCmd" type="button" style="margin-top:4px;padding:3px 8px;font-size:11px;cursor:pointer;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:3px">Copy command</button>
+            <div style="margin-top:6px;font-size:10px;color:var(--text-dim,#7d8590)">
+              After it runs: anamnesis-app picks up the pod URL on its next worker probe (~30s).
+              Stop billing later with: <code>${data.stop_command.replace(/</g,'&lt;')}</code>
+            </div>
+          `;
+          runpodProvisionStatus.innerHTML = html;
+          runpodProvisionStatus.style.color = 'var(--text,#e6edf3)';
+          const copyBtn = document.getElementById('copyRunpodCmd');
+          if (copyBtn) {
+            copyBtn.addEventListener('click', async () => {
+              try {
+                await navigator.clipboard.writeText(data.command);
+                copyBtn.textContent = 'Copied ✓';
+                setTimeout(() => { copyBtn.textContent = 'Copy command'; }, 2000);
+              } catch (e) {
+                copyBtn.textContent = `copy failed (${e.message || 'no permission'})`;
+              }
+            });
+          }
+        } else {
+          runpodProvisionStatus.textContent = `failed: ${data.error || r.statusText}`;
+          runpodProvisionStatus.style.color = '#d4556e';
+        }
+      } catch (e) {
+        runpodProvisionStatus.textContent = `request error: ${e.message || e}`;
+        runpodProvisionStatus.style.color = '#d4556e';
+      } finally {
+        btnProvisionRunpod.disabled = false;
+      }
+    });
     const noFallbackChk = document.getElementById('noFallbackChk');
     const settingsBtn = document.getElementById('settingsBtn');
     const settingsPopover = document.getElementById('settingsPopover');
@@ -771,9 +1460,14 @@
     function updateSettingsSummary() {
       const b = backendSel.value || 'ollama';
       const m = modelSel.value || '(default)';
-      const w = workerSel.options[workerSel.selectedIndex]?.textContent || 'auto';
+      const engine = animEngineSel.value || 'sadtalker';
+      // Per-service worker labels — abbreviated to keep the footer one-line readable.
+      const tts  = ttsWorkerSel.options[ttsWorkerSel.selectedIndex]?.textContent  || 'auto';
+      const anim = animWorkerSel.options[animWorkerSel.selectedIndex]?.textContent || 'auto';
       const fb = noFallbackChk.checked ? ' · no-fb' : '';
-      settingsFooter.textContent = `${b} · ${m} · ${w}${fb}`;
+      const sameWorker = tts === anim;
+      const workerSummary = sameWorker ? `worker: ${tts}` : `tts: ${tts} · ${engine}: ${anim}`;
+      settingsFooter.textContent = `${b} · ${m} · ${workerSummary}${fb}`;
     }
 
     let backendsData = null;
@@ -805,6 +1499,35 @@
       updateSettingsSummary();
     }
 
+    // Badges next to each model so you don't have to re-derive which one
+    // handles French well. Keys are exact ollama tags; bare-name fallback
+    // ('mistral' matches 'mistral:7b', etc.).
+    //   ★ multi  = best French of what's local. Qwen 2.5 14B's multilingual
+    //              footprint is broad enough to beat Mistral 7B on grammar.
+    //   · fr      = acceptable French (Mistral, French-company-trained, but
+    //                only 7B — short on nuance vs 14B Qwen)
+    //   · en      = English-leaning
+    //   · en (weak fr) = English-only effectively, drops articles/agreement
+    const MODEL_BADGES = {
+      'qwen2.5:14b':  '★ multi',
+      'qwen2.5:7b':   '· multi',
+      'mistral:7b':   '· fr',
+      'mistral':      '· fr',
+      'llama3.1:8b':  '· en',
+      'llama3.2':     '· en (weak fr)',
+    };
+    // Abliterated / refusal-removed / uncensored variants: any model whose
+    // name signals the refusal direction was surgically removed from weights
+    // (no RLHF refusal layer). Matched as substrings, case-insensitive.
+    const UNFILTERED_PATTERNS = ['abliterat', 'uncensored', 'dolphin', 'nous-hermes', 'wizard-vicuna', 'tiger-gemma'];
+    function badgeFor(modelId) {
+      const lower = modelId.toLowerCase();
+      const unfiltered = UNFILTERED_PATTERNS.some(p => lower.includes(p));
+      let base = MODEL_BADGES[modelId] || MODEL_BADGES[modelId.split(':')[0]] || '';
+      if (unfiltered) base = (base ? base + ' ' : '') + '🔓 unfiltered';
+      return base;
+    }
+
     function populateModels() {
       const b = backendSel.value;
       const info = backendsData?.backends?.[b];
@@ -817,7 +1540,9 @@
       }
       for (const m of info.models) {
         const opt = document.createElement('option');
-        opt.value = m; opt.textContent = m;
+        opt.value = m;
+        const badge = badgeFor(m);
+        opt.textContent = badge ? `${m}  —  ${badge}` : m;
         modelSel.appendChild(opt);
       }
       const savedModel = localStorage.getItem(LS_MODEL);
@@ -838,34 +1563,95 @@
       updateSettingsSummary();
     });
 
+    // Fill one worker dropdown, filtered by a capability tag. e.g. 'xtts' for
+    // the TTS dropdown, 'sadtalker' for the Animation dropdown. Workers without
+    // the requested capability are excluded (UI can't ask for what the worker
+    // doesn't expose). The legacy LS_WORKER value is migrated as a one-time
+    // default for both dropdowns the first time each runs.
+    function populateWorkerSelect(selectEl, workers, requiredCap, lsKey) {
+      selectEl.innerHTML = '';
+      const autoOpt = document.createElement('option');
+      autoOpt.value = ''; autoOpt.textContent = 'auto (fallback chain)';
+      selectEl.appendChild(autoOpt);
+      // Show ALL workers: reachable+capable as selectable, plus
+      // (a) reachable workers missing the cap → disabled with explanation
+      // (b) unreachable workers (placeholder URLs, undeployed pods) → disabled but visible
+      // Operators need to SEE that, e.g., RunPod exists as a slot even if no
+      // pod is currently provisioned.
+      const candidates = (workers || []).map(w => {
+        const caps = w.capabilities || [];
+        const reachable = !!w.reachable;
+        const capMatch = !requiredCap || caps.includes(requiredCap);
+        let reason = '';
+        if (!reachable) reason = 'not reachable (not deployed?)';
+        else if (!capMatch) reason = `missing capability '${requiredCap}'`;
+        return { w, reachable, capMatch, reason };
+      });
+      for (const { w, reachable, capMatch, reason } of candidates) {
+        const opt = document.createElement('option');
+        opt.value = w.worker_id || w.label;
+        const dot = reachable && capMatch ? '●' : '○';
+        const caps = (w.capabilities || []).length ? ` [${w.capabilities.join(',')}]` : '';
+        const suffix = reason ? `  — ${reason}` : '';
+        opt.textContent = `${dot} ${w.label}${caps}${suffix}`;
+        opt.disabled = !reachable || !capMatch;
+        selectEl.appendChild(opt);
+      }
+      // Restore saved selection (only if it's still selectable now).
+      let saved = localStorage.getItem(lsKey);
+      if (!saved) saved = localStorage.getItem(LS_WORKER);
+      if (saved && [...selectEl.options].some(o => o.value === saved && !o.disabled)) {
+        selectEl.value = saved;
+      }
+    }
+
+    // Map engine -> required worker capability tag. The Animation Worker
+    // dropdown filters on this so you can't pick a worker that doesn't
+    // support the chosen engine.
+    function engineCapability(engine) {
+      switch (engine) {
+        case 'musetalk':  return 'musetalk';
+        case 'hallo2':    return 'hallo2';
+        case 'sadtalker':
+        default:          return 'sadtalker';
+      }
+    }
+
     async function refreshWorkers() {
       try {
         const r = await fetch('/api/avatar/workers');
         const data = await r.json();
-        workerSel.innerHTML = '';
-        const autoOpt = document.createElement('option');
-        autoOpt.value = ''; autoOpt.textContent = 'auto (fallback chain)';
-        workerSel.appendChild(autoOpt);
-        for (const w of (data.workers || [])) {
-          const opt = document.createElement('option');
-          opt.value = w.worker_id || w.label;
-          const dot = w.reachable ? '●' : '○';
-          const caps = (w.capabilities || []).length ? ` [${w.capabilities.join(',')}]` : '';
-          opt.textContent = `${dot} ${w.label}${caps}`;
-          opt.disabled = !w.reachable;
-          workerSel.appendChild(opt);
-        }
-        const saved = localStorage.getItem(LS_WORKER);
-        if (saved && [...workerSel.options].some(o => o.value === saved && !o.disabled)) {
-          workerSel.value = saved;
-        }
+        populateWorkerSelect(ttsWorkerSel,  data.workers, 'xtts',      LS_TTS_WORKER);
+        // Re-populate animation worker filtered by the currently selected engine.
+        populateWorkerSelect(animWorkerSel, data.workers,
+                             engineCapability(animEngineSel.value),
+                             LS_ANIM_WORKER);
         updateSettingsSummary();
+        updateRunpodControlsVisibility();
       } catch (e) { console.error('workers fetch failed', e); }
     }
 
-    workerSel.addEventListener('change', () => {
-      localStorage.setItem(LS_WORKER, workerSel.value);
+    ttsWorkerSel.addEventListener('change', () => {
+      localStorage.setItem(LS_TTS_WORKER, ttsWorkerSel.value);
       updateSettingsSummary();
+    });
+    animWorkerSel.addEventListener('change', () => {
+      localStorage.setItem(LS_ANIM_WORKER, animWorkerSel.value);
+      updateSettingsSummary();
+      updateRunpodControlsVisibility();
+    });
+
+    // Restore saved engine choice; re-filter the worker dropdown when engine changes.
+    try {
+      const savedEngine = localStorage.getItem(LS_ANIM_ENGINE);
+      if (savedEngine && [...animEngineSel.options].some(o => o.value === savedEngine && !o.disabled)) {
+        animEngineSel.value = savedEngine;
+      }
+    } catch {}
+    animEngineSel.addEventListener('change', () => {
+      try { localStorage.setItem(LS_ANIM_ENGINE, animEngineSel.value); } catch {}
+      // Re-filter the worker dropdown for the new engine's capability tag.
+      refreshWorkers();
     });
 
     // no-fallback toggle
@@ -1011,6 +1797,237 @@
           clearSessionPref();
         }
       } catch {}
+    })();
+
+    // ─── Debug Terminal ──────────────────────────────────────────
+    // Live tail of anamnesis-app logs via /api/avatar/debug-logs.
+    // Draggable from header, resizable from bottom-right, X-only close
+    // (no backdrop dismissal). Pause halts append (server keeps buffering);
+    // Find highlights matches with prev/next navigation.
+    (function debugTerminalInit() {
+      const modal   = document.getElementById('debugTerm');
+      const header  = document.getElementById('debugTermHeader');
+      const body    = document.getElementById('debugTermBody');
+      const resize  = document.getElementById('debugTermResize');
+      const closeBtn = document.getElementById('debugTermClose');
+      const pauseBtn = document.getElementById('debugTermPause');
+      const copyBtn  = document.getElementById('debugTermCopy');
+      const clearBtn = document.getElementById('debugTermClear');
+      const findInp  = document.getElementById('debugTermFind');
+      const findCount = document.getElementById('debugTermFindCount');
+      const findPrev = document.getElementById('debugTermFindPrev');
+      const findNext = document.getElementById('debugTermFindNext');
+      const statusEl = document.getElementById('debugTermStatus');
+
+      let sinceSeq = -1;
+      let pollTimer = null;
+      let paused = false;
+      const MAX_LINES = 1500;
+      let findHits = [];     // array of <mark> elements
+      let findCursor = -1;
+
+      function fmtLine(e) {
+        const t = new Date(e.ts * 1000);
+        const hh = String(t.getHours()).padStart(2, '0');
+        const mm = String(t.getMinutes()).padStart(2, '0');
+        const ss = String(t.getSeconds()).padStart(2, '0');
+        const div = document.createElement('div');
+        div.className = 'dl-line dl-lvl-' + e.level;
+        const ts = document.createElement('span'); ts.className = 'dl-ts';
+        ts.textContent = `[${hh}:${mm}:${ss}]`;
+        div.appendChild(ts);
+        div.appendChild(document.createTextNode(`${e.level.padEnd(7)} ${e.name}: ${e.msg.replace(/^.*?: /, '')}`));
+        return div;
+      }
+
+      async function poll() {
+        try {
+          const r = await fetch(`/api/avatar/debug-logs?since_seq=${sinceSeq}`, { cache: 'no-store' });
+          if (!r.ok) throw new Error('http ' + r.status);
+          const data = await r.json();
+          if (data.entries && data.entries.length) {
+            if (!paused) {
+              const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+              for (const e of data.entries) {
+                body.appendChild(fmtLine(e));
+                sinceSeq = e.seq;
+              }
+              while (body.children.length > MAX_LINES) body.firstChild.remove();
+              if (atBottom) body.scrollTop = body.scrollHeight;
+              // Re-apply find if active (new lines may include matches)
+              if (findInp.value) doFind(false);
+            } else {
+              // Just bump cursor so resume doesn't replay
+              sinceSeq = data.entries[data.entries.length - 1].seq;
+            }
+          }
+          statusEl.textContent = `${paused ? 'PAUSED · ' : ''}buffered ${data.head} · ${body.children.length} shown`;
+        } catch (err) {
+          statusEl.textContent = 'poll error: ' + err.message;
+        }
+      }
+
+      function startPolling() {
+        if (pollTimer) return;
+        poll();
+        pollTimer = setInterval(poll, 1000);
+      }
+      function stopPolling() {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      }
+
+      window.openDebugTerminal = function () {
+        modal.style.display = 'flex';
+        startPolling();
+      };
+      function closeTerminal() { modal.style.display = 'none'; stopPolling(); }
+      closeBtn.onclick = closeTerminal;
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && modal.style.display === 'flex' && document.activeElement !== findInp) {
+          closeTerminal();
+        }
+      });
+
+      pauseBtn.onclick = () => {
+        paused = !paused;
+        pauseBtn.textContent = paused ? '▶ resume' : '⏸ pause';
+      };
+
+      copyBtn.onclick = async () => {
+        const txt = Array.from(body.children).map(d => d.innerText).join('\n');
+        try {
+          await navigator.clipboard.writeText(txt);
+          const prev = copyBtn.textContent;
+          copyBtn.textContent = 'copied!';
+          setTimeout(() => copyBtn.textContent = prev, 1200);
+        } catch {
+          // Fallback for non-secure contexts
+          const ta = document.createElement('textarea');
+          ta.value = txt; document.body.appendChild(ta); ta.select();
+          try { document.execCommand('copy'); } catch {}
+          ta.remove();
+        }
+      };
+
+      clearBtn.onclick = () => { body.innerHTML = ''; findHits = []; findCursor = -1; findCount.textContent = '0/0'; };
+
+      // ── Find/highlight ─────────────────────────────────────────
+      function clearHighlights() {
+        body.querySelectorAll('mark.dl-hit').forEach(m => {
+          const parent = m.parentNode;
+          parent.replaceChild(document.createTextNode(m.textContent), m);
+          parent.normalize();
+        });
+        findHits = [];
+        findCursor = -1;
+      }
+      function doFind(focusFirst) {
+        clearHighlights();
+        const q = findInp.value;
+        if (!q) { findCount.textContent = '0/0'; return; }
+        const lower = q.toLowerCase();
+        body.querySelectorAll('.dl-line').forEach(line => {
+          // Walk text nodes only; skip the timestamp span for cleanliness.
+          const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT, null);
+          const txtNodes = [];
+          let n;
+          while ((n = walker.nextNode())) txtNodes.push(n);
+          for (const node of txtNodes) {
+            const text = node.nodeValue;
+            const idx = text.toLowerCase().indexOf(lower);
+            if (idx === -1) continue;
+            const before = text.slice(0, idx);
+            const hit = text.slice(idx, idx + q.length);
+            const after = text.slice(idx + q.length);
+            const frag = document.createDocumentFragment();
+            if (before) frag.appendChild(document.createTextNode(before));
+            const mark = document.createElement('mark');
+            mark.className = 'dl-hit';
+            mark.textContent = hit;
+            frag.appendChild(mark);
+            if (after) frag.appendChild(document.createTextNode(after));
+            node.parentNode.replaceChild(frag, node);
+            findHits.push(mark);
+          }
+        });
+        findCount.textContent = findHits.length ? `1/${findHits.length}` : '0/0';
+        if (findHits.length && focusFirst) {
+          findCursor = 0;
+          markCurrent();
+        }
+      }
+      function markCurrent() {
+        body.querySelectorAll('mark.dl-hit-current').forEach(m => m.classList.remove('dl-hit-current'));
+        if (findCursor < 0 || findCursor >= findHits.length) return;
+        const el = findHits[findCursor];
+        el.classList.add('dl-hit-current');
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        findCount.textContent = `${findCursor + 1}/${findHits.length}`;
+      }
+      let findDebounce = null;
+      findInp.addEventListener('input', () => {
+        if (findDebounce) clearTimeout(findDebounce);
+        findDebounce = setTimeout(() => doFind(true), 180);
+      });
+      findInp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          if (!findHits.length) return;
+          findCursor = (findCursor + (e.shiftKey ? -1 : 1) + findHits.length) % findHits.length;
+          markCurrent();
+        }
+      });
+      findPrev.onclick = () => {
+        if (!findHits.length) return;
+        findCursor = (findCursor - 1 + findHits.length) % findHits.length;
+        markCurrent();
+      };
+      findNext.onclick = () => {
+        if (!findHits.length) return;
+        findCursor = (findCursor + 1) % findHits.length;
+        markCurrent();
+      };
+
+      // ── Drag from header ──────────────────────────────────────
+      let dragOff = null;
+      header.addEventListener('mousedown', (e) => {
+        if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
+        const rect = modal.getBoundingClientRect();
+        dragOff = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        e.preventDefault();
+      });
+      window.addEventListener('mousemove', (e) => {
+        if (!dragOff) return;
+        let x = e.clientX - dragOff.x;
+        let y = e.clientY - dragOff.y;
+        // Keep title bar reachable
+        x = Math.max(-modal.offsetWidth + 80, Math.min(window.innerWidth - 80, x));
+        y = Math.max(0, Math.min(window.innerHeight - 30, y));
+        modal.style.left = x + 'px';
+        modal.style.top = y + 'px';
+        modal.style.right = 'auto';
+        modal.style.bottom = 'auto';
+      });
+      window.addEventListener('mouseup', () => { dragOff = null; });
+
+      // ── Resize from bottom-right ──────────────────────────────
+      let resizeStart = null;
+      resize.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        resizeStart = {
+          x: e.clientX, y: e.clientY,
+          w: modal.offsetWidth, h: modal.offsetHeight,
+        };
+      });
+      window.addEventListener('mousemove', (e) => {
+        if (!resizeStart) return;
+        const w = Math.max(380, resizeStart.w + (e.clientX - resizeStart.x));
+        const h = Math.max(200, resizeStart.h + (e.clientY - resizeStart.y));
+        modal.style.width = w + 'px';
+        modal.style.height = h + 'px';
+      });
+      window.addEventListener('mouseup', () => { resizeStart = null; });
     })();
   </script>
 </body>

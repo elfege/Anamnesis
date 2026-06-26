@@ -130,10 +130,11 @@ SERVICES=(
 	"avatar-worker-office|office|avatar-worker-office|~/0_GENESIS_PROJECT/0_ANAMNESIS/avatar_worker/docker-compose.office.yml"
 	"anamnesis-trainer-office|office|anamnesis-trainer-office|~/0_GENESIS_PROJECT/0_ANAMNESIS/trainers/docker-compose.office.yml"
 	"anamnesis-trainer-server|server|anamnesis-trainer-server|~/0_GENESIS_PROJECT/0_ANAMNESIS/trainers/docker-compose.server.yml"
-	"d2-server|server|anamnesis-d2|~/0_GENESIS_PROJECT/0_ANAMNESIS/d2/docker-compose.yml|cuda"
-	"d2-office|office|anamnesis-d2|~/0_GENESIS_PROJECT/0_ANAMNESIS/d2/docker-compose.yml|rocm"
-	"d2-runpod|runpod|anamnesis-d2|~/0_GENESIS_PROJECT/0_ANAMNESIS/d2/docker-compose.yml|cuda"
+	"d2-inference-engine-server|server|anamnesis-d2|~/0_GENESIS_PROJECT/0_ANAMNESIS/d2/docker-compose.yml|cuda"
+	"d2-inference-engine-office|office|anamnesis-d2|~/0_GENESIS_PROJECT/0_ANAMNESIS/d2/docker-compose.yml|rocm"
 )
+# Intentionally dropped 2026-06-08 (see status.sh for rationale):
+#   avatar-worker-server, avatar-worker-rog, d2-runpod
 
 svc_field() {
 	# svc_field <index> <spec>
@@ -297,7 +298,7 @@ action_remote_workers() {
 		# engine first-class chat infra (chat → δ² Personal needs /load_lora).
 		# d2-office (ROCm, unstable per MSG-116) and d2-runpod (needs an
 		# active pod first) stay opt-in via menu option 6 / action_d2.
-		[[ "$handle" == d2-office || "$handle" == d2-runpod ]] && continue
+		[[ "$handle" == d2-inference-engine-office || "$handle" == d2-runpod ]] && continue
 		# Skip runpod-host services if no pod is currently registered.
 		# host_available("runpod") returns true only when the worker_registry
 		# has a runpod URL, so this is safe.
@@ -449,7 +450,7 @@ action_d2_register() {
 # /api/d2/runs and the dashboard δ² tab.
 action_d2_benchmark() {
 	local mode="$1"
-	local handle="${2:-d2-server}"
+	local handle="${2:-d2-inference-engine-server}"
 	local where url
 	for s in "${SERVICES[@]}"; do
 		[[ "$(svc_field 1 "$s")" == "$handle" ]] && where=$(svc_field 2 "$s")
@@ -545,25 +546,18 @@ action_restart_one() {
 }
 
 action_status() {
-	display_block "Service status"
-	printf "  %-30s %-12s %s\n" "SERVICE" "WHERE" "STATUS"
-	printf "  %-30s %-12s %s\n" "------------------------------" "----------" "--------------------------"
-	for spec in "${SERVICES[@]}"; do
-		local handle where container
-		handle=$(svc_field 1 "$spec"); where=$(svc_field 2 "$spec"); container=$(svc_field 3 "$spec")
-		local status="—"
-		if [[ "$where" == "local" ]]; then
-			status=$(docker inspect --format='{{.State.Status}}{{if .State.Health}} ({{.State.Health.Status}}){{end}}' "$container" 2>/dev/null || echo "missing")
-			[[ -z "$status" ]] && status="missing"
-		else
-			if host_available "$where"; then
-				status=$(ssh -o ConnectTimeout=3 "$where" "docker inspect --format='{{.State.Status}}' $container 2>/dev/null || echo missing" 2>/dev/null)
-			else
-				status="${DIM}host unreachable${NC}"
-			fi
-		fi
-		printf "  %-30s %-12s %b\n" "$handle" "$where" "$status"
-	done
+	# Delegated to the standalone status.sh (single source of truth for service
+	# state — also runnable as `status` alias from project root). status.sh
+	# carries the canonical service registry including TODO-marked entries
+	# (avatar-worker-server, avatar-worker-rog, d2-runpod) for visibility into
+	# what's planned vs deployed.
+	if [[ -x "$SCRIPT_DIR/status.sh" ]]; then
+		"$SCRIPT_DIR/status.sh"
+	else
+		display_block "Service status"
+		echo -e "  ${RED}status.sh not found at $SCRIPT_DIR/status.sh${NC}"
+		echo -e "  ${DIM}(was extracted from start.sh — see git log)${NC}"
+	fi
 }
 
 action_stop_all() {
@@ -627,13 +621,21 @@ menu_main() {
 		display_block "ANAMNESIS — Service Manager"
 		[[ "$TEST" == "true" ]] && echo -e "  ${YELLOW}TEST MODE — no commands will be executed${NC}"
 		echo
+		# Render live status inline before the menu so the operator sees current
+		# state without having to drill into option 4 first. Delegates to the
+		# standalone status.sh (also runnable as `status` alias from project root).
+		if [[ -x "$SCRIPT_DIR/status.sh" ]]; then
+			echo -e "  ${BOLD}Current service status${NC}"
+			"$SCRIPT_DIR/status.sh" --compact 2>/dev/null || echo -e "  ${DIM}(status.sh failed — see status.sh --help)${NC}"
+			echo
+		fi
 		# Menu printed via echo -e so ANSI color escapes are interpreted
 		# (heredocs print color vars as literal \033 strings).
 		echo -e "  ${BOLD}Chat + Avatar pipeline${NC}     ${DIM}(everyday services)${NC}"
 		echo -e "   1) Start LOCAL stack only            ${DIM}→ anamnesis-app + mongo${NC}"
 		echo -e "   2) Start FULL chat stack             ${DIM}→ local + avatar-workers + trainers (all hosts)${NC}"
 		echo -e "   3) Restart one service…              ${DIM}→ pick any specific container${NC}"
-		echo    "   4) Show status of all services"
+		echo -e "   4) Refresh status table              ${DIM}→ full table via status.sh${NC}"
 		echo -e "   5) Stop everything                    ${DIM}→ local + remote (excl. δ²)${NC}"
 		echo
 		echo -e "  ${BOLD}δ² engine${NC}                    ${DIM}(continual-learning research, opt-in)${NC}"
@@ -731,8 +733,8 @@ else
 		d2:all)    action_d2 all ;;
 		d2:smoke)  action_d2 server smoke ;;
 		d2:full)   action_d2 server full ;;
-		d2-bench:smoke) action_d2_benchmark smoke d2-server ;;
-		d2-bench:full)  action_d2_benchmark full  d2-server ;;
+		d2-bench:smoke) action_d2_benchmark smoke d2-inference-engine-server ;;
+		d2-bench:full)  action_d2_benchmark full  d2-inference-engine-server ;;
 		*)
 			if [[ "$ACTION" == restart:* ]]; then
 				action_restart_one "${ACTION#restart:}"

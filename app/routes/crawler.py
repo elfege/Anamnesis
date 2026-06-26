@@ -54,16 +54,70 @@ class DocTagPatternsUpdate(BaseModel):
 
 # ─── Available source mounts ─────────────────────────────────────
 
+def _read_bind_sources() -> dict[str, str]:
+    """Parse /proc/self/mountinfo and return {container_path: host_path} for /sources/* mounts.
+
+    Bind mounts surface the host source path in column 4 of mountinfo. Used so the dashboard
+    can show operators which host directory each /sources/<name> mount points at.
+    """
+    bind_sources: dict[str, str] = {}
+    try:
+        with open("/proc/self/mountinfo", "r") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 5:
+                    continue
+                host_path = parts[3]
+                container_path = parts[4]
+                if container_path.startswith("/sources/"):
+                    bind_sources[container_path] = host_path
+    except FileNotFoundError:
+        pass
+    return bind_sources
+
+
+def _count_jsonl_files(root: str, max_walk: int = 500_000) -> int:
+    """Count *.jsonl files anywhere under root. Capped at max_walk for safety on huge trees."""
+    n = 0
+    try:
+        for _, _, files in os.walk(root):
+            for fname in files:
+                if fname.endswith(".jsonl"):
+                    n += 1
+                    if n >= max_walk:
+                        return n
+    except (OSError, PermissionError):
+        pass
+    return n
+
+
 @router.get("/available-mounts")
 async def list_available_mounts():
-    """List directories under /sources/ that exist inside the container."""
+    """List directories under /sources/ that exist inside the container.
+
+    Each mount entry includes the container path, the host bind-source path (parsed from
+    /proc/self/mountinfo), and a count of JSONL files reachable under <mount>/.claude/projects/
+    (the path the JSONL ingester actually scans). Mounts with zero JSONL files are flagged
+    `jsonl_empty: true` so the UI can dim them.
+    """
     sources_root = "/sources"
+    bind_sources = _read_bind_sources()
     mounts = []
     try:
         for entry in sorted(os.listdir(sources_root)):
             full = os.path.join(sources_root, entry)
-            if os.path.isdir(full) and entry not in ("teachings", "documents"):
-                mounts.append({"name": entry, "path": full})
+            if not os.path.isdir(full) or entry in ("teachings", "documents"):
+                continue
+            jsonl_root = os.path.join(full, ".claude", "projects")
+            jsonl_count = _count_jsonl_files(jsonl_root) if os.path.isdir(jsonl_root) else 0
+            mounts.append({
+                "name": entry,
+                "path": full,
+                "host_path": bind_sources.get(full, "(unknown — not a bind mount)"),
+                "jsonl_path": jsonl_root,
+                "jsonl_file_count": jsonl_count,
+                "jsonl_empty": jsonl_count == 0,
+            })
     except FileNotFoundError:
         pass
     return {"mounts": mounts}
