@@ -69,6 +69,11 @@ class EpisodeSearchRequest(BaseModel):
         None,
         description="Filter results to episodes containing these tags"
     )
+    include_superseded: bool = Field(
+        default=False,
+        description="If True, include episodes that have been superseded by consolidation. "
+                    "Default False: search returns only canonical / unsuperseded episodes."
+    )
 
 
 # ─── Response Models ─────────────────────────────────────────────
@@ -84,6 +89,14 @@ class EpisodeOut(BaseModel):
     timestamp: datetime
     retrieval_count: int = 0
     last_retrieved: Optional[datetime] = None
+    # ─── Consolidation lineage (per nightly_episode_consolidation plan) ───
+    # superseded_by: this episode is a stale snapshot; points at the canonical
+    # successor. Default-filtered out of vector_search; retrievable for audit.
+    superseded_by: Optional[str] = None
+    superseded_at: Optional[datetime] = None
+    # consolidated_from: this episode IS the canonical merge; lists the
+    # original episode_ids that fed into it. Lineage is explicit + reversible.
+    consolidated_from: list[str] = []
 
     class Config:
         json_encoders = {

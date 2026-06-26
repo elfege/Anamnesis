@@ -438,8 +438,13 @@ async def vector_search(
     project_filter: Optional[str] = None,
     instance_filter: Optional[str] = None,
     tag_filter: Optional[list[str]] = None,
+    include_superseded: bool = False,
 ) -> list[dict]:
-    """Execute a $vectorSearch aggregation and return top-K episodes."""
+    """Execute a $vectorSearch aggregation and return top-K episodes.
+
+    By default, episodes that have been superseded by nightly consolidation
+    are filtered out. Set ``include_superseded=True`` to retrieve them for
+    audit / debug. Superseded episodes are never deleted, only flagged."""
 
     # Build pre-filter for $vectorSearch                           # only add clauses that are set
     pre_filter = {}
@@ -471,7 +476,28 @@ async def vector_search(
                 "similarity_score": {"$meta": "vectorSearchScore"},
             }
         },
-        # Priority boost — episodes tagged 'critical' or 'correction' score higher
+    ]
+
+    # Drop superseded episodes BEFORE the priority/score rerank — post-filter
+    # rather than $vectorSearch index-level filter so the search index doesn't
+    # need to be dropped/recreated for the rollout. Atlas vector search filters
+    # require the field to be declared in the index `fields` list; the post-
+    # $match is functionally equivalent at our scale (consolidation marks a
+    # small fraction of docs).
+    if not include_superseded:
+        pipeline.append({
+            "$match": {
+                "$or": [
+                    {"superseded_by": {"$exists": False}},
+                    {"superseded_by": None},
+                ]
+            }
+        })
+
+    pipeline.extend([
+        # Priority boost — episodes tagged 'critical' or 'correction' score
+        # higher; CONSOLIDATED canonical episodes also get a smaller boost
+        # (1.2x) so one merged canonical beats N near-dup fragments.
         {
             "$addFields": {
                 "priority_multiplier": {
@@ -490,7 +516,18 @@ async def vector_search(
                             ]
                         },
                         "then": 1.5,
-                        "else": 1.0,
+                        "else": {
+                            "$cond": {
+                                "if": {
+                                    "$gt": [
+                                        {"$size": {"$ifNull": ["$consolidated_from", []]}},
+                                        0,
+                                    ]
+                                },
+                                "then": 1.2,
+                                "else": 1.0,
+                            }
+                        },
                     }
                 }
             }
@@ -502,7 +539,7 @@ async def vector_search(
         },
         {"$sort": {"boosted_score": -1}},
         {"$limit": top_k},
-    ]
+    ])
 
     # Add filter to $vectorSearch stage if present
     if pre_filter:

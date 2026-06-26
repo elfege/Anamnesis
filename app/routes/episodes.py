@@ -112,6 +112,7 @@ async def search_episodes(request: EpisodeSearchRequest):
         project_filter=request.project_filter,
         instance_filter=request.instance_filter,
         tag_filter=request.tag_filter,
+        include_superseded=request.include_superseded,
     )
 
     # Track retrieval counts
@@ -131,7 +132,12 @@ async def search_episodes(request: EpisodeSearchRequest):
             timestamp=doc["timestamp"],
             retrieval_count=doc.get("retrieval_count", 0),
             last_retrieved=doc.get("last_retrieved"),
+            superseded_by=doc.get("superseded_by"),
+            superseded_at=doc.get("superseded_at"),
+            consolidated_from=doc.get("consolidated_from", []),
             similarity_score=doc.get("similarity_score", 0.0),
+            boosted_score=doc.get("boosted_score"),
+            priority_multiplier=doc.get("priority_multiplier"),
         ))
 
     logger.info(f"Search returned {len(search_results)} results")
