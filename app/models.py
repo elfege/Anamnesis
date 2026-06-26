@@ -33,6 +33,18 @@ class EpisodeCreate(BaseModel):
     )
 
 
+class EpisodePatch(BaseModel):
+    """Partial in-place edit of an existing episode. Only fields explicitly set
+    in the request are changed. `episode_id` is the key and cannot be patched
+    (rename = delete + re-POST). Setting `summary` triggers a re-embed, since
+    vector search runs over the summary's embedding."""
+    instance: Optional[str] = None
+    project: Optional[str] = None
+    summary: Optional[str] = None
+    raw_exchange: Optional[str] = None
+    tags: Optional[list[str]] = None
+
+
 class EpisodeSearchRequest(BaseModel):
     """Payload for vector similarity search."""
     query_text: str = Field(

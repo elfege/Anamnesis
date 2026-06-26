@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
-from models import EpisodeCreate, EpisodeOut, EpisodeSearchRequest, EpisodeSearchResult
+from models import EpisodeCreate, EpisodeOut, EpisodePatch, EpisodeSearchRequest, EpisodeSearchResult
 from embedding import get_embedding, get_active_model_info, get_embedding_pool
 from bson import ObjectId
 
@@ -396,6 +396,44 @@ async def delete_episode(episode_id: str):
 
     logger.info(f"Deleted episode: {episode_id}")
     return {"status": "deleted", "episode_id": episode_id}
+
+
+@router.patch("/{episode_id}", response_model=EpisodeOut)
+async def patch_episode(episode_id: str, patch: EpisodePatch):
+    """Edit fields of an existing episode in place. Only fields set in the body
+    change; `episode_id` is the key and cannot be changed here (rename = delete
+    + re-POST). Editing `summary` re-embeds it — vector search runs over that
+    text, so skipping the re-embed would silently desync search from storage."""
+    collection = get_episodes_collection()
+    existing = await collection.find_one({"episode_id": episode_id}, {"_id": 1})
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Episode '{episode_id}' not found.")
+
+    updates = patch.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields provided to update.")
+
+    # The summary drives the embedding — re-embed when it changes, else search
+    # silently drifts from the stored text.
+    if "summary" in updates:
+        logger.info(f"Re-embedding patched episode: {episode_id}")
+        updates["embedding"] = get_embedding(updates["summary"])
+
+    await collection.update_one({"episode_id": episode_id}, {"$set": updates})
+    logger.info(f"Patched episode {episode_id}: fields={list(updates.keys())}")
+
+    doc = await collection.find_one({"episode_id": episode_id}, {"embedding": 0})
+    return EpisodeOut(
+        episode_id=doc["episode_id"],
+        instance=doc["instance"],
+        project=doc["project"],
+        summary=doc["summary"],
+        raw_exchange=doc.get("raw_exchange"),
+        tags=doc.get("tags", []),
+        timestamp=doc["timestamp"],
+        retrieval_count=doc.get("retrieval_count", 0),
+        last_retrieved=doc.get("last_retrieved"),
+    )
 
 
 # ─── Blocklist (post-delete "don't re-ingest" flow) ─────────────────────
