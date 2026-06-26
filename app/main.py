@@ -38,8 +38,11 @@ from scheduler import (
     start_crawler_scheduler, stop_crawler_scheduler,
     start_jsonl_scheduler, stop_jsonl_scheduler,
     start_training_scheduler, stop_training_scheduler,
+    start_consolidation_scheduler, stop_consolidation_scheduler,
 )
 from training_pipeline import run_training_pipeline
+from consolidation import run_consolidation_cycle
+from routes.consolidation import router as consolidation_router
 from models_registry import seed_models_registry
 
 # ─── Logging ─────────────────────────────────────────────────────
@@ -121,12 +124,16 @@ async def lifespan(app: FastAPI):
     logger.info("Starting training pipeline scheduler...")
     start_training_scheduler(run_training_pipeline)
 
+    logger.info("Starting consolidation scheduler...")
+    start_consolidation_scheduler(run_consolidation_cycle)
+
     logger.info("Anamnesis ready.")
 
     yield
 
     # --- Shutdown ---
     stop_training_scheduler()
+    stop_consolidation_scheduler()
     stop_jsonl_scheduler()
     stop_crawler_scheduler()
 
@@ -187,6 +194,7 @@ app.include_router(host_router)
 app.include_router(training_catalog_router)
 app.include_router(uploads_router)
 app.include_router(settings_router)
+app.include_router(consolidation_router)
 
 
 @app.get("/health")

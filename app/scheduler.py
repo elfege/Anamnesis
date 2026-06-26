@@ -36,11 +36,13 @@ SCHEDULE_PRESETS = {
 DEFAULT_CRAWLER_SCHEDULE = "every_30m"     # crawler is lightweight, 30m is fine
 DEFAULT_JSONL_SCHEDULE = "nightly"         # JSONL default: nightly at 5 AM when using free backend
 DEFAULT_TRAINING_SCHEDULE = "nightly"      # training pipeline: nightly at 4 AM
+DEFAULT_CONSOLIDATION_SCHEDULE = "nightly" # episode consolidation: nightly at 6 AM (after JSONL settles)
 
 # Background task handles
 _crawler_schedule_task: Optional[asyncio.Task] = None
 _jsonl_schedule_task: Optional[asyncio.Task] = None
 _training_schedule_task: Optional[asyncio.Task] = None
+_consolidation_schedule_task: Optional[asyncio.Task] = None
 
 
 async def get_schedule_settings() -> dict:
@@ -49,6 +51,7 @@ async def get_schedule_settings() -> dict:
         "crawler_schedule": DEFAULT_CRAWLER_SCHEDULE,
         "jsonl_schedule": DEFAULT_JSONL_SCHEDULE,
         "training_schedule": DEFAULT_TRAINING_SCHEDULE,
+        "consolidation_schedule": DEFAULT_CONSOLIDATION_SCHEDULE,
     }
     try:
         coll = get_settings_collection()
@@ -64,7 +67,7 @@ async def get_schedule_settings() -> dict:
 
 async def update_schedule_settings(updates: dict) -> dict:
     """Update schedule settings. Returns merged settings."""
-    valid_keys = {"crawler_schedule", "jsonl_schedule", "training_schedule"}
+    valid_keys = {"crawler_schedule", "jsonl_schedule", "training_schedule", "consolidation_schedule"}
     filtered = {k: v for k, v in updates.items() if k in valid_keys}
 
     # Validate preset names
@@ -96,9 +99,10 @@ def _seconds_until_hour(target_hour: int) -> int:
 
 # Nightly target hours per scheduler
 _NIGHTLY_HOURS = {
-    "jsonl": 5,      # 5 AM
-    "training": 4,   # 4 AM (finish before JSONL ingestion)
-    "crawler": 3,    # 3 AM (rarely nightly, but just in case)
+    "jsonl": 5,         # 5 AM
+    "training": 4,      # 4 AM (finish before JSONL ingestion)
+    "crawler": 3,       # 3 AM (rarely nightly, but just in case)
+    "consolidation": 6, # 6 AM (after JSONL settles — supersedes only stable data)
 }
 
 
@@ -197,3 +201,28 @@ def stop_training_scheduler():
     if _training_schedule_task and not _training_schedule_task.done():
         _training_schedule_task.cancel()
     _training_schedule_task = None
+
+
+def start_consolidation_scheduler(run_func):
+    """Start the episode consolidation scheduler (nightly at 6 AM by default).
+
+    Runs the nightly episode supersession pass — flags near-duplicate
+    snapshots within the same session as superseded so search returns one
+    canonical episode instead of N fragments. Never deletes; lineage is
+    fully reversible via `superseded_by` / `consolidated_from`.
+    """
+    global _consolidation_schedule_task
+    if _consolidation_schedule_task and not _consolidation_schedule_task.done():
+        _consolidation_schedule_task.cancel()
+    _consolidation_schedule_task = asyncio.create_task(
+        _scheduled_loop("consolidation", run_func, "consolidation_schedule")
+    )
+    logger.info("Consolidation scheduler started")
+
+
+def stop_consolidation_scheduler():
+    """Stop the consolidation scheduler."""
+    global _consolidation_schedule_task
+    if _consolidation_schedule_task and not _consolidation_schedule_task.done():
+        _consolidation_schedule_task.cancel()
+    _consolidation_schedule_task = None
