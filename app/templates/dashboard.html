@@ -225,6 +225,45 @@
     <!-- ─── Episodes Tab ─────────────────────────────────────── -->
     <section id="tab-episodes" class="tab-content">
 
+        <!-- ─── Consolidation Panel (Regime 1 nightly supersession) ────── -->
+        <div class="settings-panel" id="consolidation-panel" style="margin-bottom:18px">
+            <h3 style="margin-top:0;display:flex;align-items:center;gap:6px">
+                Episode Consolidation
+                <span title="Nightly pass that finds near-duplicate snapshots within the same JSONL session (embedding cosine ≥0.95) and marks the older ones superseded — never deleted, fully reversible. Canonical episodes get a 1.2x search boost so they outrank fragments." style="cursor:help;color:#8b95a0">?</span>
+            </h3>
+            <p class="settings-hint" style="margin:0 0 10px 0">
+                Regime 1 (same-session near-dup) runs nightly at 6 AM. Regime 2 (cross-source LLM merge) is opt-in.
+            </p>
+            <div id="consolidation-stats" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px">
+                <div class="settings-row" style="flex-direction:column;align-items:flex-start;background:#0f1418;padding:8px 10px;border:1px solid #30363d;border-radius:6px">
+                    <span style="font-size:10px;color:var(--text-dim);letter-spacing:0.05em">SUPERSEDED</span>
+                    <span id="cons-superseded" style="font-size:18px;color:#cfd5dd;font-weight:600">—</span>
+                    <span style="font-size:10px;color:var(--text-dim)">filtered from default search</span>
+                </div>
+                <div class="settings-row" style="flex-direction:column;align-items:flex-start;background:#0f1418;padding:8px 10px;border:1px solid #30363d;border-radius:6px">
+                    <span style="font-size:10px;color:var(--text-dim);letter-spacing:0.05em">CONSOLIDATED CANONICAL</span>
+                    <span id="cons-consolidated" style="font-size:18px;color:#cfd5dd;font-weight:600">—</span>
+                    <span style="font-size:10px;color:var(--text-dim)">1.2x search boost</span>
+                </div>
+                <div class="settings-row" style="flex-direction:column;align-items:flex-start;background:#0f1418;padding:8px 10px;border:1px solid #30363d;border-radius:6px">
+                    <span style="font-size:10px;color:var(--text-dim);letter-spacing:0.05em">LAST RUN</span>
+                    <span id="cons-lastrun" style="font-size:12px;color:#cfd5dd">—</span>
+                    <span id="cons-lastrun-detail" style="font-size:10px;color:var(--text-dim)">never</span>
+                </div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <button type="button" id="cons-run-dry" class="btn-secondary" style="padding:4px 10px;font-size:11px">Dry-run pass</button>
+                <button type="button" id="cons-run-live" class="btn-secondary" style="padding:4px 10px;font-size:11px">Run live pass</button>
+                <span id="cons-schedule" style="margin-left:auto;font-size:11px;color:var(--text-dim)">schedule: <strong id="cons-schedule-val">…</strong></span>
+                <select id="cons-schedule-sel" style="background:#07090c;color:#cfd5dd;border:1px solid #30363d;border-radius:4px;padding:2px 4px;font-size:11px">
+                    <option value="disabled">disabled</option>
+                    <option value="every_6h">every 6h</option>
+                    <option value="nightly">nightly</option>
+                </select>
+                <span id="cons-status-msg" style="font-size:10px;color:var(--text-dim);min-width:120px"></span>
+            </div>
+        </div>
+
         <!-- ─── Direct Ingestion Panel ─────────────────────── -->
         <div class="settings-panel" id="upload-panel" style="margin-bottom:18px">
             <h3 style="margin-top:0;display:flex;align-items:center;gap:6px">

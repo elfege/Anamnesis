@@ -2792,6 +2792,102 @@ $(function () {
         });
     })();
 
+    /* ── Consolidation panel (Episodes tab) ───────────────────────
+     * Reads /api/consolidation/status, surfaces counts + last-run
+     * summary. Buttons trigger dry-run / live-run + schedule preset.
+     */
+    (function wireConsolidation() {
+        const $superseded = $("#cons-superseded");
+        const $consolidated = $("#cons-consolidated");
+        const $lastrun = $("#cons-lastrun");
+        const $lastrunDetail = $("#cons-lastrun-detail");
+        const $scheduleVal = $("#cons-schedule-val");
+        const $scheduleSel = $("#cons-schedule-sel");
+        const $statusMsg = $("#cons-status-msg");
+        const $btnDry = $("#cons-run-dry");
+        const $btnLive = $("#cons-run-live");
+        if (!$superseded.length) return;
+
+        function setMsg(text, isErr) {
+            $statusMsg.text(text || "").css("color", isErr ? "var(--danger,#e85a4f)" : "var(--text-dim)");
+        }
+        function fmtAgo(iso) {
+            if (!iso) return "never";
+            const t = new Date(iso).getTime();
+            if (!t) return iso;
+            const ageMin = Math.max(0, (Date.now() - t) / 60000);
+            if (ageMin < 60) return `${Math.round(ageMin)} min ago`;
+            const ageH = ageMin / 60;
+            if (ageH < 48) return `${ageH.toFixed(1)} h ago`;
+            return `${(ageH / 24).toFixed(1)} d ago`;
+        }
+        async function refresh() {
+            try {
+                const r = await fetch("/api/consolidation/status");
+                if (!r.ok) { setMsg(`status failed: ${r.status}`, true); return; }
+                const data = await r.json();
+                $superseded.text(data.currently_superseded ?? "—");
+                $consolidated.text(data.currently_consolidated ?? "—");
+                const last = (data.recent_runs || [])[0];
+                if (last) {
+                    $lastrun.text(`${last.n_superseded}/${last.n_scanned} flagged`);
+                    const dur = last.duration_ms ? `${(last.duration_ms / 1000).toFixed(1)}s` : "?";
+                    $lastrunDetail.text(`${fmtAgo(last.finished_at)} · ${dur} · sim≥${last.similarity_threshold}`);
+                } else {
+                    $lastrun.text("—"); $lastrunDetail.text("never");
+                }
+            } catch (e) { setMsg("status error: " + e.message, true); }
+            try {
+                const r = await fetch("/api/consolidation/schedule");
+                if (r.ok) {
+                    const data = await r.json();
+                    $scheduleVal.text(data.preset || "?");
+                    $scheduleSel.val(data.preset || "nightly");
+                }
+            } catch {}
+        }
+        async function runPass(dryRun) {
+            const btn = dryRun ? $btnDry : $btnLive;
+            btn.prop("disabled", true);
+            setMsg(dryRun ? "dry-run scanning…" : "live pass running (mutates Mongo)…");
+            try {
+                const r = await fetch("/api/consolidation/run", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ dry_run: dryRun }),
+                });
+                if (!r.ok) { setMsg(`run failed: ${r.status}`, true); return; }
+                const out = await r.json();
+                setMsg(`${dryRun ? "dry-run" : "live"} done: ${out.n_superseded}/${out.n_scanned} in ${(out.duration_ms / 1000).toFixed(1)}s`);
+                refresh();
+            } catch (e) { setMsg("run error: " + e.message, true); }
+            finally { btn.prop("disabled", false); }
+        }
+        $btnDry.on("click", () => runPass(true));
+        $btnLive.on("click", () => {
+            if (!confirm("Run a LIVE consolidation pass? This mutates Mongo (sets superseded_by on near-duplicate snapshots). Reversible via /api/consolidation/unsupersede/{id}.")) return;
+            runPass(false);
+        });
+        $scheduleSel.on("change", async () => {
+            const preset = $scheduleSel.val();
+            try {
+                const r = await fetch("/api/consolidation/schedule", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ preset }),
+                });
+                if (!r.ok) { setMsg(`schedule update failed: ${r.status}`, true); return; }
+                const data = await r.json();
+                $scheduleVal.text(data.preset);
+                setMsg(`schedule → ${data.preset}`);
+            } catch (e) { setMsg("schedule error: " + e.message, true); }
+        });
+        // Refresh on Episodes tab activation
+        $(".tab[data-tab='episodes']").on("click", refresh);
+        // Initial load
+        refresh();
+    })();
+
 });
 
 /* ── Training Tab ────────────────────────────────────────────────── */
