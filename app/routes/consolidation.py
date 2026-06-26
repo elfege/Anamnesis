@@ -20,6 +20,12 @@ from consolidation import (
     run_regime_1_pass,
     unsupersede,
 )
+from consolidation_r2 import (
+    R2_DEFAULT_SAMPLE_SIZE,
+    R2_MAX_CLUSTER_SIZE,
+    R2_SIMILARITY_THRESHOLD,
+    run_regime_2_pass,
+)
 from scheduler import SCHEDULE_PRESETS, get_schedule_settings, update_schedule_settings
 
 router = APIRouter(prefix="/api/consolidation", tags=["consolidation"])
@@ -57,6 +63,49 @@ async def consolidation_unsupersede(episode_id: str):
     if not ok:
         raise HTTPException(status_code=404, detail=f"Episode '{episode_id}' not flagged superseded.")
     return {"ok": True, "restored": episode_id}
+
+
+@router.post("/run_regime_2")
+async def consolidation_run_r2(body: dict | None = None):
+    """Opt-in cross-source semantic merge (Regime 2).
+
+    Body (all optional):
+      {
+        "dry_run": bool = true,           # default DRY because of LLM cost
+        "sample_size": int = 500,         # how many episodes to seed clustering
+        "similarity_threshold": float = 0.92,
+        "backend": "ollama"|"claude" = "ollama",
+        "project_filter": str|null = null # scope to a single project
+      }
+    """
+    body = body or {}
+    backend = body.get("backend", "ollama")
+    if backend not in ("ollama", "claude"):
+        raise HTTPException(status_code=400, detail="backend must be 'ollama' or 'claude'")
+    stats = await run_regime_2_pass(
+        sample_size=int(body.get("sample_size", R2_DEFAULT_SAMPLE_SIZE)),
+        similarity_threshold=float(body.get("similarity_threshold", R2_SIMILARITY_THRESHOLD)),
+        backend=backend,
+        project_filter=body.get("project_filter") or None,
+        dry_run=bool(body.get("dry_run", True)),
+    )
+    serializable = {
+        **stats,
+        "ran_at": stats["ran_at"].isoformat() if stats.get("ran_at") else None,
+        "finished_at": stats["finished_at"].isoformat() if stats.get("finished_at") else None,
+    }
+    return JSONResponse(serializable)
+
+
+@router.get("/regime_2/defaults")
+async def consolidation_r2_defaults():
+    """Surface R2 tunables so the dashboard can render them."""
+    return {
+        "similarity_threshold": R2_SIMILARITY_THRESHOLD,
+        "sample_size": R2_DEFAULT_SAMPLE_SIZE,
+        "max_cluster_size": R2_MAX_CLUSTER_SIZE,
+        "backends": ["ollama", "claude"],
+    }
 
 
 @router.get("/schedule")
