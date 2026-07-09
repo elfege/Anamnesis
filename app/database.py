@@ -46,6 +46,17 @@ async def connect_to_mongo() -> motor.motor_asyncio.AsyncIOMotorClient:
     await _episodes_collection.create_index("tags")
     await _episodes_collection.create_index("timestamp")
 
+    # Rolling per-chat episode index — sparse so it only covers docs where
+    # rolling: true is set (per MSG-526/527, ~1 doc per active session). Sort
+    # by rolling_updated_at descending drives the /api/episodes/rolling/all
+    # dashboard list; without this the LIST does a full 30k+ collection scan
+    # and can time out (observed 2026-07-08).
+    await _episodes_collection.create_index(
+        [("rolling", 1), ("rolling_updated_at", -1)],
+        sparse=True,
+        name="rolling_updated_desc",
+    )
+
     # δ² explanations cache — indexed for fast lookup by SHA-256 cache_key
     await _db["d2_explanations"].create_index("cache_key", unique=True)
     await _db["d2_explanations"].create_index("generated_at")
