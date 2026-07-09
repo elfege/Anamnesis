@@ -517,6 +517,51 @@
             </button>
           </div>
           <div id="runpodPodsStatus" style="font-size:10px;color:var(--text-dim);margin-top:6px;min-height:14px"></div>
+
+          <!-- ── Full lifecycle: Start / Stop / Terminate + status + log ── -->
+          <!-- Pin #7 (2026-07-09): replaces the "manual paste pod_id" flow
+               with a UI-driven Start → cost modal → GraphQL create; Stop /
+               Terminate buttons per pod; live status list; recent-actions log. -->
+          <div style="margin-top:12px;padding-top:8px;border-top:1px dashed #30363d">
+            <div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;letter-spacing:0.04em">
+              LIFECYCLE (start / stop / terminate)
+              <span class="adv-help" data-help="One-click provision: pick GPU tier, confirm cost, pod is created + registered + reachable when RunPod finishes provisioning (30s – 3 min). Stop pauses billing (volume preserved, restartable via console). Terminate destroys the pod + volume — not restartable." style="color:#8b95a0;cursor:help">?</span>
+            </div>
+            <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+              <select id="runpodLifecycleTier" style="background:#07090c;color:#cfd5dd;border:1px solid #30363d;border-radius:4px;padding:4px 6px;font-size:11px;flex:1">
+                <option value="">(pick GPU tier…)</option>
+              </select>
+              <button type="button" id="runpodLifecycleStart"
+                      style="background:#0d4a8f;color:#fff;border:1px solid #1f6feb;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">
+                ▶ Start pod
+              </button>
+            </div>
+            <div id="runpodLifecycleStatus" style="font-size:10px;color:var(--text-dim);margin-bottom:6px;min-height:14px"></div>
+            <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px;letter-spacing:0.04em">ACTIVE PODS</div>
+            <div id="runpodLifecycleActive" style="display:flex;flex-direction:column;gap:4px;margin-bottom:6px;font-size:11px">
+              <em style="color:var(--text-dim)">(none)</em>
+            </div>
+            <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px;letter-spacing:0.04em">RECENT ACTIONS</div>
+            <div id="runpodLifecycleLog" style="display:flex;flex-direction:column;gap:2px;font-size:10px;color:var(--text-dim);max-height:120px;overflow-y:auto;background:#07090c;border:1px solid #30363d;border-radius:4px;padding:4px 6px">
+              <em>(loading…)</em>
+            </div>
+          </div>
+
+          <!-- Cost confirmation modal (hidden by default). -->
+          <div id="runpodCostModal" style="display:none;position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,0.7);align-items:center;justify-content:center">
+            <div style="background:#0f1418;border:1px solid #1f6feb;border-radius:8px;padding:16px 20px;max-width:420px;color:#cfd5dd;box-shadow:0 8px 30px rgba(31,111,235,0.3)">
+              <h3 style="margin:0 0 10px 0;font-size:14px;color:#fff">💰 Confirm cost — this spends real money</h3>
+              <div id="runpodCostModalBody" style="font-size:12px;line-height:1.5;margin-bottom:12px">…</div>
+              <div id="runpodCostModalAckWrap" style="display:none;margin-bottom:8px">
+                <label style="font-size:11px;display:block;margin-bottom:4px">Type the tier alias to confirm:</label>
+                <input type="text" id="runpodCostModalAck" spellcheck="false" style="width:100%;background:#07090c;color:#fff;border:1px solid #1f6feb;border-radius:4px;padding:4px 6px;font-size:12px;font-family:monospace">
+              </div>
+              <div style="display:flex;gap:8px;justify-content:flex-end">
+                <button type="button" id="runpodCostModalCancel" style="background:transparent;color:#cfd5dd;border:1px solid #30363d;border-radius:4px;padding:6px 14px;font-size:11px;cursor:pointer">Cancel</button>
+                <button type="button" id="runpodCostModalConfirm" style="background:#1f6feb;color:#fff;border:1px solid #1f6feb;border-radius:4px;padding:6px 14px;font-size:11px;cursor:pointer;font-weight:600">Confirm + start</button>
+              </div>
+            </div>
+          </div>
         </div>
       </details>
 
@@ -1289,6 +1334,193 @@
           if (typeof refreshWorkers === 'function') refreshWorkers();
         } catch (e) { setStatus('add error: ' + e.message, true); }
       });
+      refresh();
+    })();
+
+    // ── RunPod lifecycle: full UI-controlled start/stop/terminate + cost modal (pin #7) ──
+    (function wireRunpodLifecycle() {
+      const tierSel = document.getElementById('runpodLifecycleTier');
+      const startBtn = document.getElementById('runpodLifecycleStart');
+      const status = document.getElementById('runpodLifecycleStatus');
+      const activeList = document.getElementById('runpodLifecycleActive');
+      const logList = document.getElementById('runpodLifecycleLog');
+      const modal = document.getElementById('runpodCostModal');
+      const modalBody = document.getElementById('runpodCostModalBody');
+      const modalAckWrap = document.getElementById('runpodCostModalAckWrap');
+      const modalAck = document.getElementById('runpodCostModalAck');
+      const modalConfirm = document.getElementById('runpodCostModalConfirm');
+      const modalCancel = document.getElementById('runpodCostModalCancel');
+      if (!tierSel) return;
+
+      let tiers = [];
+      function setStatus(text, isErr) {
+        status.textContent = text || '';
+        status.style.color = isErr ? '#e85a4f' : 'var(--text-dim,#7d8590)';
+      }
+      async function loadTiers() {
+        try {
+          const r = await fetch('/api/avatar/runpod/lifecycle/tiers');
+          const data = await r.json();
+          tiers = data.tiers || [];
+          tierSel.innerHTML = '<option value="">(pick GPU tier…)</option>';
+          for (const t of tiers) {
+            const opt = document.createElement('option');
+            opt.value = t.alias;
+            const gate = t.hard_confirm ? ' ⚠ high-cost' : '';
+            opt.textContent = `${t.label} · $${t.hourly_estimate.toFixed(2)}/hr${gate}`;
+            tierSel.appendChild(opt);
+          }
+        } catch (e) { setStatus('tier load failed: ' + e.message, true); }
+      }
+
+      function openCostModal(tierAlias) {
+        const tier = tiers.find(t => t.alias === tierAlias);
+        if (!tier) return;
+        modalBody.innerHTML = `
+          <div style="margin-bottom:8px"><strong>${tier.label}</strong> — <strong>$${tier.hourly_estimate.toFixed(2)}/hr</strong> (RunPod billed per second).</div>
+          <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">The pod is provisioned via RunPod GraphQL, registered in the Anamnesis Mongo pod registry, and becomes reachable at <code>https://&lt;pod_id&gt;-3013.proxy.runpod.net</code> once running (30 s – 3 min).</div>
+          <div style="font-size:11px;color:var(--text-dim)">You can stop (pause billing, keep volume) or terminate (destroy) via the ACTIVE PODS list.</div>
+        `;
+        if (tier.hard_confirm) {
+          modalAckWrap.style.display = 'block';
+          modalAck.value = '';
+          modalAck.placeholder = `Type "${tier.alias}" to confirm`;
+        } else {
+          modalAckWrap.style.display = 'none';
+        }
+        modal.style.display = 'flex';
+        modalConfirm.dataset.tier = tierAlias;
+      }
+      function closeCostModal() {
+        modal.style.display = 'none';
+        modalConfirm.dataset.tier = '';
+      }
+
+      async function doStart(tierAlias, ackString) {
+        setStatus(`starting ${tierAlias}…`);
+        try {
+          const body = { gpu_tier: tierAlias, confirm_cost: true };
+          if (ackString) body.cost_ack_string = ackString;
+          const r = await fetch('/api/avatar/runpod/lifecycle/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          const data = await r.json();
+          if (!r.ok) { setStatus(`start failed (${r.status}): ${data.detail || 'unknown'}`, true); return; }
+          setStatus(`started ${data.pod_id} · $${data.cost_hr.toFixed(3)}/hr · ${data.url}`);
+          refresh();
+          if (typeof refreshWorkers === 'function') refreshWorkers();
+        } catch (e) { setStatus('start error: ' + e.message, true); }
+      }
+
+      async function doStop(pod_id) {
+        if (!confirm(`Stop ${pod_id}? Billing pauses, volume preserved, restartable via RunPod console.`)) return;
+        setStatus(`stopping ${pod_id}…`);
+        try {
+          const r = await fetch(`/api/avatar/runpod/lifecycle/stop/${pod_id}`, { method: 'POST' });
+          const data = await r.json();
+          if (!r.ok) { setStatus(`stop failed: ${data.detail || r.status}`, true); return; }
+          setStatus(`stopped ${pod_id}`);
+          refresh();
+        } catch (e) { setStatus('stop error: ' + e.message, true); }
+      }
+
+      async function doTerminate(pod_id) {
+        if (!confirm(`⚠ TERMINATE ${pod_id}? Volume destroyed. Billing ends. NOT restartable. Proceed?`)) return;
+        setStatus(`terminating ${pod_id}…`);
+        try {
+          const r = await fetch(`/api/avatar/runpod/lifecycle/terminate/${pod_id}`, { method: 'POST' });
+          const data = await r.json();
+          if (!r.ok) { setStatus(`terminate failed: ${data.detail || r.status}`, true); return; }
+          setStatus(`terminated ${pod_id}`);
+          refresh();
+          if (typeof refreshWorkers === 'function') refreshWorkers();
+        } catch (e) { setStatus('terminate error: ' + e.message, true); }
+      }
+
+      function renderPods(pods) {
+        if (!pods.length) { activeList.innerHTML = '<em style="color:var(--text-dim)">(none)</em>'; return; }
+        activeList.innerHTML = '';
+        for (const p of pods) {
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;gap:6px;align-items:center;padding:4px 6px;background:#07090c;border:1px solid #2b323b;border-radius:4px';
+          const uptimeMin = Math.floor((p.uptime_seconds || 0) / 60);
+          const costStr = p.cost_so_far != null ? `$${p.cost_so_far.toFixed(4)}` : '?';
+          const statusColor = p.desired_status === 'RUNNING' ? '#3fb950' : '#8b95a0';
+          row.innerHTML = `
+            <div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              <span style="color:${statusColor}">●</span>
+              <span style="color:#cfd5dd">${p.label || p.pod_id}</span>
+              <span style="color:#7d8590;font-size:10px"> · ${p.desired_status || '?'} · ${uptimeMin}m · ${costStr}</span>
+            </div>
+          `;
+          const stopBtn = document.createElement('button');
+          stopBtn.textContent = 'Stop';
+          stopBtn.title = 'Pause billing, keep volume';
+          stopBtn.style.cssText = 'background:transparent;color:#d29922;border:1px solid #30363d;border-radius:4px;padding:0 6px;font-size:10px;cursor:pointer';
+          stopBtn.addEventListener('click', () => doStop(p.pod_id));
+          const termBtn = document.createElement('button');
+          termBtn.textContent = 'Terminate';
+          termBtn.title = 'Destroy pod + volume';
+          termBtn.style.cssText = 'background:transparent;color:#e85a4f;border:1px solid #30363d;border-radius:4px;padding:0 6px;font-size:10px;cursor:pointer';
+          termBtn.addEventListener('click', () => doTerminate(p.pod_id));
+          row.appendChild(stopBtn); row.appendChild(termBtn);
+          activeList.appendChild(row);
+        }
+      }
+      function renderLog(actions) {
+        if (!actions.length) { logList.innerHTML = '<em>(no actions yet)</em>'; return; }
+        logList.innerHTML = '';
+        for (const a of actions.slice(0, 20)) {
+          const line = document.createElement('div');
+          const t = a.ts ? new Date(a.ts).toLocaleString() : '?';
+          const outColor = a.outcome === 'ok' ? '#3fb950' : '#e85a4f';
+          const shortId = a.pod_id ? a.pod_id.substring(0, 12) : '—';
+          line.innerHTML = `<span style="color:#7d8590">${t}</span> <span style="color:${outColor}">${a.action}</span> <span>${shortId}</span> <span style="color:#7d8590">${a.gpu_tier || ''}</span>`;
+          logList.appendChild(line);
+        }
+      }
+      async function refresh() {
+        try {
+          const [statusRes, logRes] = await Promise.all([
+            fetch('/api/avatar/runpod/lifecycle/status').then(r => r.json()),
+            fetch('/api/avatar/runpod/lifecycle/log?limit=20').then(r => r.json()),
+          ]);
+          renderPods(statusRes.pods || []);
+          renderLog(logRes.actions || []);
+        } catch (e) { setStatus('refresh error: ' + e.message, true); }
+      }
+
+      startBtn.addEventListener('click', () => {
+        const alias = tierSel.value;
+        if (!alias) { setStatus('pick a GPU tier first', true); return; }
+        openCostModal(alias);
+      });
+      modalCancel.addEventListener('click', closeCostModal);
+      modalConfirm.addEventListener('click', () => {
+        const alias = modalConfirm.dataset.tier;
+        if (!alias) { closeCostModal(); return; }
+        const tier = tiers.find(t => t.alias === alias);
+        if (tier?.hard_confirm) {
+          const typed = (modalAck.value || '').trim().toLowerCase();
+          if (typed !== alias) {
+            modalAck.style.borderColor = '#e85a4f';
+            modalAck.placeholder = `Type exactly "${alias}"`;
+            return;
+          }
+        }
+        closeCostModal();
+        doStart(alias, tier?.hard_confirm ? alias : undefined);
+      });
+      // Refresh every 15s while the RunPod pods details block is open
+      let poll = null;
+      document.getElementById('runpodPodsDetails')?.addEventListener('toggle', (e) => {
+        if (e.target.open) { refresh(); poll = setInterval(refresh, 15000); }
+        else if (poll) { clearInterval(poll); poll = null; }
+      });
+
+      loadTiers();
       refresh();
     })();
 
