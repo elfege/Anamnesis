@@ -11,12 +11,31 @@ services:
       - mongo_configdb:/data/configdb
     networks:
       - anamnesis-net
+    # Healthcheck rewritten 2026-07-09 after intercom MSG-577 (recurring
+    # death spiral: dellserver load spiked to ~2000, NVR starved). Prior
+    # probe used replSetGetStatus with no client-side connect timeout,
+    # so a wedged mongod (mongot pool expired, replica-set primary lost,
+    # etc.) piled up 82+ stuck mongosh processes as D-state → load 2000.
+    #
+    # New probe:
+    # - Ping instead of replSetGetStatus (near-instant when healthy).
+    # - --serverSelectionTimeoutMS=3000 so mongosh gives up FAST on a
+    #   wedged mongod, preventing the D-state pileup.
+    # - --host 127.0.0.1 forces TCP loopback (no unix socket surprises).
+    # - Still gates on writable-primary (myState==1) — Anamnesis needs it.
+    # - Interval 30s (was 10s) so probes don't stack even if mongo hiccups.
+    # - Timeout 6s (must exceed serverSelectionTimeoutMS by a hair).
+    # - Retries 5 (was 30) → hits `unhealthy` after ~2m of failing rather
+    #   than 5m, so any autoheal / watcher can fire sooner.
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "try { var s = db.adminCommand({replSetGetStatus:1}); if(s.myState !== 1) quit(1); } catch(e) { quit(1); }"]
-      interval: 10s
-      timeout: 10s
-      retries: 30
-      start_period: 30s
+      # serverSelectionTimeoutMS goes on the URI (mongosh doesn't accept it as
+      # a CLI flag). This forces mongosh to give up on connection in 3s rather
+      # than the default 30s — the whole point of this rewrite.
+      test: ["CMD", "mongosh", "--quiet", "mongodb://127.0.0.1:27017/?serverSelectionTimeoutMS=3000", "--eval", "try { if (!db.hello().isWritablePrimary) quit(1); } catch(e) { quit(1); }"]
+      interval: 30s
+      timeout: 6s
+      retries: 5
+      start_period: 60s
 
   anamnesis-app:
     build: .
