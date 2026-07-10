@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit — refuse commits that stage STRIP-classified files.
+#
+# Cheaper first-line defense than pre-push: catches the mistake at commit
+# time so it never enters history. Pre-push is the belt; this is the
+# suspenders.
+#
+# Enable with: git config core.hooksPath .githooks
+
+set -euo pipefail
+
+REPO_DIR="$(git rev-parse --show-toplevel)"
+RULES="$REPO_DIR/scripts/scrub_rules.txt"
+if [[ ! -f "$RULES" ]]; then
+    exit 0  # No rules yet — don't block early bootstrap commits.
+fi
+
+declare -a RULE_ACTIONS RULE_GLOBS
+while IFS= read -r line; do
+    line="${line%%#*}"
+    line="$(echo "$line" | xargs || true)"
+    [[ -z "$line" ]] && continue
+    action="$(echo "$line" | awk '{print $1}')"
+    glob="$(echo "$line" | awk '{$1=""; print $0}' | xargs)"
+    [[ "$action" == "ALLOW" || "$action" == "STRIP" ]] || continue
+    RULE_ACTIONS+=("$action")
+    RULE_GLOBS+=("$glob")
+done < "$RULES"
+
+classify() {
+    local path="$1" i
+    for i in "${!RULE_GLOBS[@]}"; do
+        local glob="${RULE_GLOBS[$i]}"
+        shopt -s extglob globstar 2>/dev/null || true
+        # shellcheck disable=SC2053
+        if [[ "$path" == $glob ]]; then
+            echo "${RULE_ACTIONS[$i]}"
+            return
+        fi
+    done
+    echo "STRIP"
+}
+
+violations=0
+while IFS= read -r path; do
+    [[ -z "$path" ]] && continue
+    verdict="$(classify "$path")"
+    if [[ "$verdict" == "STRIP" ]]; then
+        echo "  VIOLATION: $path (STRIP-classified)" >&2
+        violations=$((violations + 1))
+    fi
+done < <(git diff --cached --name-only --diff-filter=AM)
+
+if (( violations > 0 )); then
+    echo "" >&2
+    echo "pre-commit: REFUSING commit — $violations staged file(s) match STRIP rules." >&2
+    echo "  Unstage with 'git restore --staged <path>' or add an explicit ALLOW rule." >&2
+    exit 1
+fi
+
+exit 0

@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# .githooks/pre-push — leak-defense on every push, remote-aware.
+#
+# When pushing to `public/*` (the public mirror), refuses if any tracked
+# file matches a STRIP rule in scripts/scrub_rules.txt.
+#
+# When pushing to `origin/*` (private-dev), no restrictions — internal
+# artifacts are expected there.
+#
+# Enable with: git config core.hooksPath .githooks
+
+set -euo pipefail
+
+remote="$1"
+url="$2"
+
+# Only enforce on the public-mirror remote.
+if [[ "$remote" != "public" ]]; then
+    exit 0
+fi
+
+REPO_DIR="$(git rev-parse --show-toplevel)"
+RULES="$REPO_DIR/scripts/scrub_rules.txt"
+if [[ ! -f "$RULES" ]]; then
+    echo "pre-push: scrub_rules.txt missing at $RULES — refusing to push to public without a rule file" >&2
+    exit 1
+fi
+
+# Load rules (same logic as publish_public_mirror.sh)
+declare -a RULE_ACTIONS RULE_GLOBS
+while IFS= read -r line; do
+    line="${line%%#*}"
+    line="$(echo "$line" | xargs || true)"
+    [[ -z "$line" ]] && continue
+    action="$(echo "$line" | awk '{print $1}')"
+    glob="$(echo "$line" | awk '{$1=""; print $0}' | xargs)"
+    [[ "$action" == "ALLOW" || "$action" == "STRIP" ]] || continue
+    RULE_ACTIONS+=("$action")
+    RULE_GLOBS+=("$glob")
+done < "$RULES"
+
+classify() {
+    local path="$1" i
+    for i in "${!RULE_GLOBS[@]}"; do
+        local glob="${RULE_GLOBS[$i]}"
+        shopt -s extglob globstar 2>/dev/null || true
+        # shellcheck disable=SC2053
+        if [[ "$path" == $glob ]]; then
+            echo "${RULE_ACTIONS[$i]}"
+            return
+        fi
+    done
+    echo "STRIP"
+}
+
+violations=0
+while IFS= read -r path; do
+    verdict="$(classify "$path")"
+    if [[ "$verdict" == "STRIP" ]]; then
+        echo "  VIOLATION: $path (STRIP-classified but tracked)"
+        violations=$((violations + 1))
+    fi
+done < <(git ls-files)
+
+if (( violations > 0 )); then
+    echo "" >&2
+    echo "pre-push: REFUSING push to $remote ($url) — $violations tracked file(s) match STRIP rules." >&2
+    echo "  Either 'git rm --cached <path>' those files or add an explicit ALLOW rule." >&2
+    exit 2
+fi
+
+exit 0

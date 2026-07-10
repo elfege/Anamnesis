@@ -1,0 +1,61 @@
+name: e2e
+
+# Runs the E2E gate on every PR to main and every push to main.
+# Job runs on a self-hosted runner registered on the PRIVATE repo
+# (Anamnesis-dev). Public mirror (Anamnesis) does NOT receive runs —
+# public repos with self-hosted runners are a security risk (any PR from
+# anyone can execute arbitrary code on the runner).
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  e2e:
+    name: e2e-gate
+    # self-hosted MUST be on the private repo only (per MSG-356 privacy)
+    runs-on: [self-hosted, dellserver]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install test deps
+        run: |
+          pip install --quiet pytest httpx
+
+      - name: Wait for anamnesis-app health
+        env:
+          ANAMNESIS_BASE_URL: http://192.168.10.20:3010
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf --max-time 3 "$ANAMNESIS_BASE_URL/health"; then
+              echo "healthy"; break
+            fi
+            [ $i -eq 30 ] && { echo "app never came up"; exit 1; }
+            sleep 2
+          done
+
+      - name: Run E2E gate
+        env:
+          ANAMNESIS_BASE_URL: http://192.168.10.20:3010
+        run: |
+          scripts/e2e_gate.sh --junitxml=e2e-results.xml
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: e2e-results.xml
+          retention-days: 7
